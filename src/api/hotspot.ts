@@ -171,4 +171,36 @@ router.get('/router/:routerId/profiles', async (req: Request, res: Response) => 
   }
 });
 
+router.get('/router/:routerId/hosts', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const [hosts, leases] = await Promise.all([
+      mikroTikService.getHotspotHosts(routerId),
+      mikroTikService.getDhcpLeases(routerId),
+    ]);
+
+    const leaseMap = new Map<string, string>();
+    for (const lease of leases) {
+      if (lease['mac-address'] && lease['host-name']) {
+        leaseMap.set(lease['mac-address'].toLowerCase(), lease['host-name']);
+      }
+    }
+
+    const enrichedHosts = hosts.map((host: any) => ({
+      ...host,
+      'host-name': leaseMap.get(host['mac-address']?.toLowerCase() || '') || '',
+    }));
+
+    res.json(enrichedHosts);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

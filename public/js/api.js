@@ -123,6 +123,10 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/profiles`);
   }
 
+  async getHotspotHosts(routerId) {
+    return this.get(`/hotspot/router/${routerId}/hosts`);
+  }
+
   async getVouchers(routerId, params = {}) {
     const query = new URLSearchParams(params).toString();
     return this.get(`/vouchers/router/${routerId}${query ? '?' + query : ''}`);

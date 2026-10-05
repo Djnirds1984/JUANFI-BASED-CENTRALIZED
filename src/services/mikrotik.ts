@@ -402,6 +402,40 @@ class MikroTikService {
     }
   }
 
+  async getHotspotHosts(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const hosts = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
+      return Array.isArray(hosts) ? hosts : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/hotspot/host/print');
+    } catch (err) {
+      console.error(`getHotspotHosts failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getDhcpLeases(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const leases = await this.restApiCall(config, 'GET', '/ip/dhcp-server/lease');
+      return Array.isArray(leases) ? leases : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/dhcp-server/lease/print');
+    } catch (err) {
+      console.error(`getDhcpLeases failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getInterfaces(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 

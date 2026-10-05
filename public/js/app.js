@@ -537,7 +537,7 @@ const App = {
     const connectedRouters = routers.filter((r) => r.connected);
 
     if (connectedRouters.length === 0) {
-      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3><p>Connect a router first to manage hotspot users.</p></div>';
+      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3><p>Connect a router first to view hotspot hosts.</p></div>';
       return;
     }
 
@@ -548,7 +548,7 @@ const App = {
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>Hotspot Users</h3>
+          <h3>Hotspot Hosts</h3>
           <div style="display:flex;gap:0.5rem">
             <select id="hotspot-router-select" class="btn btn-outline">
               ${connectedRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
@@ -562,18 +562,18 @@ const App = {
 
     document.getElementById('hotspot-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
-      this.loadHotspotUsers();
+      this.loadHotspotHosts();
     });
 
-    this.loadHotspotUsers();
+    this.loadHotspotHosts();
   },
 
-  async loadHotspotUsers() {
+  async loadHotspotHosts() {
     const container = document.getElementById('hotspot-users-table');
     try {
-      const users = await api.getHotspotUsers(this.selectedRouterId);
-      if (users.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No hotspot users found.</p></div>';
+      const hosts = await api.getHotspotHosts(this.selectedRouterId);
+      if (hosts.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No hotspot hosts found.</p></div>';
         return;
       }
 
@@ -582,23 +582,27 @@ const App = {
           <table>
             <thead>
               <tr>
-                <th>Username</th>
-                <th>Profile</th>
-                <th>Status</th>
+                <th>MAC Address</th>
+                <th>IP Address</th>
+                <th>Hostname</th>
+                <th>Server</th>
                 <th>Uptime</th>
-                <th>Actions</th>
+                <th>Idle Time</th>
+                <th>Rx Rate</th>
+                <th>Tx Rate</th>
               </tr>
             </thead>
             <tbody>
-              ${users.map((u) => `
+              ${hosts.map((h) => `
                 <tr>
-                  <td><strong>${this.escapeHtml(u.name)}</strong></td>
-                  <td>${this.escapeHtml(u.profile || 'default')}</td>
-                  <td>${u.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}</td>
-                  <td>${u.uptime || '0s'}</td>
-                  <td>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteHotspotUser('${u['.id']}')">Remove</button>
-                  </td>
+                  <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
+                  <td>${this.escapeHtml(h.address || '')}</td>
+                  <td>${this.escapeHtml(h['host-name'] || '-')}</td>
+                  <td>${this.escapeHtml(h.server || '')}</td>
+                  <td>${h.uptime || '0s'}</td>
+                  <td>${h['idle-time'] || '0s'}</td>
+                  <td>${h['rate-limit'] || h['rx-rate'] || '0 bps'}</td>
+                  <td>${h['tx-rate'] || '0 bps'}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -658,7 +662,7 @@ const App = {
       });
       this.closeModal();
       this.toast('User created', 'success');
-      this.loadHotspotUsers();
+      this.loadHotspotHosts();
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -669,7 +673,7 @@ const App = {
     try {
       await api.deleteHotspotUser(this.selectedRouterId, userId);
       this.toast('User removed', 'success');
-      this.loadHotspotUsers();
+      this.loadHotspotHosts();
     } catch (err) {
       this.toast(err.message, 'error');
     }

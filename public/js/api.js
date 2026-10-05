@@ -151,6 +151,18 @@ class ApiClient {
   async getMonitoringHistory(routerId, hours = 24) {
     return this.get(`/monitoring/router/${routerId}/history?hours=${hours}`);
   }
+
+  async getSystemInfo() {
+    return this.get('/monitoring/system');
+  }
+
+  async getRouterInterfaces(routerId) {
+    return this.get(`/monitoring/router/${routerId}/interfaces`);
+  }
+
+  async getRouterTraffic(routerId) {
+    return this.get(`/monitoring/router/${routerId}/traffic`);
+  }
 }
 
 window.api = new ApiClient();

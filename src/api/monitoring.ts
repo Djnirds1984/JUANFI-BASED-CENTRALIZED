@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import os from 'os';
+import { execSync } from 'child_process';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
@@ -6,6 +8,68 @@ import { authMiddleware } from '../middleware/auth';
 const router = Router();
 
 router.use(authMiddleware);
+
+router.get('/system', (req: Request, res: Response) => {
+  try {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+
+    const cpus = os.cpus();
+    const cpuModel = cpus[0]?.model || 'Unknown';
+    const cpuCores = cpus.length;
+
+    let diskTotal = 0;
+    let diskUsed = 0;
+    let diskFree = 0;
+    try {
+      const df = execSync('df -B1 / 2>/dev/null || echo ""').toString().trim().split('\n');
+      if (df.length >= 2) {
+        const parts = df[1].split(/\s+/);
+        diskTotal = parseInt(parts[1]) || 0;
+        diskUsed = parseInt(parts[2]) || 0;
+        diskFree = parseInt(parts[3]) || 0;
+      }
+    } catch {
+      // df not available (Windows)
+    }
+
+    const networkInterfaces = os.networkInterfaces();
+    let wanIp = '';
+    let lanIp = '';
+    for (const [name, addrs] of Object.entries(networkInterfaces)) {
+      if (!addrs) continue;
+      for (const addr of addrs) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          if (name.startsWith('eth') || name.startsWith('en') || name === 'wlan0') {
+            lanIp = addr.address;
+          }
+        }
+      }
+    }
+
+    res.json({
+      hostname: os.hostname(),
+      platform: `${os.type()} ${os.release()} ${os.arch()}`,
+      cpuModel,
+      cpuCores,
+      cpuLoad: Math.round(os.loadavg()[0] * 100 / cpuCores),
+      memoryTotal: totalMem,
+      memoryUsed: usedMem,
+      memoryPercent: Math.round((usedMem / totalMem) * 100),
+      diskTotal,
+      diskUsed,
+      diskFree,
+      diskPercent: diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0,
+      uptime: Math.round(os.uptime()),
+      nodeVersion: process.version,
+      wanIp,
+      lanIp,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 router.get('/router/:routerId/system', async (req: Request, res: Response) => {
   try {

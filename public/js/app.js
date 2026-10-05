@@ -104,48 +104,171 @@ const App = {
 
   async renderOverview() {
     const content = document.getElementById('page-content');
-    const summary = await api.getMonitoringSummary();
+    content.innerHTML = '<div class="empty-state"><p>Loading dashboard...</p></div>';
 
-    content.innerHTML = `
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total Routers</div>
-          <div class="stat-value">${summary.totalRouters}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Connected</div>
-          <div class="stat-value" style="color: var(--success)">${summary.connectedRouters}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Offline</div>
-          <div class="stat-value" style="color: var(--danger)">${summary.totalRouters - summary.connectedRouters}</div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <h3>Router Status</h3>
-        </div>
-        <div class="router-grid">
-          ${summary.routers.length === 0
-            ? '<div class="empty-state"><h3>No routers configured</h3><p>Add your first router to get started.</p></div>'
-            : summary.routers.map((r) => `
-              <div class="router-card ${r.connected ? 'online' : 'offline'}">
-                <div class="router-name">${this.escapeHtml(r.name)}</div>
-                <div class="router-host">${this.escapeHtml(r.host)}</div>
-                ${r.connected && r.systemInfo ? `
-                  <div class="router-stats">
-                    <span>CPU: ${r.systemInfo.cpuLoad}%</span>
-                    <span>MEM: ${Math.round(r.systemInfo.memoryUsed / 1024 / 1024)}MB</span>
-                    <span>v${r.systemInfo.version}</span>
-                  </div>
-                ` : `
-                  <div class="router-stats"><span style="color: var(--danger)">Offline</span></div>
-                `}
+    try {
+      const [serverInfo, summary] = await Promise.all([
+        api.getSystemInfo(),
+        api.getMonitoringSummary(),
+      ]);
+
+      const connectedRouters = summary.routers.filter((r) => r.connected && r.systemInfo);
+      const primaryRouter = connectedRouters[0] || null;
+
+      const memPct = serverInfo.memoryPercent;
+      const diskPct = serverInfo.diskPercent;
+      const cpuPct = serverInfo.cpuLoad;
+      const memClass = memPct > 80 ? 'fill-high' : memPct > 50 ? 'fill-medium' : 'fill-low';
+      const diskClass = diskPct > 80 ? 'fill-high' : diskPct > 50 ? 'fill-medium' : 'fill-low';
+      const cpuClass = cpuPct > 80 ? 'fill-high' : cpuPct > 50 ? 'fill-medium' : 'fill-low';
+
+      const formatUptime = (secs) => {
+        const d = Math.floor(secs / 86400);
+        const h = Math.floor((secs % 86400) / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        if (d > 0) return `${d}d ${h}h ${m}m`;
+        return `${h}h ${m}m`;
+      };
+
+      const formatBytes = (bytes) => {
+        if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+        if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+        return (bytes / 1e3).toFixed(1) + ' KB';
+      };
+
+      content.innerHTML = `
+        <div class="overview-grid">
+          <div class="dash-card">
+            <div class="dash-card-title">Server Health</div>
+            <div class="dash-metrics">
+              <div class="dash-metric">
+                <div class="dash-metric-header">
+                  <span class="dash-metric-label">CPU Usage</span>
+                  <span class="dash-metric-value">${cpuPct}%</span>
+                </div>
+                <div class="progress-bar"><div class="fill ${cpuClass}" style="width:${cpuPct}%"></div></div>
               </div>
-            `).join('')}
+              <div class="dash-metric">
+                <div class="dash-metric-header">
+                  <span class="dash-metric-label">RAM Usage</span>
+                  <span class="dash-metric-value">${memPct}% (${formatBytes(serverInfo.memoryUsed)} / ${formatBytes(serverInfo.memoryTotal)})</span>
+                </div>
+                <div class="progress-bar"><div class="fill ${memClass}" style="width:${memPct}%"></div></div>
+              </div>
+              <div class="dash-metric">
+                <div class="dash-metric-header">
+                  <span class="dash-metric-label">Disk Usage</span>
+                  <span class="dash-metric-value">${diskPct}% (${formatBytes(serverInfo.diskUsed)} / ${formatBytes(serverInfo.diskTotal)})</span>
+                </div>
+                <div class="progress-bar"><div class="fill ${diskClass}" style="width:${diskPct}%"></div></div>
+              </div>
+            </div>
+            <div class="dash-info-grid">
+              <div class="dash-info-row"><span class="dash-info-label">Hostname</span><span class="dash-info-value">${this.escapeHtml(serverInfo.hostname)}</span></div>
+              <div class="dash-info-row"><span class="dash-info-label">OS</span><span class="dash-info-value">${this.escapeHtml(serverInfo.platform)}</span></div>
+              <div class="dash-info-row"><span class="dash-info-label">CPU</span><span class="dash-info-value">${this.escapeHtml(serverInfo.cpuModel)} (${serverInfo.cpuCores} cores)</span></div>
+              <div class="dash-info-row"><span class="dash-info-label">Node.js</span><span class="dash-info-value">${serverInfo.nodeVersion}</span></div>
+              <div class="dash-info-row"><span class="dash-info-label">Uptime</span><span class="dash-info-value">${formatUptime(serverInfo.uptime)}</span></div>
+              <div class="dash-info-row"><span class="dash-info-label">LAN IP</span><span class="dash-info-value">${serverInfo.lanIp || 'N/A'}</span></div>
+            </div>
+          </div>
+
+          <div class="dash-card">
+            <div class="dash-card-title">Router Status${primaryRouter ? `: ${this.escapeHtml(primaryRouter.name)}` : ''}</div>
+            ${primaryRouter ? `
+              <div class="dash-router-header">
+                <div class="dash-router-badge online">Online</div>
+                <span class="dash-router-host">${this.escapeHtml(primaryRouter.host)}</span>
+              </div>
+              <div class="dash-metrics">
+                <div class="dash-metric">
+                  <div class="dash-metric-header">
+                    <span class="dash-metric-label">CPU Load</span>
+                    <span class="dash-metric-value">${primaryRouter.systemInfo.cpuLoad}%</span>
+                  </div>
+                  <div class="progress-bar"><div class="fill ${primaryRouter.systemInfo.cpuLoad > 80 ? 'fill-high' : primaryRouter.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'}" style="width:${primaryRouter.systemInfo.cpuLoad}%"></div></div>
+                </div>
+                <div class="dash-metric">
+                  <div class="dash-metric-header">
+                    <span class="dash-metric-label">Memory</span>
+                    <span class="dash-metric-value">${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100)}% (${formatBytes(primaryRouter.systemInfo.memoryUsed)} / ${formatBytes(primaryRouter.systemInfo.memoryTotal)})</span>
+                  </div>
+                  <div class="progress-bar"><div class="fill ${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100) > 80 ? 'fill-high' : Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100) > 50 ? 'fill-medium' : 'fill-low'}" style="width:${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100)}%"></div></div>
+                </div>
+              </div>
+              <div class="dash-info-grid">
+                <div class="dash-info-row"><span class="dash-info-label">Board</span><span class="dash-info-value">${this.escapeHtml(primaryRouter.systemInfo.boardName)}</span></div>
+                <div class="dash-info-row"><span class="dash-info-label">Identity</span><span class="dash-info-value">${this.escapeHtml(primaryRouter.systemInfo.identity)}</span></div>
+                <div class="dash-info-row"><span class="dash-info-label">Version</span><span class="dash-info-value">${this.escapeHtml(primaryRouter.systemInfo.version)}</span></div>
+                <div class="dash-info-row"><span class="dash-info-label">Uptime</span><span class="dash-info-value">${formatUptime(primaryRouter.systemInfo.uptime)}</span></div>
+              </div>
+            ` : `
+              <div class="empty-state" style="padding:2rem">
+                <h3>No connected routers</h3>
+                <p>Connect a router to see its status here.</p>
+              </div>
+            `}
+          </div>
         </div>
-      </div>
-    `;
+
+        <div class="dash-card" style="margin-top:1.5rem">
+          <div class="dash-card-title">Network Overview</div>
+          <div class="stats-grid" style="margin-bottom:0">
+            <div class="stat-card">
+              <div class="stat-label">Total Routers</div>
+              <div class="stat-value">${summary.totalRouters}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Connected</div>
+              <div class="stat-value" style="color:var(--success)">${summary.connectedRouters}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Offline</div>
+              <div class="stat-value" style="color:var(--danger)">${summary.totalRouters - summary.connectedRouters}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Server Uptime</div>
+              <div class="stat-value" style="font-size:1.25rem">${formatUptime(serverInfo.uptime)}</div>
+            </div>
+          </div>
+        </div>
+
+        ${connectedRouters.length > 0 ? `
+          <div class="dash-card">
+            <div class="dash-card-title">Connected Routers</div>
+            <div class="router-grid">
+              ${connectedRouters.map((r) => {
+                const memP = Math.round((r.systemInfo.memoryUsed / r.systemInfo.memoryTotal) * 100);
+                return `
+                  <div class="router-card online">
+                    <div class="router-name">${this.escapeHtml(r.name)}</div>
+                    <div class="router-host">${this.escapeHtml(r.systemInfo.identity || r.host)} &middot; v${r.systemInfo.version}</div>
+                    <div style="margin-top:0.75rem">
+                      <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
+                        <span>CPU</span><span>${r.systemInfo.cpuLoad}%</span>
+                      </div>
+                      <div class="progress-bar"><div class="fill ${r.systemInfo.cpuLoad > 80 ? 'fill-high' : r.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'}" style="width:${r.systemInfo.cpuLoad}%"></div></div>
+                    </div>
+                    <div style="margin-top:0.75rem">
+                      <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
+                        <span>Memory</span><span>${memP}%</span>
+                      </div>
+                      <div class="progress-bar"><div class="fill ${memP > 80 ? 'fill-high' : memP > 50 ? 'fill-medium' : 'fill-low'}" style="width:${memP}%"></div></div>
+                    </div>
+                    <div class="router-stats" style="margin-top:0.75rem">
+                      <span>Uptime: ${formatUptime(r.systemInfo.uptime)}</span>
+                      <span>${this.escapeHtml(r.systemInfo.boardName)}</span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+      `;
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+    }
   },
 
   async renderRouters() {

@@ -2,6 +2,9 @@ const App = {
   currentPage: 'overview',
   selectedRouterId: null,
   _overviewInterval: null,
+  portalCurrentFile: 'login.html',
+  portalDirty: false,
+  _portalPreviewTimer: null,
 
   init() {
     if (api.getToken()) {
@@ -84,6 +87,7 @@ const App = {
       hotspot: 'Hotspot Users',
       vouchers: 'Vouchers',
       monitoring: 'Monitoring',
+      portal: 'Portal',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -101,6 +105,7 @@ const App = {
         case 'hotspot': await this.renderHotspot(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'monitoring': await this.renderMonitoring(); break;
+        case 'portal': await this.renderPortal(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -891,6 +896,182 @@ const App = {
         </div>
       </div>
     `;
+  },
+
+  async renderPortal() {
+    const content = document.getElementById('page-content');
+    const routers = (await api.getRouters()).filter((r) => r.connected && !r.use_rest_api);
+
+    if (this.portalDirty && !confirm('You have unsaved changes. Reloading will discard them. Continue?')) {
+      return;
+    }
+    this.portalDirty = false;
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Hotspot Portal Files</h3>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            ${routers.length > 0 ? `
+              <select id="portal-router-select" class="btn btn-outline">
+                ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push to Router</button>
+            ` : '<span class="status-badge disconnected">No API-connected router (REST cannot upload files)</span>'}
+          </div>
+        </div>
+        <div class="portal-toolbar">
+          <div class="portal-tabs" id="portal-tabs">
+            <button class="portal-tab" data-file="login.html" onclick="App.selectPortalFile('login.html')">login.html</button>
+            <button class="portal-tab" data-file="alogin.html" onclick="App.selectPortalFile('alogin.html')">alogin.html</button>
+            <button class="portal-tab" data-file="error.html" onclick="App.selectPortalFile('error.html')">error.html</button>
+            <button class="portal-tab" data-file="logout.html" onclick="App.selectPortalFile('logout.html')">logout.html</button>
+          </div>
+          <div class="portal-actions">
+            <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
+            <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
+            <button class="btn btn-sm btn-outline" onclick="App.resetPortalFile()">Reset to Default</button>
+            <button class="btn btn-sm btn-primary" id="portal-save-btn" onclick="App.savePortalFile()">Save</button>
+          </div>
+        </div>
+        <div class="portal-editor-layout" id="portal-layout">
+          <div class="portal-editor-pane">
+            <textarea id="portal-editor" class="portal-editor" spellcheck="false" wrap="off"></textarea>
+          </div>
+          <div class="portal-preview-pane">
+            <iframe id="portal-preview" class="portal-preview" sandbox=""></iframe>
+          </div>
+        </div>
+      </div>
+    `;
+
+    if (routers.length > 0) {
+      if (!this.selectedRouterId || !routers.find((r) => r.id === this.selectedRouterId)) {
+        this.selectedRouterId = routers[0].id;
+        document.getElementById('portal-router-select').value = this.selectedRouterId;
+      }
+      document.getElementById('portal-router-select').addEventListener('change', (e) => {
+        this.selectedRouterId = parseInt(e.target.value);
+      });
+    }
+
+    const editor = document.getElementById('portal-editor');
+    editor.addEventListener('input', () => {
+      this.portalDirty = true;
+      document.getElementById('portal-dirty').style.visibility = 'visible';
+      clearTimeout(this._portalPreviewTimer);
+      this._portalPreviewTimer = setTimeout(() => this.updatePortalPreview(), 600);
+    });
+    editor.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 2;
+        editor.dispatchEvent(new Event('input'));
+      }
+    });
+
+    await this.selectPortalFile(this.portalCurrentFile || 'login.html', true);
+  },
+
+  async selectPortalFile(name, force = false) {
+    if (!force && this.portalDirty && !confirm('You have unsaved changes. Switching files will discard them. Continue?')) {
+      return;
+    }
+
+    document.querySelectorAll('.portal-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.file === name);
+    });
+
+    const editor = document.getElementById('portal-editor');
+    if (!editor) return;
+    editor.disabled = true;
+    editor.value = 'Loading...';
+
+    try {
+      const row = await api.getPortalFile(name);
+      this.portalCurrentFile = name;
+      this.portalDirty = false;
+      document.getElementById('portal-dirty').style.visibility = 'hidden';
+      editor.value = row.content;
+      this.updatePortalPreview();
+    } catch (err) {
+      editor.value = `Error loading file: ${err.message}`;
+      this.toast(err.message, 'error');
+    } finally {
+      editor.disabled = false;
+    }
+  },
+
+  updatePortalPreview() {
+    const editor = document.getElementById('portal-editor');
+    const preview = document.getElementById('portal-preview');
+    if (!editor || !preview) return;
+    let html = editor.value;
+    html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
+    html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
+    preview.srcdoc = html;
+  },
+
+  togglePortalPreview() {
+    const layout = document.getElementById('portal-layout');
+    const btn = document.getElementById('portal-toggle-preview');
+    layout.classList.toggle('preview-hidden');
+    btn.textContent = layout.classList.contains('preview-hidden') ? 'Show Preview' : 'Hide Preview';
+  },
+
+  async savePortalFile() {
+    const editor = document.getElementById('portal-editor');
+    if (!editor) return;
+    try {
+      await api.savePortalFile(this.portalCurrentFile, editor.value);
+      this.portalDirty = false;
+      document.getElementById('portal-dirty').style.visibility = 'hidden';
+      this.toast(`${this.portalCurrentFile} saved`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async resetPortalFile() {
+    if (!confirm(`Reset ${this.portalCurrentFile} to the default template? Unsaved changes will be lost.`)) return;
+    try {
+      const res = await api.resetPortalFile(this.portalCurrentFile);
+      const editor = document.getElementById('portal-editor');
+      editor.value = res.file.content;
+      this.portalDirty = false;
+      document.getElementById('portal-dirty').style.visibility = 'hidden';
+      this.updatePortalPreview();
+      this.toast(`${this.portalCurrentFile} reset to default`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async pushPortal() {
+    if (this.portalDirty && !confirm('You have unsaved changes. Push will use the last saved version. Continue?')) return;
+    const routerId = this.selectedRouterId;
+    if (!routerId) {
+      this.toast('Select a router first', 'error');
+      return;
+    }
+    if (!confirm(`Push all 4 portal files to the router's hotspot folder? This overwrites the current hotspot pages.`)) return;
+
+    try {
+      const res = await api.pushPortalFiles(routerId);
+      const failed = (res.results || []).filter((r) => !r.ok);
+      if (failed.length === 0) {
+        this.toast('All 4 files pushed to router hotspot folder', 'success');
+      } else {
+        const details = failed.map((f) => `${f.file}: ${f.error}`).join('\n');
+        this.toast(`${res.message} — ${failed.map((f) => f.file).join(', ')}`, 'error');
+        console.error('Push failures:\n' + details);
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   openModal(title, bodyHtml, buttons = []) {

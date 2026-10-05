@@ -94,6 +94,12 @@ export function initializeDatabase(): void {
       FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS portal_files (
+      name TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
@@ -104,6 +110,25 @@ export function initializeDatabase(): void {
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];
   if (!columns.some((c: any) => c.name === 'use_rest_api')) {
     db.exec("ALTER TABLE routers ADD COLUMN use_rest_api INTEGER NOT NULL DEFAULT 0");
+  }
+
+  const seedStmt = db.prepare('INSERT OR IGNORE INTO portal_files (name, content) VALUES (?, ?)');
+  for (const filename of PORTAL_FILE_NAMES) {
+    const content = getPortalDefaultContent(filename);
+    if (content !== null) {
+      seedStmt.run(filename, content);
+    }
+  }
+}
+
+export const PORTAL_FILE_NAMES = ['login.html', 'alogin.html', 'error.html', 'logout.html'] as const;
+
+export function getPortalDefaultContent(filename: string): string | null {
+  const filePath = path.join(__dirname, '..', 'hotspot', filename);
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
   }
 }
 

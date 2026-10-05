@@ -1,4 +1,6 @@
 import { RouterOSAPI } from 'node-routeros';
+import net from 'net';
+import crypto from 'crypto';
 
 export interface RouterConnection {
   id: number;
@@ -468,6 +470,179 @@ class MikroTikService {
       console.error(`getInterfaceTraffic failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
+  }
+
+  async uploadFile(routerId: number, filename: string, content: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+    if (!config) {
+      throw new Error(`Router ${routerId} not found`);
+    }
+    if (config.useRestApi) {
+      throw new Error('Pushing files is not supported for REST API routers (use RouterOS API mode)');
+    }
+
+    const remoteName = `hotspot/${filename}`;
+    const data = Buffer.from(content, 'utf8');
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = new net.Socket();
+      let incoming: Buffer = Buffer.alloc(0);
+      let state: 'login' | 'add' | 'final' = 'login';
+      let settled = false;
+      let chunkOffset = 0;
+
+      const timeout = setTimeout(() => {
+        fail(new Error('File upload timed out'));
+      }, 30000);
+
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        socket.destroy();
+        reject(err);
+      };
+
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        socket.end();
+        resolve();
+      };
+
+      const sendChunks = () => {
+        const CHUNK = 8192;
+        while (chunkOffset < data.length) {
+          const end = Math.min(chunkOffset + CHUNK, data.length);
+          const chunk = data.subarray(chunkOffset, end);
+          socket.write(Buffer.concat([this.encodeApiLength(chunk.length), chunk]));
+          chunkOffset = end;
+        }
+        socket.write(Buffer.from([0]));
+        state = 'final';
+      };
+
+      socket.on('data', (buf: Buffer) => {
+        incoming = Buffer.concat([incoming, buf]);
+        let parsed = this.parseApiSentence(incoming);
+        while (parsed) {
+          incoming = parsed.rest;
+          const words = parsed.sentence;
+          const type = words[0] || '';
+
+          if (type === '!fatal' || type === '!trap') {
+            fail(new Error(words.slice(1).join(' ') || 'Router rejected the command'));
+            return;
+          }
+
+          if (state === 'login' && type === '!done') {
+            const ret = words.find((w) => w.startsWith('=ret='));
+            if (ret && ret.length > 5) {
+              const challengeHex = ret.slice(5);
+              const challenge = Buffer.alloc(config.password.length + 17);
+              challenge.write(String.fromCharCode(0) + config.password);
+              challenge.write(challengeHex, config.password.length + 1, challengeHex.length / 2, 'hex');
+              const resp = '00' + crypto.createHash('MD5').update(challenge).digest('hex');
+              socket.write(this.buildApiSentence(['/login', `=name=${config.username}`, `=response=${resp}`]));
+            } else {
+              state = 'add';
+              socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
+            }
+          } else if (state === 'add' && type === '!done') {
+            sendChunks();
+          } else if (state === 'final' && type === '!done') {
+            succeed();
+            return;
+          }
+
+          parsed = this.parseApiSentence(incoming);
+        }
+      });
+
+      socket.on('error', (err) => fail(err));
+      socket.on('close', () => fail(new Error('Connection closed unexpectedly during file upload')));
+
+      socket.connect(config.port, config.host, () => {
+        socket.write(this.buildApiSentence(['/login', `=name=${config.username}`, `=password=${config.password}`]));
+      });
+    });
+  }
+
+  private encodeApiLength(len: number): Buffer {
+    if (len < 0x80) {
+      return Buffer.from([len]);
+    } else if (len < 0x4000) {
+      const l = len | 0x8000;
+      return Buffer.from([(l >> 8) & 0xff, l & 0xff]);
+    } else if (len < 0x200000) {
+      const l = len | 0xc00000;
+      return Buffer.from([(l >> 16) & 0xff, (l >> 8) & 0xff, l & 0xff]);
+    } else if (len < 0x10000000) {
+      const l = len | 0xe0000000;
+      const b = Buffer.alloc(4);
+      b.writeUInt32BE(l >>> 0, 0);
+      return b;
+    }
+    const b = Buffer.alloc(5);
+    b[0] = 0xf0;
+    b.writeUInt32BE(len >>> 0, 1);
+    return b;
+  }
+
+  private buildApiSentence(words: string[]): Buffer {
+    const parts: Buffer[] = [];
+    for (const word of words) {
+      const data = Buffer.from(word, 'utf8');
+      parts.push(this.encodeApiLength(data.length));
+      parts.push(data);
+    }
+    parts.push(Buffer.from([0]));
+    return Buffer.concat(parts);
+  }
+
+  private parseApiSentence(buffer: Buffer): { sentence: string[]; rest: Buffer } | null {
+    const words: string[] = [];
+    let pos = 0;
+
+    const readLength = (): number | null => {
+      if (pos >= buffer.length) return null;
+      const first = buffer[pos++];
+      if (first & 0x80) {
+        if ((first & 0xc0) === 0x80) {
+          if (pos >= buffer.length) return null;
+          return ((first & 0x3f) << 8) | buffer[pos++];
+        }
+        if ((first & 0xe0) === 0xc0) {
+          if (pos + 1 >= buffer.length) return null;
+          const len = ((first & 0x1f) << 16) | (buffer[pos] << 8) | buffer[pos + 1];
+          pos += 2;
+          return len;
+        }
+        if ((first & 0xf0) === 0xe0) {
+          if (pos + 2 >= buffer.length) return null;
+          const len = ((first & 0x0f) << 24) | (buffer[pos] << 16) | (buffer[pos + 1] << 8) | buffer[pos + 2];
+          pos += 3;
+          return len;
+        }
+        if (pos + 3 >= buffer.length) return null;
+        const len = (buffer[pos] << 24) | (buffer[pos + 1] << 16) | (buffer[pos + 2] << 8) | buffer[pos + 3];
+        pos += 4;
+        return len >>> 0;
+      }
+      return first;
+    };
+
+    for (;;) {
+      const len = readLength();
+      if (len === null) return null;
+      if (len === 0) break;
+      if (pos + len > buffer.length) return null;
+      words.push(buffer.subarray(pos, pos + len).toString('utf8'));
+      pos += len;
+    }
+
+    return { sentence: words, rest: buffer.subarray(pos) };
   }
 
   disconnectAll(): void {

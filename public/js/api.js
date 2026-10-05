@@ -167,6 +167,26 @@ class ApiClient {
   async getRouterTraffic(routerId) {
     return this.get(`/monitoring/router/${routerId}/traffic`);
   }
+
+  async getPortalFiles() {
+    return this.get('/portal');
+  }
+
+  async getPortalFile(name) {
+    return this.get(`/portal/file/${encodeURIComponent(name)}`);
+  }
+
+  async savePortalFile(name, content) {
+    return this.put(`/portal/file/${encodeURIComponent(name)}`, { content });
+  }
+
+  async resetPortalFile(name) {
+    return this.post(`/portal/reset/${encodeURIComponent(name)}`);
+  }
+
+  async pushPortalFiles(routerId, files) {
+    return this.post(`/portal/push/${routerId}`, files ? { files } : {});
+  }
 }
 
 window.api = new ApiClient();

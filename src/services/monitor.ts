@@ -1,5 +1,5 @@
-import { mikroTikService, RouterConnection } from './services/mikrotik';
-import { getDb } from './database';
+import { mikroTikService, RouterConnection } from './mikrotik';
+import { getDb } from '../database';
 
 let monitoringInterval: NodeJS.Timeout | null = null;
 
@@ -78,6 +78,6 @@ export function reconnectRouters(): void {
     mikroTikService
       .connect(conn)
       .then(() => console.log(`Connected to router: ${router.name}`))
-      .catch((err) => console.warn(`Could not connect to router ${router.name}: ${err.message}`));
+      .catch((err: any) => console.warn(`Could not connect to router ${router.name}: ${err.message}`));
   }
 }

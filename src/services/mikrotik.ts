@@ -1,4 +1,4 @@
-import { RouterOSAPI, IRouterOSAPIClient } from 'node-routeros';
+import { RouterOSAPI } from 'node-routeros';
 
 export interface RouterConnection {
   id: number;
@@ -42,7 +42,7 @@ export interface ActiveConnection {
 }
 
 class MikroTikService {
-  private connections: Map<number, IRouterOSAPIClient> = new Map();
+  private connections: Map<number, RouterOSAPI> = new Map();
 
   async connect(router: RouterConnection): Promise<void> {
     if (this.connections.has(router.id)) {
@@ -73,7 +73,7 @@ class MikroTikService {
     return conn !== undefined && conn.connected;
   }
 
-  private getClient(routerId: number): IRouterOSAPIClient {
+  private getClient(routerId: number): RouterOSAPI {
     const conn = this.connections.get(routerId);
     if (!conn || !conn.connected) {
       throw new Error(`Router ${routerId} is not connected`);

@@ -109,24 +109,39 @@ mkdir -p "$APP_DIR/data"
 # Copy application files
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [ -d "$SCRIPT_DIR/dist" ]; then
-    echo "  Copying built application..."
-    cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
-    cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
-    cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
+# Check if running from the install directory itself
+if [ "$(cd "$SCRIPT_DIR" && pwd)" = "$(cd "$APP_DIR" && pwd 2>/dev/null)" ]; then
+    SAME_DIR=true
+    echo "  Running from installation directory, skipping file copy..."
 else
-    echo "  No build found. Building application..."
-    cd "$SCRIPT_DIR"
-    npm install --production=false
-    npm run build
-    cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
-    cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
-    cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
+    SAME_DIR=false
+fi
+
+if [ "$SAME_DIR" = false ]; then
+    if [ -d "$SCRIPT_DIR/dist" ]; then
+        echo "  Copying built application..."
+        rm -rf "$APP_DIR/dist"
+        cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
+        rm -rf "$APP_DIR/public"
+        cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
+        cp -f "$SCRIPT_DIR/package.json" "$APP_DIR/"
+    else
+        echo "  No build found. Building application..."
+        cd "$SCRIPT_DIR"
+        npm install --production=false
+        npm run build
+        rm -rf "$APP_DIR/dist"
+        cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
+        rm -rf "$APP_DIR/public"
+        cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
+        cp -f "$SCRIPT_DIR/package.json" "$APP_DIR/"
+    fi
 fi
 
 # Install production dependencies
+echo "  Installing production dependencies..."
 cd "$APP_DIR"
-npm install --production
+npm install --production --ignore-scripts 2>/dev/null || npm install --production 2>/dev/null || true
 
 # Create .env file if not exists
 if [ ! -f "$APP_DIR/.env" ]; then
@@ -144,7 +159,12 @@ EOF
     echo ""
     echo "  *** DEFAULT LOGIN: admin / admin123 ***"
     echo "  *** CHANGE PASSWORD ON FIRST LOGIN! ***"
+else
+    echo "  .env file already exists, keeping it"
 fi
+
+# Ensure data directory exists
+mkdir -p "$APP_DIR/data"
 
 # Set permissions
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"

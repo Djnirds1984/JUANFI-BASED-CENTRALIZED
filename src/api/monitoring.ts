@@ -48,23 +48,54 @@ router.get('/system', (req: Request, res: Response) => {
       }
     }
 
-    res.json({
-      hostname: os.hostname(),
-      platform: `${os.type()} ${os.release()} ${os.arch()}`,
-      cpuModel,
-      cpuCores,
-      cpuLoad: Math.round(os.loadavg()[0] * 100 / cpuCores),
-      memoryTotal: totalMem,
-      memoryUsed: usedMem,
-      memoryPercent: Math.round((usedMem / totalMem) * 100),
-      diskTotal,
-      diskUsed,
-      diskFree,
-      diskPercent: diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0,
-      uptime: Math.round(os.uptime()),
-      nodeVersion: process.version,
-      wanIp,
-      lanIp,
+    const getCpuUsage = (): Promise<number> => {
+      return new Promise((resolve) => {
+        try {
+          const stat1 = execSync('cat /proc/stat | head -1').toString().trim();
+          const parts1 = stat1.split(/\s+/);
+          const idle1 = parseInt(parts1[4]) || 0;
+          const total1 = parts1.slice(1).reduce((sum, v) => sum + (parseInt(v) || 0), 0);
+
+          setTimeout(() => {
+            try {
+              const stat2 = execSync('cat /proc/stat | head -1').toString().trim();
+              const parts2 = stat2.split(/\s+/);
+              const idle2 = parseInt(parts2[4]) || 0;
+              const total2 = parts2.slice(1).reduce((sum, v) => sum + (parseInt(v) || 0), 0);
+
+              const idleDelta = idle2 - idle1;
+              const totalDelta = total2 - total1;
+              const cpuPct = totalDelta > 0 ? Math.round((1 - idleDelta / totalDelta) * 100) : 0;
+              resolve(cpuPct);
+            } catch {
+              resolve(0);
+            }
+          }, 500);
+        } catch {
+          resolve(0);
+        }
+      });
+    };
+
+    getCpuUsage().then((cpuLoad) => {
+      res.json({
+        hostname: os.hostname(),
+        platform: `${os.type()} ${os.release()} ${os.arch()}`,
+        cpuModel,
+        cpuCores,
+        cpuLoad,
+        memoryTotal: totalMem,
+        memoryUsed: usedMem,
+        memoryPercent: Math.round((usedMem / totalMem) * 100),
+        diskTotal,
+        diskUsed,
+        diskFree,
+        diskPercent: diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0,
+        uptime: Math.round(os.uptime()),
+        nodeVersion: process.version,
+        wanIp,
+        lanIp,
+      });
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

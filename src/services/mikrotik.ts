@@ -126,41 +126,33 @@ class MikroTikService {
   ): Promise<void> {
     const client = this.getClient(routerId);
 
-    const command: Record<string, string> = {
-      name: user.username,
-      password: user.password,
-      profile: user.profile,
-    };
+    const command: string[] = [
+      `=name=${user.username}`,
+      `=password=${user.password}`,
+      `=profile=${user.profile}`,
+    ];
 
-    if (user.uptimeLimit) command['uptime-limit'] = user.uptimeLimit;
-    if (user.bytesInQuota) command['bytes-in-quota'] = user.bytesInQuota.toString();
-    if (user.bytesOutQuota) command['bytes-out-quota'] = user.bytesOutQuota.toString();
-    if (user.comment) command['comment'] = user.comment;
+    if (user.uptimeLimit) command.push(`=uptime-limit=${user.uptimeLimit}`);
+    if (user.bytesInQuota) command.push(`=bytes-in-quota=${user.bytesInQuota}`);
+    if (user.bytesOutQuota) command.push(`=bytes-out-quota=${user.bytesOutQuota}`);
+    if (user.comment) command.push(`=comment=${user.comment}`);
 
-    await client
-      .write('/ip/hotspot/user/add', command)
-      .read();
+    await client.write('/ip/hotspot/user/add', command).read();
   }
 
   async removeHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client
-      .write('/ip/hotspot/user/remove', { '.id': userId })
-      .read();
+    await client.write('/ip/hotspot/user/remove', [`.id=${userId}`]).read();
   }
 
   async disableHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client
-      .write('/ip/hotspot/user/disable', { '.id': userId })
-      .read();
+    await client.write('/ip/hotspot/user/disable', [`.id=${userId}`]).read();
   }
 
   async enableHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client
-      .write('/ip/hotspot/user/enable', { '.id': userId })
-      .read();
+    await client.write('/ip/hotspot/user/enable', [`.id=${userId}`]).read();
   }
 
   async getActiveConnections(routerId: number): Promise<ActiveConnection[]> {
@@ -194,22 +186,22 @@ class MikroTikService {
   ): Promise<void> {
     const client = this.getClient(routerId);
 
-    const command: Record<string, string> = {
-      name: queue.name,
-      target: queue.target,
-      'max-limit': queue.maxLimit,
-    };
+    const command: string[] = [
+      `=name=${queue.name}`,
+      `=target=${queue.target}`,
+      `=max-limit=${queue.maxLimit}`,
+    ];
 
-    if (queue.burst) command['burst'] = queue.burst;
-    if (queue.priority) command['priority'] = queue.priority.toString();
-    if (queue.comment) command['comment'] = queue.comment;
+    if (queue.burst) command.push(`=burst=${queue.burst}`);
+    if (queue.priority) command.push(`=priority=${queue.priority}`);
+    if (queue.comment) command.push(`=comment=${queue.comment}`);
 
     await client.write('/queue/simple/add', command).read();
   }
 
   async removeQueue(routerId: number, queueId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client.write('/queue/simple/remove', { '.id': queueId }).read();
+    await client.write('/queue/simple/remove', [`.id=${queueId}`]).read();
   }
 
   async getInterfaces(routerId: number): Promise<any[]> {
@@ -219,9 +211,7 @@ class MikroTikService {
 
   async getInterfaceTraffic(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
-    return await client.write('/interface/monitor-traffic', {
-      'once': '',
-    }).read();
+    return await client.write('/interface/monitor-traffic', ['=once=']).read();
   }
 
   disconnectAll(): void {

@@ -43,35 +43,44 @@ export interface ActiveConnection {
 
 class MikroTikService {
   private connections: Map<number, RouterOSAPI> = new Map();
+  private routerConfigs: Map<number, RouterConnection> = new Map();
+  private reconnectTimers: Map<number, NodeJS.Timeout> = new Map();
+  private reconnectAttempts: Map<number, number> = new Map();
+  private readonly MAX_RECONNECT_ATTEMPTS = 5;
+  private readonly RECONNECT_DELAY = 5000; // 5 seconds
 
   async connect(router: RouterConnection): Promise<void> {
     if (this.connections.has(router.id)) {
       await this.disconnect(router.id);
     }
 
+    // Store router config for reconnection
+    this.routerConfigs.set(router.id, router);
+    this.reconnectAttempts.set(router.id, 0);
+
     const client = new RouterOSAPI({
       host: router.host,
       port: router.port,
       user: router.username,
       password: router.password,
-      timeout: 30, // Increase timeout to 30 seconds
+      timeout: 30,
     });
 
-    // Add error handler immediately to prevent unhandled error crashes
+    // Add error handler to trigger automatic reconnection
     client.on('error', (err) => {
       console.error(`Router ${router.id} (${router.host}) connection error:`, err.message);
       this.connections.delete(router.id);
-      // Close the connection to prevent resource leaks
-      client.close().catch(() => {
-        // Ignore close errors
-      });
+      client.close().catch(() => {});
+      this.scheduleReconnect(router.id);
     });
 
     try {
       await client.connect();
       this.connections.set(router.id, client);
+      this.reconnectAttempts.set(router.id, 0);
     } catch (err) {
       console.error(`Failed to connect to router ${router.id} (${router.host}):`, (err as Error).message);
+      this.scheduleReconnect(router.id);
       throw err;
     }
   }

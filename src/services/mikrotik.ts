@@ -54,16 +54,22 @@ class MikroTikService {
       port: router.port,
       user: router.username,
       password: router.password,
+      timeout: 30, // Increase timeout to 30 seconds
     });
 
-    // Handle connection errors to prevent unhandled error crashes
+    // Add error handler immediately to prevent unhandled error crashes
     client.on('error', (err) => {
-      console.error(`Router ${router.id} (${router.host}) connection error: ${err.message}`);
+      console.error(`Router ${router.id} (${router.host}) connection error:`, err.message);
       this.connections.delete(router.id);
     });
 
-    await client.connect();
-    this.connections.set(router.id, client);
+    try {
+      await client.connect();
+      this.connections.set(router.id, client);
+    } catch (err) {
+      console.error(`Failed to connect to router ${router.id} (${router.host}):`, (err as Error).message);
+      throw err;
+    }
   }
 
   async disconnect(routerId: number): Promise<void> {

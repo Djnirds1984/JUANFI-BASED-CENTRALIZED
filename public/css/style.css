@@ -464,6 +464,10 @@ tr:hover td {
   transition: width 0.3s;
 }
 
+.progress-bar .fill.anim-bar {
+  transition: width 2s ease-out;
+}
+
 .fill-low { background: var(--success); }
 .fill-medium { background: var(--warning); }
 .fill-high { background: var(--danger); }

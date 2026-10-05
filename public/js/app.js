@@ -136,6 +136,10 @@ const App = {
         return (bytes / 1e3).toFixed(1) + ' KB';
       };
 
+      const routerMemPct = primaryRouter ? Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100) : 0;
+      const routerMemClass = routerMemPct > 80 ? 'fill-high' : routerMemPct > 50 ? 'fill-medium' : 'fill-low';
+      const routerCpuClass = primaryRouter && primaryRouter.systemInfo.cpuLoad > 80 ? 'fill-high' : primaryRouter && primaryRouter.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low';
+
       content.innerHTML = `
         <div class="overview-grid">
           <div class="dash-card">
@@ -146,21 +150,21 @@ const App = {
                   <span class="dash-metric-label">CPU Usage</span>
                   <span class="dash-metric-value">${cpuPct}%</span>
                 </div>
-                <div class="progress-bar"><div class="fill ${cpuClass}" style="width:${cpuPct}%"></div></div>
+                <div class="progress-bar"><div class="fill ${cpuClass} anim-bar" data-target="${cpuPct}" style="width:0%"></div></div>
               </div>
               <div class="dash-metric">
                 <div class="dash-metric-header">
                   <span class="dash-metric-label">RAM Usage</span>
                   <span class="dash-metric-value">${memPct}% (${formatBytes(serverInfo.memoryUsed)} / ${formatBytes(serverInfo.memoryTotal)})</span>
                 </div>
-                <div class="progress-bar"><div class="fill ${memClass}" style="width:${memPct}%"></div></div>
+                <div class="progress-bar"><div class="fill ${memClass} anim-bar" data-target="${memPct}" style="width:0%"></div></div>
               </div>
               <div class="dash-metric">
                 <div class="dash-metric-header">
                   <span class="dash-metric-label">Disk Usage</span>
                   <span class="dash-metric-value">${diskPct}% (${formatBytes(serverInfo.diskUsed)} / ${formatBytes(serverInfo.diskTotal)})</span>
                 </div>
-                <div class="progress-bar"><div class="fill ${diskClass}" style="width:${diskPct}%"></div></div>
+                <div class="progress-bar"><div class="fill ${diskClass} anim-bar" data-target="${diskPct}" style="width:0%"></div></div>
               </div>
             </div>
             <div class="dash-info-grid">
@@ -186,14 +190,14 @@ const App = {
                     <span class="dash-metric-label">CPU Load</span>
                     <span class="dash-metric-value">${primaryRouter.systemInfo.cpuLoad}%</span>
                   </div>
-                  <div class="progress-bar"><div class="fill ${primaryRouter.systemInfo.cpuLoad > 80 ? 'fill-high' : primaryRouter.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'}" style="width:${primaryRouter.systemInfo.cpuLoad}%"></div></div>
+                  <div class="progress-bar"><div class="fill ${routerCpuClass} anim-bar" data-target="${primaryRouter.systemInfo.cpuLoad}" style="width:0%"></div></div>
                 </div>
                 <div class="dash-metric">
                   <div class="dash-metric-header">
                     <span class="dash-metric-label">Memory</span>
-                    <span class="dash-metric-value">${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100)}% (${formatBytes(primaryRouter.systemInfo.memoryUsed)} / ${formatBytes(primaryRouter.systemInfo.memoryTotal)})</span>
+                    <span class="dash-metric-value">${routerMemPct}% (${formatBytes(primaryRouter.systemInfo.memoryUsed)} / ${formatBytes(primaryRouter.systemInfo.memoryTotal)})</span>
                   </div>
-                  <div class="progress-bar"><div class="fill ${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100) > 80 ? 'fill-high' : Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100) > 50 ? 'fill-medium' : 'fill-low'}" style="width:${Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100)}%"></div></div>
+                  <div class="progress-bar"><div class="fill ${routerMemClass} anim-bar" data-target="${routerMemPct}" style="width:0%"></div></div>
                 </div>
               </div>
               <div class="dash-info-grid">
@@ -247,13 +251,13 @@ const App = {
                       <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
                         <span>CPU</span><span>${r.systemInfo.cpuLoad}%</span>
                       </div>
-                      <div class="progress-bar"><div class="fill ${r.systemInfo.cpuLoad > 80 ? 'fill-high' : r.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'}" style="width:${r.systemInfo.cpuLoad}%"></div></div>
+                      <div class="progress-bar"><div class="fill ${r.systemInfo.cpuLoad > 80 ? 'fill-high' : r.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'} anim-bar" data-target="${r.systemInfo.cpuLoad}" style="width:0%"></div></div>
                     </div>
                     <div style="margin-top:0.75rem">
                       <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
                         <span>Memory</span><span>${memP}%</span>
                       </div>
-                      <div class="progress-bar"><div class="fill ${memP > 80 ? 'fill-high' : memP > 50 ? 'fill-medium' : 'fill-low'}" style="width:${memP}%"></div></div>
+                      <div class="progress-bar"><div class="fill ${memP > 80 ? 'fill-high' : memP > 50 ? 'fill-medium' : 'fill-low'} anim-bar" data-target="${memP}" style="width:0%"></div></div>
                     </div>
                     <div class="router-stats" style="margin-top:0.75rem">
                       <span>Uptime: ${formatUptime(r.systemInfo.uptime)}</span>
@@ -266,6 +270,14 @@ const App = {
           </div>
         ` : ''}
       `;
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          content.querySelectorAll('.anim-bar').forEach((bar) => {
+            bar.style.width = bar.dataset.target + '%';
+          });
+        });
+      });
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
     }

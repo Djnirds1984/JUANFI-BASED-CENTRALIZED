@@ -14,7 +14,6 @@ import { mikroTikService } from './services/mikrotik';
 import authRoutes from './api/auth';
 import routerRoutes from './api/routers';
 import hotspotRoutes from './api/hotspot';
-import bandwidthRoutes from './api/bandwidth';
 import voucherRoutes from './api/vouchers';
 import monitoringRoutes from './api/monitoring';
 
@@ -38,7 +37,6 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/api/auth', authRoutes);
 app.use('/api/routers', routerRoutes);
 app.use('/api/hotspot', hotspotRoutes);
-app.use('/api/bandwidth', bandwidthRoutes);
 app.use('/api/vouchers', voucherRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 

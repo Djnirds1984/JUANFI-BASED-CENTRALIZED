@@ -77,7 +77,6 @@ const App = {
       overview: 'Overview',
       routers: 'Routers',
       hotspot: 'Hotspot Users',
-      bandwidth: 'Bandwidth Management',
       vouchers: 'Vouchers',
       monitoring: 'Monitoring',
     };
@@ -95,7 +94,6 @@ const App = {
         case 'overview': await this.renderOverview(); break;
         case 'routers': await this.renderRouters(); break;
         case 'hotspot': await this.renderHotspot(); break;
-        case 'bandwidth': await this.renderBandwidth(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'monitoring': await this.renderMonitoring(); break;
       }
@@ -423,138 +421,6 @@ const App = {
       await api.deleteHotspotUser(this.selectedRouterId, userId);
       this.toast('User removed', 'success');
       this.loadHotspotUsers();
-    } catch (err) {
-      this.toast(err.message, 'error');
-    }
-  },
-
-  async renderBandwidth() {
-    const content = document.getElementById('page-content');
-    const routers = (await api.getRouters()).filter((r) => r.connected);
-
-    if (routers.length === 0) {
-      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3><p>Connect a router first.</p></div>';
-      return;
-    }
-
-    if (!this.selectedRouterId || !routers.find((r) => r.id === this.selectedRouterId)) {
-      this.selectedRouterId = routers[0].id;
-    }
-
-    content.innerHTML = `
-      <div class="card">
-        <div class="card-header">
-          <h3>Bandwidth Queues</h3>
-          <div style="display:flex;gap:0.5rem">
-            <select id="bw-router-select" class="btn btn-outline">
-              ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
-            </select>
-            <button class="btn btn-primary btn-sm" onclick="App.showAddQueueModal()">Add Queue</button>
-          </div>
-        </div>
-        <div id="queues-table">Loading...</div>
-      </div>
-    `;
-
-    document.getElementById('bw-router-select').addEventListener('change', (e) => {
-      this.selectedRouterId = parseInt(e.target.value);
-      this.loadQueues();
-    });
-
-    this.loadQueues();
-  },
-
-  async loadQueues() {
-    const container = document.getElementById('queues-table');
-    try {
-      const queues = await api.getQueues(this.selectedRouterId);
-      if (queues.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No queues configured.</p></div>';
-        return;
-      }
-
-      container.innerHTML = `
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Target</th>
-                <th>Max Limit</th>
-                <th>Priority</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${queues.map((q) => `
-                <tr>
-                  <td><strong>${this.escapeHtml(q.name || '-')}</strong></td>
-                  <td>${this.escapeHtml(q.target || '-')}</td>
-                  <td>${this.escapeHtml(q['max-limit'] || '-')}</td>
-                  <td>${q.priority || '-'}</td>
-                  <td>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteQueue('${q['.id']}')">Remove</button>
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
-    } catch (err) {
-      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
-    }
-  },
-
-  showAddQueueModal() {
-    this.openModal('Add Queue', `
-      <form id="add-queue-form">
-        <div class="form-group">
-          <label>Queue Name</label>
-          <input type="text" name="name" required>
-        </div>
-        <div class="form-group">
-          <label>Target (IP/Subnet)</label>
-          <input type="text" name="target" required placeholder="192.168.1.0/24">
-        </div>
-        <div class="form-group">
-          <label>Max Limit (e.g. 10M/10M)</label>
-          <input type="text" name="maxLimit" required placeholder="10M/10M">
-        </div>
-        <div class="form-group">
-          <label>Priority (1-8)</label>
-          <input type="number" name="priority" value="8" min="1" max="8">
-        </div>
-      </form>
-    `, [
-      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
-      { label: 'Add Queue', class: 'btn btn-primary', action: () => this.submitAddQueue() },
-    ]);
-  },
-
-  async submitAddQueue() {
-    const form = document.getElementById('add-queue-form');
-    try {
-      await api.createQueue(this.selectedRouterId, {
-        name: form.name.value,
-        target: form.target.value,
-        maxLimit: form.maxLimit.value,
-        priority: parseInt(form.priority.value),
-      });
-      this.closeModal();
-      this.toast('Queue created', 'success');
-      this.loadQueues();
-    } catch (err) {
-      this.toast(err.message, 'error');
-    }
-  },
-
-  async deleteQueue(queueId) {
-    if (!confirm('Remove this queue?')) return;
-    try {
-      await api.deleteQueue(this.selectedRouterId, queueId);
-      this.toast('Queue removed', 'success');
-      this.loadQueues();
     } catch (err) {
       this.toast(err.message, 'error');
     }

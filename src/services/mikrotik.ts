@@ -227,57 +227,6 @@ class MikroTikService {
     }
   }
 
-  async getQueues(routerId: number): Promise<any[]> {
-    const client = this.getClient(routerId);
-    try {
-      return await client.write('/queue/simple/print');
-    } catch (err) {
-      console.error(`getQueues failed for router ${routerId}:`, (err as Error).message);
-      throw err;
-    }
-  }
-
-  async createQueue(
-    routerId: number,
-    queue: {
-      name: string;
-      target: string;
-      maxLimit: string;
-      burst?: string;
-      priority?: number;
-      comment?: string;
-    }
-  ): Promise<void> {
-    const client = this.getClient(routerId);
-
-    const command: string[] = [
-      `=name=${queue.name}`,
-      `=target=${queue.target}`,
-      `=max-limit=${queue.maxLimit}`,
-    ];
-
-    if (queue.burst) command.push(`=burst=${queue.burst}`);
-    if (queue.priority) command.push(`=priority=${queue.priority}`);
-    if (queue.comment) command.push(`=comment=${queue.comment}`);
-
-    try {
-      await client.write('/queue/simple/add', command);
-    } catch (err) {
-      console.error(`createQueue failed for router ${routerId}:`, (err as Error).message);
-      throw err;
-    }
-  }
-
-  async removeQueue(routerId: number, queueId: string): Promise<void> {
-    const client = this.getClient(routerId);
-    try {
-      await client.write('/queue/simple/remove', [`.id=${queueId}`]);
-    } catch (err) {
-      console.error(`removeQueue failed for router ${routerId}:`, (err as Error).message);
-      throw err;
-    }
-  }
-
   async getInterfaces(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
     try {

@@ -123,26 +123,6 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/profiles`);
   }
 
-  async getQueues(routerId) {
-    return this.get(`/bandwidth/router/${routerId}/queues`);
-  }
-
-  async createQueue(routerId, queue) {
-    return this.post(`/bandwidth/router/${routerId}/queues`, queue);
-  }
-
-  async deleteQueue(routerId, queueId) {
-    return this.delete(`/bandwidth/router/${routerId}/queues/${queueId}`);
-  }
-
-  async getBandwidthProfiles(routerId) {
-    return this.get(`/bandwidth/router/${routerId}/profiles`);
-  }
-
-  async createBandwidthProfile(routerId, profile) {
-    return this.post(`/bandwidth/router/${routerId}/profiles`, profile);
-  }
-
   async getVouchers(routerId, params = {}) {
     const query = new URLSearchParams(params).toString();
     return this.get(`/vouchers/router/${routerId}${query ? '?' + query : ''}`);

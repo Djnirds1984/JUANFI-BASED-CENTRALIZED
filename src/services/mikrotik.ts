@@ -7,6 +7,7 @@ export interface RouterConnection {
   port: number;
   username: string;
   password: string;
+  useRestApi?: boolean;
 }
 
 export interface RouterSystemInfo {
@@ -47,7 +48,39 @@ class MikroTikService {
   private reconnectTimers: Map<number, NodeJS.Timeout> = new Map();
   private reconnectAttempts: Map<number, number> = new Map();
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
-  private readonly RECONNECT_DELAY = 5000; // 5 seconds
+  private readonly RECONNECT_DELAY = 5000;
+
+  private async restApiCall(
+    router: RouterConnection,
+    method: string,
+    path: string,
+    body?: any
+  ): Promise<any> {
+    const protocol = router.port === 443 ? 'https' : 'http';
+    const url = `${protocol}://${router.host}:${router.port}/rest${path}`;
+    const auth = Buffer.from(`${router.username}:${router.password}`).toString('base64');
+
+    const options: RequestInit = {
+      method,
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json',
+      },
+    };
+
+    if (body) {
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      throw new Error(`REST API error: ${response.status} ${response.statusText}`);
+    }
+
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  }
 
   async connect(router: RouterConnection): Promise<void> {
     if (this.connections.has(router.id)) {
@@ -56,6 +89,11 @@ class MikroTikService {
 
     this.routerConfigs.set(router.id, router);
     this.reconnectAttempts.set(router.id, 0);
+
+    if (router.useRestApi) {
+      console.log(`REST API mode for router: ${router.name} (${router.host}:${router.port})`);
+      return;
+    }
 
     const client = new RouterOSAPI({
       host: router.host,
@@ -123,6 +161,9 @@ class MikroTikService {
       this.reconnectTimers.delete(routerId);
     }
 
+    this.routerConfigs.delete(routerId);
+    this.reconnectAttempts.delete(routerId);
+
     const conn = this.connections.get(routerId);
     if (conn) {
       conn.removeAllListeners('error');
@@ -136,6 +177,10 @@ class MikroTikService {
   }
 
   isConnected(routerId: number): boolean {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      return true;
+    }
     const conn = this.connections.get(routerId);
     return conn !== undefined && conn.connected;
   }
@@ -149,6 +194,31 @@ class MikroTikService {
   }
 
   async getSystemInfo(routerId: number): Promise<RouterSystemInfo> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const [resource, identity] = await Promise.all([
+        this.restApiCall(config, 'GET', '/system/resource'),
+        this.restApiCall(config, 'GET', '/system/identity'),
+      ]);
+
+      const res = Array.isArray(resource) ? resource[0] : resource;
+      const ident = Array.isArray(identity) ? identity[0] : identity;
+
+      const memTotal = parseInt(res?.['total-memory'] || '0');
+      const memUsed = parseInt(res?.['used-memory'] || '0');
+
+      return {
+        cpuLoad: parseInt(res?.['cpu-load'] || '0'),
+        memoryTotal: memTotal,
+        memoryUsed: memUsed,
+        uptime: this.parseUptime(res?.uptime || '0'),
+        version: res?.version || 'unknown',
+        boardName: res?.['board-name'] || 'unknown',
+        identity: ident?.name || 'unknown',
+      };
+    }
+
     const client = this.getClient(routerId);
 
     try {
@@ -179,6 +249,13 @@ class MikroTikService {
   }
 
   async getHotspotUsers(routerId: number): Promise<HotspotUser[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const users = await this.restApiCall(config, 'GET', '/ip/hotspot/user');
+      return Array.isArray(users) ? users : [];
+    }
+
     const client = this.getClient(routerId);
     try {
       const users = await client.write('/ip/hotspot/user/print');
@@ -201,6 +278,23 @@ class MikroTikService {
       comment?: string;
     }
   ): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const body: any = {
+        name: user.username,
+        password: user.password,
+        profile: user.profile,
+      };
+      if (user.uptimeLimit) body['uptime-limit'] = user.uptimeLimit;
+      if (user.bytesInQuota) body['bytes-in-quota'] = user.bytesInQuota;
+      if (user.bytesOutQuota) body['bytes-out-quota'] = user.bytesOutQuota;
+      if (user.comment) body.comment = user.comment;
+
+      await this.restApiCall(config, 'POST', '/ip/hotspot/user', body);
+      return;
+    }
+
     const client = this.getClient(routerId);
 
     const command: string[] = [
@@ -223,6 +317,13 @@ class MikroTikService {
   }
 
   async removeHotspotUser(routerId: number, userId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/user/${userId}`);
+      return;
+    }
+
     const client = this.getClient(routerId);
     try {
       await client.write('/ip/hotspot/user/remove', [`.id=${userId}`]);
@@ -233,6 +334,13 @@ class MikroTikService {
   }
 
   async disableHotspotUser(routerId: number, userId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'POST', `/ip/hotspot/user/${userId}/disable`);
+      return;
+    }
+
     const client = this.getClient(routerId);
     try {
       await client.write('/ip/hotspot/user/disable', [`.id=${userId}`]);
@@ -243,6 +351,13 @@ class MikroTikService {
   }
 
   async enableHotspotUser(routerId: number, userId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'POST', `/ip/hotspot/user/${userId}/enable`);
+      return;
+    }
+
     const client = this.getClient(routerId);
     try {
       await client.write('/ip/hotspot/user/enable', [`.id=${userId}`]);
@@ -253,6 +368,13 @@ class MikroTikService {
   }
 
   async getActiveConnections(routerId: number): Promise<ActiveConnection[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const connections = await this.restApiCall(config, 'GET', '/ip/hotspot/active');
+      return Array.isArray(connections) ? connections : [];
+    }
+
     const client = this.getClient(routerId);
     try {
       const connections = await client.write('/ip/hotspot/active/print');
@@ -264,6 +386,13 @@ class MikroTikService {
   }
 
   async getHotspotProfiles(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const profiles = await this.restApiCall(config, 'GET', '/ip/hotspot/user/profile');
+      return Array.isArray(profiles) ? profiles : [];
+    }
+
     const client = this.getClient(routerId);
     try {
       return await client.write('/ip/hotspot/user/profile/print');
@@ -274,6 +403,13 @@ class MikroTikService {
   }
 
   async getInterfaces(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const interfaces = await this.restApiCall(config, 'GET', '/interface');
+      return Array.isArray(interfaces) ? interfaces : [];
+    }
+
     const client = this.getClient(routerId);
     try {
       return await client.write('/interface/print');
@@ -284,6 +420,13 @@ class MikroTikService {
   }
 
   async getInterfaceTraffic(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const traffic = await this.restApiCall(config, 'GET', '/interface/monitor-traffic?once=true');
+      return Array.isArray(traffic) ? traffic : [];
+    }
+
     const client = this.getClient(routerId);
     try {
       return await client.write('/interface/monitor-traffic', ['=once=']);

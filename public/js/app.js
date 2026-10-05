@@ -174,7 +174,10 @@ const App = {
               <tbody>
                 ${routers.map((r) => `
                   <tr>
-                    <td><strong>${this.escapeHtml(r.name)}</strong></td>
+                    <td>
+                      <strong>${this.escapeHtml(r.name)}</strong>
+                      ${r.use_rest_api ? '<span class="status-badge" style="background:#6366f1;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">REST</span>' : ''}
+                    </td>
                     <td>${this.escapeHtml(r.host)}</td>
                     <td>${r.port}</td>
                     <td>
@@ -212,8 +215,9 @@ const App = {
           <input type="text" name="host" required placeholder="192.168.1.1">
         </div>
         <div class="form-group">
-          <label>API Port</label>
+          <label>Port</label>
           <input type="number" name="port" value="8728">
+          <small style="color:var(--text-secondary);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
         </div>
         <div class="form-group">
           <label>Username</label>
@@ -227,11 +231,24 @@ const App = {
           <label>Description (optional)</label>
           <textarea name="description" rows="2"></textarea>
         </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" name="use_rest_api" style="width:auto;margin:0">
+            Use REST API (port 80/443, RouterOS v7+)
+          </label>
+        </div>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
       { label: 'Add Router', class: 'btn btn-primary', action: () => this.submitAddRouter() },
     ]);
+
+    const checkbox = document.querySelector('#add-router-form [name="use_rest_api"]');
+    const portInput = document.querySelector('#add-router-form [name="port"]');
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked && portInput.value === '8728') portInput.value = '80';
+      if (!checkbox.checked && portInput.value === '80') portInput.value = '8728';
+    });
   },
 
   async submitAddRouter() {
@@ -243,7 +260,12 @@ const App = {
       username: form.username.value,
       password: form.password.value,
       description: form.description.value,
+      use_rest_api: form.use_rest_api.checked,
     };
+
+    if (data.use_rest_api && data.port === 8728) {
+      data.port = 80;
+    }
 
     try {
       await api.createRouter(data);

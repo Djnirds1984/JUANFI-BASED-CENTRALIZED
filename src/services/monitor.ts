@@ -38,6 +38,7 @@ async function collectMetrics(): Promise<void> {
           port: router.port,
           username: router.username,
           password: router.password,
+          useRestApi: !!router.use_rest_api,
         };
         await mikroTikService.connect(conn);
       } catch (err) {
@@ -73,6 +74,7 @@ export function reconnectRouters(): void {
       port: router.port,
       username: router.username,
       password: router.password,
+      useRestApi: !!router.use_rest_api,
     };
 
     mikroTikService

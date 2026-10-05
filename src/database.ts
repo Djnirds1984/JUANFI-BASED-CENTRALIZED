@@ -24,6 +24,7 @@ export function initializeDatabase(): void {
       password TEXT NOT NULL,
       description TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      use_rest_api INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -99,6 +100,11 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_monitoring_logs_router ON monitoring_logs(router_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_logs_recorded ON monitoring_logs(recorded_at);
   `);
+
+  const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];
+  if (!columns.some((c: any) => c.name === 'use_rest_api')) {
+    db.exec("ALTER TABLE routers ADD COLUMN use_rest_api INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 export function getDb(): Database.Database {

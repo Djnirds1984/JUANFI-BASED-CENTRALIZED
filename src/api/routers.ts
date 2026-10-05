@@ -46,7 +46,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description } = req.body;
+    const { name, host, port, username, password, description, use_rest_api } = req.body;
 
     if (!name || !host || !username || !password) {
       res.status(400).json({ error: 'Name, host, username, and password are required' });
@@ -56,9 +56,9 @@ router.post('/', async (req: Request, res: Response) => {
     const db = getDb();
     const result = db
       .prepare(
-        'INSERT INTO routers (name, host, port, username, password, description) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, host, port || 8728, username, password, description || null);
+      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0);
 
     const routerConn: RouterConnection = {
       id: result.lastInsertRowid as number,
@@ -67,6 +67,7 @@ router.post('/', async (req: Request, res: Response) => {
       port: port || 8728,
       username,
       password,
+      useRestApi: !!use_rest_api,
     };
 
     let connected = false;
@@ -84,6 +85,7 @@ router.post('/', async (req: Request, res: Response) => {
       port: port || 8728,
       username,
       description,
+      use_rest_api: use_rest_api ? 1 : 0,
       connected,
     });
   } catch (error) {
@@ -94,7 +96,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, is_active } = req.body;
+    const { name, host, port, username, password, description, is_active, use_rest_api } = req.body;
     const db = getDb();
 
     const existing = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
@@ -104,7 +106,7 @@ router.put('/:id', (req: Request, res: Response) => {
     }
 
     db.prepare(
-      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       name || (existing as any).name,
       host || (existing as any).host,
@@ -113,6 +115,7 @@ router.put('/:id', (req: Request, res: Response) => {
       password || (existing as any).password,
       description !== undefined ? description : (existing as any).description,
       is_active !== undefined ? is_active : (existing as any).is_active,
+      use_rest_api !== undefined ? (use_rest_api ? 1 : 0) : (existing as any).use_rest_api,
       req.params.id
     );
 
@@ -160,6 +163,7 @@ router.post('/:id/connect', async (req: Request, res: Response) => {
       port: routerRow.port,
       username: routerRow.username,
       password: routerRow.password,
+      useRestApi: !!routerRow.use_rest_api,
     };
 
     await mikroTikService.connect(routerConn);

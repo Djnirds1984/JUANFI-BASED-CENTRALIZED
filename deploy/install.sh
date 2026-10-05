@@ -35,16 +35,31 @@ apt-get install -y -qq curl build-essential git sqlite3 > /dev/null 2>&1
 
 # Check Node.js installation
 echo "[3/9] Checking Node.js installation..."
-if command -v node &> /dev/null; then
-    NODE_VERSION=$(node -v | cut -d'.' -f1 | sed 's/v//')
+
+# Try to find node in common locations
+NODE_PATH=""
+for path in /usr/bin/node /usr/local/bin/node /opt/node*/bin/node; do
+    if [ -x "$path" ]; then
+        NODE_PATH="$path"
+        break
+    fi
+done
+
+if [ -n "$NODE_PATH" ]; then
+    NODE_VERSION=$("$NODE_PATH" -v | cut -d'.' -f1 | sed 's/v//')
     if [ "$NODE_VERSION" -lt "$NODE_MIN_VERSION" ]; then
-        echo "  WARNING: Node.js version too old ($(node -v)). Need v$NODE_MIN_VERSION or higher."
+        echo "  WARNING: Node.js version too old ($("$NODE_PATH" -v)). Need v$NODE_MIN_VERSION or higher."
         echo "  Please install Node.js manually and re-run this script."
     else
-        echo "  Node.js $(node -v) - OK"
+        echo "  Node.js $("$NODE_PATH" -v) found at $NODE_PATH - OK"
+        # Add to PATH for this script
+        export PATH="$(dirname $NODE_PATH):$PATH"
     fi
 else
     echo "  WARNING: Node.js not found. Please install Node.js v$NODE_MIN_VERSION+ manually."
+    echo "  Common installation methods:"
+    echo "    - Using NodeSource: curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
+    echo "    - Using nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && nvm install 20"
 fi
 
 echo "  Node.js: $(node -v 2>/dev/null || echo 'not installed')"

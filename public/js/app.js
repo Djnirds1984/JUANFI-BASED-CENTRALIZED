@@ -1,6 +1,7 @@
 const App = {
   currentPage: 'overview',
   selectedRouterId: null,
+  _overviewInterval: null,
 
   init() {
     if (api.getToken()) {
@@ -68,6 +69,10 @@ const App = {
   },
 
   navigate(page) {
+    if (this._overviewInterval) {
+      clearInterval(this._overviewInterval);
+      this._overviewInterval = null;
+    }
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -278,8 +283,95 @@ const App = {
           });
         });
       });
+
+      this._overviewInterval = setInterval(() => this.updateOverview(), 2000);
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+    }
+  },
+
+  async updateOverview() {
+    if (this.currentPage !== 'overview') return;
+    const content = document.getElementById('page-content');
+    if (!content.querySelector('.overview-grid')) return;
+
+    try {
+      const [serverInfo, summary] = await Promise.all([
+        api.getSystemInfo(),
+        api.getMonitoringSummary(),
+      ]);
+
+      const cpuPct = serverInfo.cpuLoad;
+      const memPct = serverInfo.memoryPercent;
+      const diskPct = serverInfo.diskPercent;
+
+      const formatBytes = (bytes) => {
+        if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+        if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+        return (bytes / 1e3).toFixed(1) + ' KB';
+      };
+
+      const formatUptime = (secs) => {
+        const d = Math.floor(secs / 86400);
+        const h = Math.floor((secs % 86400) / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        if (d > 0) return `${d}d ${h}h ${m}m`;
+        return `${h}h ${m}m`;
+      };
+
+      const barUpdate = (idx, pct) => {
+        const bars = content.querySelectorAll('.overview-grid .dash-card:first-child .anim-bar');
+        if (bars[idx]) {
+          bars[idx].style.transition = 'width 0.5s ease-out';
+          bars[idx].style.width = pct + '%';
+          bars[idx].className = bars[idx].className.replace(/fill-\w+/, pct > 80 ? 'fill-high' : pct > 50 ? 'fill-medium' : 'fill-low');
+        }
+      };
+      barUpdate(0, cpuPct);
+      barUpdate(1, memPct);
+      barUpdate(2, diskPct);
+
+      const metricValues = content.querySelectorAll('.overview-grid .dash-card:first-child .dash-metric-value');
+      if (metricValues[0]) metricValues[0].textContent = cpuPct + '%';
+      if (metricValues[1]) metricValues[1].textContent = `${memPct}% (${formatBytes(serverInfo.memoryUsed)} / ${formatBytes(serverInfo.memoryTotal)})`;
+      if (metricValues[2]) metricValues[2].textContent = `${diskPct}% (${formatBytes(serverInfo.diskUsed)} / ${formatBytes(serverInfo.diskTotal)})`;
+
+      const infoValues = content.querySelectorAll('.overview-grid .dash-card:first-child .dash-info-value');
+      if (infoValues[4]) infoValues[4].textContent = formatUptime(serverInfo.uptime);
+
+      const connectedRouters = summary.routers.filter((r) => r.connected && r.systemInfo);
+      const primaryRouter = connectedRouters[0] || null;
+
+      if (primaryRouter) {
+        const routerBars = content.querySelectorAll('.overview-grid .dash-card:nth-child(2) .anim-bar');
+        const rCpu = primaryRouter.systemInfo.cpuLoad;
+        const rMem = Math.round((primaryRouter.systemInfo.memoryUsed / primaryRouter.systemInfo.memoryTotal) * 100);
+        if (routerBars[0]) {
+          routerBars[0].style.transition = 'width 0.5s ease-out';
+          routerBars[0].style.width = rCpu + '%';
+          routerBars[0].className = routerBars[0].className.replace(/fill-\w+/, rCpu > 80 ? 'fill-high' : rCpu > 50 ? 'fill-medium' : 'fill-low');
+        }
+        if (routerBars[1]) {
+          routerBars[1].style.transition = 'width 0.5s ease-out';
+          routerBars[1].style.width = rMem + '%';
+          routerBars[1].className = routerBars[1].className.replace(/fill-\w+/, rMem > 80 ? 'fill-high' : rMem > 50 ? 'fill-medium' : 'fill-low');
+        }
+
+        const routerMetricValues = content.querySelectorAll('.overview-grid .dash-card:nth-child(2) .dash-metric-value');
+        if (routerMetricValues[0]) routerMetricValues[0].textContent = rCpu + '%';
+        if (routerMetricValues[1]) routerMetricValues[1].textContent = `${rMem}% (${formatBytes(primaryRouter.systemInfo.memoryUsed)} / ${formatBytes(primaryRouter.systemInfo.memoryTotal)})`;
+
+        const routerInfoValues = content.querySelectorAll('.overview-grid .dash-card:nth-child(2) .dash-info-value');
+        if (routerInfoValues[3]) routerInfoValues[3].textContent = formatUptime(primaryRouter.systemInfo.uptime);
+      }
+
+      const statValues = content.querySelectorAll('.stat-value');
+      if (statValues[0]) statValues[0].textContent = summary.totalRouters;
+      if (statValues[1]) statValues[1].textContent = summary.connectedRouters;
+      if (statValues[2]) statValues[2].textContent = summary.totalRouters - summary.connectedRouters;
+      if (statValues[3]) statValues[3].textContent = formatUptime(serverInfo.uptime);
+    } catch (err) {
+      // silently ignore poll errors
     }
   },
 

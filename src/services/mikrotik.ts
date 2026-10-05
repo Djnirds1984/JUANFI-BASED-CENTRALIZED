@@ -61,6 +61,10 @@ class MikroTikService {
     client.on('error', (err) => {
       console.error(`Router ${router.id} (${router.host}) connection error:`, err.message);
       this.connections.delete(router.id);
+      // Close the connection to prevent resource leaks
+      client.close().catch(() => {
+        // Ignore close errors
+      });
     });
 
     try {
@@ -101,32 +105,42 @@ class MikroTikService {
   async getSystemInfo(routerId: number): Promise<RouterSystemInfo> {
     const client = this.getClient(routerId);
 
-    const [resource, identity] = await Promise.all([
-      client.write('/system/resource/print'),
-      client.write('/system/identity/print'),
-    ]);
+    try {
+      const [resource, identity] = await Promise.all([
+        client.write('/system/resource/print'),
+        client.write('/system/identity/print'),
+      ]);
 
-    const res = resource[0] as any;
-    const ident = identity[0] as any;
+      const res = resource[0] as any;
+      const ident = identity[0] as any;
 
-    const memTotal = parseInt(res['total-memory'] || '0');
-    const memUsed = parseInt(res['used-memory'] || '0');
+      const memTotal = parseInt(res['total-memory'] || '0');
+      const memUsed = parseInt(res['used-memory'] || '0');
 
-    return {
-      cpuLoad: parseInt(res['cpu-load'] || '0'),
-      memoryTotal: memTotal,
-      memoryUsed: memUsed,
-      uptime: this.parseUptime(res['uptime'] || '0'),
-      version: res['version'] || 'unknown',
-      boardName: res['board-name'] || 'unknown',
-      identity: ident['name'] || 'unknown',
-    };
+      return {
+        cpuLoad: parseInt(res['cpu-load'] || '0'),
+        memoryTotal: memTotal,
+        memoryUsed: memUsed,
+        uptime: this.parseUptime(res['uptime'] || '0'),
+        version: res['version'] || 'unknown',
+        boardName: res['board-name'] || 'unknown',
+        identity: ident['name'] || 'unknown',
+      };
+    } catch (err) {
+      console.error(`getSystemInfo failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getHotspotUsers(routerId: number): Promise<HotspotUser[]> {
     const client = this.getClient(routerId);
-    const users = await client.write('/ip/hotspot/user/print');
-    return users as HotspotUser[];
+    try {
+      const users = await client.write('/ip/hotspot/user/print');
+      return users as HotspotUser[];
+    } catch (err) {
+      console.error(`getHotspotUsers failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async createHotspotUser(
@@ -154,38 +168,73 @@ class MikroTikService {
     if (user.bytesOutQuota) command.push(`=bytes-out-quota=${user.bytesOutQuota}`);
     if (user.comment) command.push(`=comment=${user.comment}`);
 
-    await client.write('/ip/hotspot/user/add', command);
+    try {
+      await client.write('/ip/hotspot/user/add', command);
+    } catch (err) {
+      console.error(`createHotspotUser failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async removeHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client.write('/ip/hotspot/user/remove', [`.id=${userId}`]);
+    try {
+      await client.write('/ip/hotspot/user/remove', [`.id=${userId}`]);
+    } catch (err) {
+      console.error(`removeHotspotUser failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async disableHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client.write('/ip/hotspot/user/disable', [`.id=${userId}`]);
+    try {
+      await client.write('/ip/hotspot/user/disable', [`.id=${userId}`]);
+    } catch (err) {
+      console.error(`disableHotspotUser failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async enableHotspotUser(routerId: number, userId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client.write('/ip/hotspot/user/enable', [`.id=${userId}`]);
+    try {
+      await client.write('/ip/hotspot/user/enable', [`.id=${userId}`]);
+    } catch (err) {
+      console.error(`enableHotspotUser failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getActiveConnections(routerId: number): Promise<ActiveConnection[]> {
     const client = this.getClient(routerId);
-    const connections = await client.write('/ip/hotspot/active/print');
-    return connections as ActiveConnection[];
+    try {
+      const connections = await client.write('/ip/hotspot/active/print');
+      return connections as ActiveConnection[];
+    } catch (err) {
+      console.error(`getActiveConnections failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getHotspotProfiles(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
-    return await client.write('/ip/hotspot/user/profile/print');
+    try {
+      return await client.write('/ip/hotspot/user/profile/print');
+    } catch (err) {
+      console.error(`getHotspotProfiles failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getQueues(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
-    return await client.write('/queue/simple/print');
+    try {
+      return await client.write('/queue/simple/print');
+    } catch (err) {
+      console.error(`getQueues failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async createQueue(
@@ -211,22 +260,42 @@ class MikroTikService {
     if (queue.priority) command.push(`=priority=${queue.priority}`);
     if (queue.comment) command.push(`=comment=${queue.comment}`);
 
-    await client.write('/queue/simple/add', command);
+    try {
+      await client.write('/queue/simple/add', command);
+    } catch (err) {
+      console.error(`createQueue failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async removeQueue(routerId: number, queueId: string): Promise<void> {
     const client = this.getClient(routerId);
-    await client.write('/queue/simple/remove', [`.id=${queueId}`]);
+    try {
+      await client.write('/queue/simple/remove', [`.id=${queueId}`]);
+    } catch (err) {
+      console.error(`removeQueue failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getInterfaces(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
-    return await client.write('/interface/print');
+    try {
+      return await client.write('/interface/print');
+    } catch (err) {
+      console.error(`getInterfaces failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   async getInterfaceTraffic(routerId: number): Promise<any[]> {
     const client = this.getClient(routerId);
-    return await client.write('/interface/monitor-traffic', ['=once=']);
+    try {
+      return await client.write('/interface/monitor-traffic', ['=once=']);
+    } catch (err) {
+      console.error(`getInterfaceTraffic failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
   }
 
   disconnectAll(): void {

@@ -56,6 +56,12 @@ class MikroTikService {
       password: router.password,
     });
 
+    // Handle connection errors to prevent unhandled error crashes
+    client.on('error', (err) => {
+      console.error(`Router ${router.id} (${router.host}) connection error: ${err.message}`);
+      this.connections.delete(router.id);
+    });
+
     await client.connect();
     this.connections.set(router.id, client);
   }
@@ -63,7 +69,12 @@ class MikroTikService {
   async disconnect(routerId: number): Promise<void> {
     const conn = this.connections.get(routerId);
     if (conn) {
-      await conn.close();
+      conn.removeAllListeners('error');
+      try {
+        await conn.close();
+      } catch {
+        // Ignore close errors on already-dead connections
+      }
       this.connections.delete(routerId);
     }
   }
@@ -214,6 +225,7 @@ class MikroTikService {
 
   disconnectAll(): void {
     for (const [id, conn] of this.connections) {
+      conn.removeAllListeners('error');
       conn.close().catch(() => {});
     }
     this.connections.clear();

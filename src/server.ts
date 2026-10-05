@@ -109,6 +109,15 @@ function shutdown(): void {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
+// Prevent crashes from unhandled errors (e.g. router connection timeouts)
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
 bootstrap();
 
 export { app, server, io };

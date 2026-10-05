@@ -33,27 +33,22 @@ apt-get update -qq
 echo "[2/9] Installing dependencies..."
 apt-get install -y -qq curl build-essential git sqlite3 > /dev/null 2>&1
 
-# Install Node.js if not present or too old
-install_node() {
-    echo "[3/9] Installing Node.js 20.x..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
-    apt-get install -y -qq nodejs > /dev/null 2>&1
-}
-
+# Check Node.js installation
+echo "[3/9] Checking Node.js installation..."
 if command -v node &> /dev/null; then
     NODE_VERSION=$(node -v | cut -d'.' -f1 | sed 's/v//')
     if [ "$NODE_VERSION" -lt "$NODE_MIN_VERSION" ]; then
-        echo "Node.js version too old ($(node -v)), upgrading..."
-        install_node
+        echo "  WARNING: Node.js version too old ($(node -v)). Need v$NODE_MIN_VERSION or higher."
+        echo "  Please install Node.js manually and re-run this script."
     else
-        echo "[3/9] Node.js $(node -v) already installed - OK"
+        echo "  Node.js $(node -v) - OK"
     fi
 else
-    install_node
+    echo "  WARNING: Node.js not found. Please install Node.js v$NODE_MIN_VERSION+ manually."
 fi
 
-echo "  Node.js: $(node -v)"
-echo "  npm: $(npm -v)"
+echo "  Node.js: $(node -v 2>/dev/null || echo 'not installed')"
+echo "  npm: $(npm -v 2>/dev/null || echo 'not installed')"
 
 # Create application user
 echo "[4/9] Creating application user..."

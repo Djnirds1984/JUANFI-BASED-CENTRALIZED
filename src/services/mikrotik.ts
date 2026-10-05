@@ -54,7 +54,6 @@ class MikroTikService {
       await this.disconnect(router.id);
     }
 
-    // Store router config for reconnection
     this.routerConfigs.set(router.id, router);
     this.reconnectAttempts.set(router.id, 0);
 
@@ -64,20 +63,22 @@ class MikroTikService {
       user: router.username,
       password: router.password,
       timeout: 30,
+      keepalive: true,
     });
 
-    // Add error handler to trigger automatic reconnection
     client.on('error', (err) => {
-      console.error(`Router ${router.id} (${router.host}) connection error:`, err.message);
-      this.connections.delete(router.id);
-      client.close().catch(() => {});
-      this.scheduleReconnect(router.id);
+      console.error(`Router ${router.id} (${router.host}) error:`, err.message);
+      if (this.connections.has(router.id)) {
+        this.connections.delete(router.id);
+        this.scheduleReconnect(router.id);
+      }
     });
 
     try {
       await client.connect();
       this.connections.set(router.id, client);
       this.reconnectAttempts.set(router.id, 0);
+      console.log(`Connected to router: ${router.name} (${router.host})`);
     } catch (err) {
       console.error(`Failed to connect to router ${router.id} (${router.host}):`, (err as Error).message);
       this.scheduleReconnect(router.id);
@@ -85,7 +86,43 @@ class MikroTikService {
     }
   }
 
+  private scheduleReconnect(routerId: number): void {
+    const attempts = this.reconnectAttempts.get(routerId) || 0;
+    if (attempts >= this.MAX_RECONNECT_ATTEMPTS) {
+      console.warn(`Router ${routerId} reached max reconnection attempts`);
+      return;
+    }
+
+    const existingTimer = this.reconnectTimers.get(routerId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const delay = this.RECONNECT_DELAY * Math.pow(2, attempts);
+    console.log(`Scheduling reconnect for router ${routerId} in ${delay}ms (attempt ${attempts + 1})`);
+
+    const timer = setTimeout(async () => {
+      const config = this.routerConfigs.get(routerId);
+      if (!config) return;
+
+      this.reconnectAttempts.set(routerId, attempts + 1);
+      try {
+        await this.connect(config);
+      } catch (err) {
+        console.error(`Reconnection failed for router ${routerId}:`, (err as Error).message);
+      }
+    }, delay);
+
+    this.reconnectTimers.set(routerId, timer);
+  }
+
   async disconnect(routerId: number): Promise<void> {
+    const timer = this.reconnectTimers.get(routerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(routerId);
+    }
+
     const conn = this.connections.get(routerId);
     if (conn) {
       conn.removeAllListeners('error');
@@ -257,11 +294,18 @@ class MikroTikService {
   }
 
   disconnectAll(): void {
+    for (const [id, timer] of this.reconnectTimers) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
+
     for (const [id, conn] of this.connections) {
       conn.removeAllListeners('error');
       conn.close().catch(() => {});
     }
     this.connections.clear();
+    this.routerConfigs.clear();
+    this.reconnectAttempts.clear();
   }
 
   private parseUptime(uptime: string): number {

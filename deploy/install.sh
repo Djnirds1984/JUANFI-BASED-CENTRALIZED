@@ -26,16 +26,16 @@ ARCH=$(dpkg --print-architecture)
 echo "Detected architecture: $ARCH"
 
 # Update package lists
-echo "[1/7] Updating package lists..."
+echo "[1/9] Updating package lists..."
 apt-get update -qq
 
 # Install dependencies
-echo "[2/7] Installing dependencies..."
+echo "[2/9] Installing dependencies..."
 apt-get install -y -qq curl build-essential git sqlite3 > /dev/null 2>&1
 
 # Install Node.js if not present or too old
 install_node() {
-    echo "[3/7] Installing Node.js 20.x..."
+    echo "[3/9] Installing Node.js 20.x..."
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
     apt-get install -y -qq nodejs > /dev/null 2>&1
 }
@@ -46,7 +46,7 @@ if command -v node &> /dev/null; then
         echo "Node.js version too old ($(node -v)), upgrading..."
         install_node
     else
-        echo "[3/7] Node.js $(node -v) already installed - OK"
+        echo "[3/9] Node.js $(node -v) already installed - OK"
     fi
 else
     install_node
@@ -56,7 +56,7 @@ echo "  Node.js: $(node -v)"
 echo "  npm: $(npm -v)"
 
 # Create application user
-echo "[4/7] Creating application user..."
+echo "[4/9] Creating application user..."
 if ! id "$APP_USER" &>/dev/null; then
     useradd -r -m -d /opt/$APP_NAME -s /usr/sbin/nologin "$APP_USER"
     echo "  Created user: $APP_USER"
@@ -65,7 +65,7 @@ else
 fi
 
 # Create application directory
-echo "[5/7] Setting up application directory..."
+echo "[5/9] Setting up application directory..."
 mkdir -p "$APP_DIR"
 mkdir -p "$APP_DIR/data"
 
@@ -114,18 +114,63 @@ chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 chmod 600 "$APP_DIR/.env"
 
 # Install systemd service
-echo "[6/7] Installing systemd service..."
+echo "[6/9] Installing systemd service..."
 cp "$SCRIPT_DIR/deploy/mikrotik-controller.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "$APP_NAME"
 
 # Start service
-echo "[7/7] Starting service..."
+echo "[7/9] Starting service..."
 systemctl start "$APP_NAME"
 
 # Wait and check status
 sleep 2
 if systemctl is-active --quiet "$APP_NAME"; then
+    echo "  Service started successfully"
+else
+    echo ""
+    echo "ERROR: Service failed to start. Check logs:"
+    echo "  sudo journalctl -u $APP_NAME -n 50 --no-pager"
+    exit 1
+fi
+
+# Install and configure Nginx
+echo "[8/9] Installing Nginx reverse proxy..."
+apt-get install -y -qq nginx > /dev/null 2>&1
+
+# Copy Nginx configuration
+cp "$SCRIPT_DIR/deploy/nginx.conf" /etc/nginx/sites-available/mikrotik-controller
+
+# Remove default site if it exists
+rm -f /etc/nginx/sites-enabled/default
+
+# Enable the site
+ln -sf /etc/nginx/sites-available/mikrotik-controller /etc/nginx/sites-enabled/
+
+# Test Nginx configuration
+nginx -t
+if [ $? -ne 0 ]; then
+    echo "  WARNING: Nginx configuration test failed"
+    echo "  You may need to manually configure Nginx"
+else
+    # Reload Nginx
+    systemctl reload nginx
+    systemctl enable nginx
+    echo "  Nginx configured and started"
+fi
+
+# Configure firewall if UFW is active
+echo "[9/9] Configuring firewall..."
+if command -v ufw &> /dev/null; then
+    ufw allow 'Nginx Full' > /dev/null 2>&1 || true
+    ufw allow ssh > /dev/null 2>&1 || true
+    echo "  Firewall rules added for Nginx"
+else
+    echo "  UFW not installed, skipping firewall configuration"
+fi
+
+# Final status check
+if systemctl is-active --quiet "$APP_NAME" && systemctl is-active --quiet nginx; then
     echo ""
     echo "=========================================="
     echo "  Installation Complete!"
@@ -133,13 +178,21 @@ if systemctl is-active --quiet "$APP_NAME"; then
     echo ""
     echo "  Service: sudo systemctl status $APP_NAME"
     echo "  Logs:    sudo journalctl -u $APP_NAME -f"
-    echo "  URL:     http://$(hostname -I | awk '{print $1}'):3000"
+    echo ""
+    echo "  Access URLs:"
+    echo "    Direct:    http://$(hostname -I | awk '{print $1}'):3000"
+    echo "    Via Nginx: http://$(hostname -I | awk '{print $1}')"
     echo ""
     echo "  Default login: admin / admin123"
     echo "  CHANGE PASSWORD ON FIRST LOGIN!"
     echo ""
     echo "  Configuration: $APP_DIR/.env"
     echo "  Database:      $APP_DIR/data/"
+    echo "  Nginx config:  /etc/nginx/sites-available/mikrotik-controller"
+    echo ""
+    echo "  Optional: Set up SSL with Let's Encrypt"
+    echo "    sudo bash $SCRIPT_DIR/deploy/setup-ssl.sh your-domain.com"
+    echo ""
     echo "=========================================="
 else
     echo ""

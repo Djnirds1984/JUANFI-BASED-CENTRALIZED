@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MikroTik Controller</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="login-screen" class="screen active">
+      <div class="login-box">
+        <h1>MikroTik Controller</h1>
+        <p class="subtitle">Sign in to manage your routers</p>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username">
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
+          </div>
+          <div id="login-error" class="error-message"></div>
+          <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="dashboard-screen" class="screen">
+      <nav class="sidebar">
+        <div class="sidebar-header">
+          <h2>MikroTik</h2>
+          <span class="version">Controller</span>
+        </div>
+        <ul class="nav-menu">
+          <li class="nav-item active" data-page="overview">
+            <span class="nav-icon">&#9776;</span> Overview
+          </li>
+          <li class="nav-item" data-page="routers">
+            <span class="nav-icon">&#9881;</span> Routers
+          </li>
+          <li class="nav-item" data-page="hotspot">
+            <span class="nav-icon">&#9734;</span> Hotspot Users
+          </li>
+          <li class="nav-item" data-page="bandwidth">
+            <span class="nav-icon">&#8644;</span> Bandwidth
+          </li>
+          <li class="nav-item" data-page="vouchers">
+            <span class="nav-icon">&#9993;</span> Vouchers
+          </li>
+          <li class="nav-item" data-page="monitoring">
+            <span class="nav-icon">&#9201;</span> Monitoring
+          </li>
+        </ul>
+        <div class="sidebar-footer">
+          <button id="logout-btn" class="btn btn-outline btn-block">Logout</button>
+        </div>
+      </nav>
+
+      <main class="content">
+        <header class="content-header">
+          <h1 id="page-title">Overview</h1>
+          <div class="header-actions">
+            <span id="connection-status" class="status-badge">Connected</span>
+          </div>
+        </header>
+
+        <div id="page-content" class="page-content">
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal</h3>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

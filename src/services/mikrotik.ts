@@ -488,7 +488,6 @@ class MikroTikService {
         method: 'PUT',
         headers: {
           'Authorization': `Basic ${auth}`,
-          'Content-Type': 'application/octet-stream',
         },
         body: data,
       });
@@ -502,9 +501,10 @@ class MikroTikService {
     await new Promise<void>((resolve, reject) => {
       const socket = new net.Socket();
       let incoming: Buffer = Buffer.alloc(0);
-      let state: 'login' | 'add' | 'final' = 'login';
+      let state: 'login' | 'query' | 'remove' | 'add' | 'final' = 'login';
       let settled = false;
       let chunkOffset = 0;
+      let fileId = '';
 
       const timeout = setTimeout(() => {
         fail(new Error('File upload timed out'));
@@ -546,7 +546,7 @@ class MikroTikService {
           const words = parsed.sentence;
           const type = words[0] || '';
 
-          if (type === '!fatal' || type === '!trap') {
+          if (type === '!fatal') {
             fail(new Error(words.slice(1).join(' ') || 'Router rejected the command'));
             return;
           }
@@ -561,11 +561,31 @@ class MikroTikService {
               const resp = '00' + crypto.createHash('MD5').update(challenge).digest('hex');
               socket.write(this.buildApiSentence(['/login', `=name=${config.username}`, `=response=${resp}`]));
             } else {
+              state = 'query';
+              socket.write(this.buildApiSentence(['/file/print']));
+            }
+          } else if (state === 'query' && type === '!re') {
+            const nameWord = words.find((w) => w.startsWith('=name='));
+            const idWord = words.find((w) => w.startsWith('=.id='));
+            if (nameWord && nameWord.slice(6) === remoteName && idWord) {
+              fileId = idWord.slice(5);
+            }
+          } else if (state === 'query' && type === '!done') {
+            if (fileId) {
+              state = 'remove';
+              socket.write(this.buildApiSentence(['/file/remove', `=.id=${fileId}`]));
+            } else {
               state = 'add';
               socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
             }
+          } else if (state === 'remove') {
+            state = 'add';
+            socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
           } else if (state === 'add' && type === '!done') {
             sendChunks();
+          } else if (state === 'add' && type === '!trap') {
+            fail(new Error(words.slice(1).join(' ') || 'Failed to create file'));
+            return;
           } else if (state === 'final' && type === '!done') {
             succeed();
             return;

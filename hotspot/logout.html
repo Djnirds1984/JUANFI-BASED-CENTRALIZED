@@ -6,117 +6,247 @@
 	<link rel="stylesheet" href="assets/css/toast.min.css">
 	<link rel="stylesheet" href="assets/css/core.css">
 	<link rel="stylesheet" href="assets/css/JuanFi.css">
-    <title>JuanFi - Status</title>
+    <title>Aircoins - Pause Status</title>
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
 	<script src="assets/js/config.js"></script>
+	<script src="assets/js/pako.min.js"></script>
 
+	<style>
+		:root {
+			--primary-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+			--accent-gradient: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+			--success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+			--card-bg: rgba(255, 255, 255, 0.88);
+			--backdrop-blur: blur(16px);
+		}
+
+		body#loginBody {
+			background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%);
+			background-attachment: fixed;
+			font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+			min-height: 100vh;
+			color: #1e293b;
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			padding: 20px 0;
+		}
+
+		.main-card {
+			background: var(--card-bg);
+			backdrop-filter: var(--backdrop-blur);
+			-webkit-backdrop-filter: var(--backdrop-blur);
+			border: 1px solid rgba(255, 255, 255, 0.4);
+			border-radius: 24px;
+			box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+			overflow: hidden;
+			padding: 30px;
+		}
+
+		.brand-img-container {
+			border-radius: 20px;
+			overflow: hidden;
+			box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+			background: #fff;
+			padding: 5px;
+			margin-bottom: 20px;
+		}
+
+		.info {
+			background: rgba(255, 255, 255, 0.7);
+			border-radius: 14px;
+			padding: 12px;
+			margin-bottom: 15px;
+			border: 1px solid rgba(226, 232, 240, 0.8);
+			box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+		}
+
+		.info span {
+			font-weight: 600;
+			color: #475569;
+			font-size: 13px;
+		}
+
+		.status-badge {
+			display: inline-block;
+			background: rgba(245, 158, 11, 0.1);
+			color: #f59e0b;
+			padding: 8px 16px;
+			border-radius: 30px;
+			font-weight: 600;
+			font-size: 14px;
+			border: 1px solid rgba(245, 158, 11, 0.2);
+		}
+
+		.info-status {
+			background: #f8fafc;
+			border-radius: 16px;
+			padding: 16px;
+			margin-bottom: 20px;
+			border: 1px solid #e2e8f0;
+			box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+		}
+
+		.status-holder {
+			margin-bottom: 14px;
+		}
+
+		.status-holder:last-child {
+			margin-bottom: 0;
+		}
+
+		.info-title {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #64748b;
+			font-size: 12px;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+			margin-bottom: 4px;
+		}
+
+		.info-title img {
+			margin-right: 6px;
+		}
+
+		.portal-btn {
+			display: block;
+			width: 100%;
+			padding: 14px;
+			border-radius: 12px;
+			font-weight: 600;
+			border: none;
+			text-shadow: none !important;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+			transition: all 0.2s ease;
+			color: white !important;
+		}
+
+		.portal-btn:hover {
+			transform: translateY(-2px);
+			box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+		}
+
+		#connectBtn { background: var(--success-gradient); }
+		#cancelBtn { background: var(--accent-gradient); }
+
+		.footer {
+			text-align: center;
+			margin-top: 25px;
+			color: #94a3b8;
+			font-size: 13px;
+		}
+
+		.footer a {
+			color: #a5b4fc;
+			text-decoration: none;
+		}
+
+		.footer a:hover {
+			text-decoration: underline;
+		}
+	</style>
 </head>
 <body id="loginBody">
 
 <div class="container">
-<center>
-		<form action="$(link-logout)" name="logout" >
-			<input type="hidden" name="erase-cookie" value="true" />
-		</form>
-		
-        <div class="row">
-            <div class="col-sm-5">
-                <div class="row" style="margin-bottom: 20px">
-                    <img src="assets/MainPic.PNG" class="img-fluid" />
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-7">
+            <div class="main-card">
+                <form action="$(link-logout)" name="logout">
+                    <input type="hidden" name="erase-cookie" value="true" />
+                </form>
+                
+                <div class="row align-items-center">
+                    <div class="col-sm-5 text-center">
+                        <div class="brand-img-container">
+                            <img src="assets/MainPic.PNG" class="img-fluid rounded" alt="Aircoins Logo" />
+                        </div>
+                        
+                        <div class="info">
+                            <div class="d-flex align-items-center justify-content-center mb-1">
+                                <img src="assets/img/ip.png" width="18px" height="18px" class="mr-2" />
+                                <span>$(ip)</span>
+                            </div>
+                            <div class="d-flex align-items-center justify-content-center">
+                                <img src="assets/img/mac.png" width="18px" height="18px" class="mr-2" />
+                                <span>$(mac)</span>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <span class="status-badge">Status: <span id="connectionStatus">Paused</span></span>
+                        </div>
+                    </div>
+
+                    <div class="col-sm-7">
+                        <div class="info-status text-center">
+                            <div class="mb-3">
+                                <span class="text-dark font-weight-bold" style="font-size: 18px;">You're currently on pause</span>
+                            </div>
+
+                            <div class="status-holder">
+                                <div class="info-title"><img src="assets/img/voucher.png" width="16px" height="16px" /><span>Voucher</span></div>
+                                <span class="text-dark" style="font-size: 22px; font-weight: bold;">$(username)</span>
+                            </div>
+                            
+                            <div class="status-holder">						
+                                <div class="info-title"><img src="assets/img/time.png" width="16px" height="16px" /><span>Remaining Time</span></div>
+                                <span class="odometer text-primary" id="pauseRemainTime" style="font-size: 18px; font-weight: bold;"></span>
+                            </div>
+
+                            <div class="status-holder">					
+                                <div class="info-title"><img src="assets/img/timeexpired.png" width="16px" height="16px" /><span>Expiration Time</span></div>
+                                <span class="text-secondary" id="expirationTime" style="font-size: 14px; font-weight: 600;"></span>
+                            </div>
+                        </div>
+                        
+                        <button type="button" id="connectBtn" onClick="resume(); return false" class="btn portal-btn mb-3">RESUME SESSION</button>
+                        <button type="button" id="cancelBtn" onClick="cancelPause(); return false" class="btn portal-btn">CANCEL SESSION</button>
+                    </div>
                 </div>
-				
-				<div class="info"><center>
-						<div class="info-ip">
-						<img src="assets/img/ip.png" width="20px" height="20px" />
-						<span>$(ip)</span>
-						</div>
-						<div class="info-mac">
-						<img src="assets/img/mac.png" width="20px" height="20px" />
-						<span>$(mac)</span>
-						</div>
-					</center>
-				</div>
-				
-				<center>			
-				<span class="status-connected">Status: <span class="blinking1" id="connectionStatus" style="color: #4cd137">Paused</span></span>
-                </center>
             </div>
-
-            <div class="col-sm-7">
-                <div class="login">
-				<div class="info-status">
-				<center>
-					<center>
-							<span class="form-text text-muted" style="color: white!important; font-size: 20px; font-weight: bold; text-shadow: 1px 1px 3px #000">You're currently on pause</span>
-					</center>
-					<div class="status-holder">
-						<div class="info-title"><img src="assets/img/voucher.png" width="20px" height="20px" /><span> Voucher</span></div>
-						<span style="font-size: 25px; font-weight: bold; text-shadow: 1px 1px 3px #000">$(username)</span>
-					</div>
-					
-					<div class="break2"></div>
-					
-					<div class="status-holder">						
-						<div class="info-title"><img src="assets/img/time.png" width="20px" height="20px" /><span> Remaining Time</span></div>
-						<span class="odometer" id="pauseRemainTime" style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000"></span><br>	
-					</div>
-
-					<div class="status-holder">					
-						<div class="info-title"><img src="assets/img/timeexpired.png" width="20px" height="20px" /><span> Expiration Time</span></div>
-						<span id="expirationTime" style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000"></span>
-					</div>
-					
-				</center>
-				</div>
-				
-				<button type="button" id="connectBtn" onClick="resume(); return false" class="btn btn-info btn-block" style="margin-top: 20px; display: block; width: 100%; text-shadow: 0px 1px 3px #000;">RESUME SESSION</button>
-				<div style="margin-bottom:-5px"></div>
-				<br>
-				<button type="button" id="cancelBtn" onClick="cancelPause(); return false" class="btn btn-danger btn-block" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">CANCEL SESSION</button>
-		
-
-                </div>
-				
-			<div class="footer">
-					<span class="footers">
-					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.0</a> &copy; All rights reserved 2022<br>
-					
-					</span>				
-				</div>
+            
+            <div class="footer">
+                <span class="footers">
+                Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.0</a> &copy; All rights reserved 2022
+                </span>				
             </div>
-			<script src="assets/js/jquery.min.js"></script>
-			<script src="assets/js/popper.min.js"></script>
-			<script src="assets/js/bootstrap.min.js"></script>
-			<script src="assets/js/toast.min.js"></script>
-			<script src="assets/js/core.js"></script>
-			<script src="assets/js/eload.js"></script>
+        </div>
+    </div>
 
-			<script>
-				var loginError = "";
-				var mac = "$(mac)";
-				var logoutUrl = "$(link-logout)";
-				var remainingTimer = null;
-				var hotspotAddress = "$(server-address)"; 
-				var interfaceName = "$(interface-name)";
-		
-				$(document).ready(function(){
-					$("#expirationTime").html("Loading...");
-					setTimeout(function(){
-						fetchValidity(1);
-					}, 1000);
-				});
-			</script>
+    <script src="assets/js/jquery.min.js"></script>
+    <script src="assets/js/popper.min.js"></script>
+    <script src="assets/js/bootstrap.min.js"></script>
+    <script src="assets/js/toast.min.js"></script>
+    <script src="assets/js/core.js"></script>
+    <script src="assets/js/eload.js"></script>
 
-			
-			<div id="loaderDiv" class="spinner hidden">
-				<center>
-					<img src="assets/loading.svg" />
-				</center>
-			</div>
-</div>
-</center>
+    <script>
+        var loginError = "";
+        var mac = "$(mac)";
+        var logoutUrl = "$(link-logout)";
+        var remainingTimer = null;
+        var hotspotAddress = "$(server-address)"; 
+        var interfaceName = "$(interface-name)";
+
+        $(document).ready(function(){
+            $("#expirationTime").html("Loading...");
+            setTimeout(function(){
+                fetchValidity(1);
+            }, 1000);
+        });
+    </script>
+    
+    <div id="loaderDiv" class="spinner hidden">
+        <center>
+            <img src="assets/loading.svg" />
+        </center>
+    </div>
 </div>
 </body>
 

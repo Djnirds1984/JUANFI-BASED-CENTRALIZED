@@ -7,7 +7,7 @@
 	<link rel="stylesheet" href="assets/css/toast.min.css">
 	<link rel="stylesheet" href="assets/css/core.css">
 	<link rel="stylesheet" href="assets/css/JuanFi.css">
-    <title>JuanFi Login Portal</title>
+    <title>Aircoins Login Portal</title>
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -17,62 +17,81 @@
 	<script src="assets/js/qrcode.min.js"></script>
 	
 <style>
+:root {
+	--primary-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+	--accent-gradient: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+	--success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+	--card-bg: rgba(255, 255, 255, 0.85);
+	--backdrop-blur: blur(16px);
+}
+
+body#loginBody {
+	background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%);
+	background-attachment: fixed;
+	font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+	min-height: 100vh;
+	color: #1e293b;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	padding: 20px 0;
+}
+
+.main-card {
+	background: var(--card-bg);
+	backdrop-filter: var(--backdrop-blur);
+	-webkit-backdrop-filter: var(--backdrop-blur);
+	border: 1px solid rgba(255, 255, 255, 0.4);
+	border-radius: 24px;
+	box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+	overflow: hidden;
+	padding: 30px;
+}
+
 #insertBtn {
-  display: block;
-  width: 100%;
-  height: 50px;
-  font-family: 'Droid Sans Mono', sans-serif;
-  font-size: 14px;
-  color: #fff;
-  background-color: #ff4d4d;
-  border-radius: 5px;
-  box-shadow: 0px 3px 0px #ff3838;
-  text-align: center;
-  line-height: 30px;
-  text-decoration: none;
-  text-shadow: 0px 1px 3px #000;
-  margin: 5px auto 0;
-  margin-top: -25px;
-  font-weight: bold;
-  border: none;
-  -webkit-animation: btnWiggle 3s infinite;
-  -moz-animation: btnWiggle 3s infinite;
-  -o-animation: btnWiggle 3s infinite;
-  animation: btnWiggle 3s infinite;
+	display: block;
+	width: 100%;
+	height: 56px;
+	font-size: 16px;
+	color: #fff;
+	background: var(--accent-gradient);
+	border-radius: 14px;
+	box-shadow: 0 10px 20px rgba(225, 29, 72, 0.3);
+	text-align: center;
+	line-height: 56px;
+	text-decoration: none;
+	font-weight: 700;
+	border: none;
+	letter-spacing: 0.5px;
+	transition: all 0.3s ease;
+	animation: btnWiggle 4s infinite ease-in-out;
+}
+
+#insertBtn:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 14px 24px rgba(225, 29, 72, 0.4);
+	color: #fff;
 }
 
 /* animation */
 @-webkit-keyframes btnWiggle {
-	0% {-webkit-transform: rotate(0deg);}
-	2% {-webkit-transform: rotate(-5deg);}
-	3.5% {-webkit-transform: rotate(3deg);}
-	5% {-webkit-transform: rotate(0deg);}
-	10.5% {-webkit-transform: rotate(-5deg);}
-	20% {-webkit-transform: rotate(3deg);}
-	23% {-webkit-transform: rotate(0deg);}
-	100% {-webkit-transform: rotate(0deg);}
-}
-@-o-keyframes btnWiggle {
-	0% {-webkit-transform: rotate(0deg);}
-	2% {-webkit-transform: rotate(-5deg);}
-	3.5% {-webkit-transform: rotate(3deg);}
-	5% {-webkit-transform: rotate(0deg);}
-	10.5% {-webkit-transform: rotate(-5deg);}
-	20% {-webkit-transform: rotate(3deg);}
-	23% {-webkit-transform: rotate(0deg);}
-	100% {-webkit-transform: rotate(0deg);}
+	0%, 100% { transform: rotate(0deg); }
+	2% { transform: rotate(-3deg); }
+	3.5% { transform: rotate(3deg); }
+	5% { transform: rotate(0deg); }
+	10.5% { transform: rotate(-3deg); }
+	20% { transform: rotate(2deg); }
+	23% { transform: rotate(0deg); }
 }
 @keyframes btnWiggle {
-	0% {-webkit-transform: rotate(0deg);}
-	2% {-webkit-transform: rotate(-5deg);}
-	3.5% {-webkit-transform: rotate(3deg);}
-	5% {-webkit-transform: rotate(0deg);}
-	10.5% {-webkit-transform: rotate(-5deg);}
-	20% {-webkit-transform: rotate(3deg);}
-	23% {-webkit-transform: rotate(0deg);}
-	100% {-webkit-transform: rotate(0deg);}
+	0%, 100% { transform: rotate(0deg); }
+	2% { transform: rotate(-3deg); }
+	3.5% { transform: rotate(3deg); }
+	5% { transform: rotate(0deg); }
+	10.5% { transform: rotate(-3deg); }
+	20% { transform: rotate(2deg); }
+	23% { transform: rotate(0deg); }
 }
-
 
 #qr-input-file {
    opacity: 0;
@@ -84,21 +103,152 @@
 	margin-bottom: 20px;
 }
 
-.qrcode-wrapper{
+.qrcode-wrapper {
 	background-color: white;
-	padding: 23px;
+	padding: 20px;
+	border-radius: 16px;
+	box-shadow: 0 8px 24px rgba(0,0,0,0.08);
 	width: fit-content;
+	margin: 0 auto;
+}
+
+.brand-img-container {
+	border-radius: 20px;
+	overflow: hidden;
+	box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+	background: #fff;
+	padding: 5px;
+	margin-bottom: 20px;
+}
+
+.info {
+	background: rgba(255, 255, 255, 0.7);
+	border-radius: 14px;
+	padding: 12px;
+	margin-bottom: 15px;
+	border: 1px solid rgba(226, 232, 240, 0.8);
+	box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+}
+
+.info span {
+	font-weight: 600;
+	color: #475569;
+	font-size: 13px;
+}
+
+.status-badge {
+	display: inline-block;
+	background: rgba(239, 68, 68, 0.1);
+	color: #ef4444;
+	padding: 8px 16px;
+	border-radius: 30px;
+	font-weight: 600;
+	font-size: 14px;
+	border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.portal-btn {
+	display: block;
+	width: 100%;
+	padding: 14px;
+	border-radius: 12px;
+	font-weight: 600;
+	border: none;
+	text-shadow: none !important;
+	box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+	transition: all 0.2s ease;
+}
+
+.portal-btn:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+}
+
+#promoRateBtn { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+#chargingBtn { background: var(--success-gradient); color: white; }
+#eloadBtn { background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; }
+#memberLoginBtn { background: linear-gradient(135deg, #64748b, #475569); color: white; }
+#connectBtn { background: var(--primary-gradient); color: white; font-size: 16px; padding: 14px; border-radius: 12px; }
+
+.form-control {
+	border-radius: 12px;
+	border: 1px solid #cbd5e1;
+	padding: 12px 16px;
+	height: auto;
+	background: rgba(255, 255, 255, 0.9);
+}
+
+.form-control:focus {
+	border-color: #6366f1;
+	box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+	background: #fff;
+}
+
+.modal-content {
+	border-radius: 24px;
+	border: none;
+	box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
+	overflow: hidden;
+}
+
+.modal-header {
+	background: #1e1b4b;
+	color: white;
+	border-bottom: none;
+	padding: 20px 24px;
+}
+
+.modal-header .close span {
+	color: white !important;
+}
+
+.modal-body {
+	padding: 24px;
+}
+
+.footer {
+	text-align: center;
+	margin-top: 25px;
+	color: #94a3b8;
+	font-size: 13px;
+}
+
+.footer a {
+	color: #a5b4fc;
+	text-decoration: none;
+}
+
+.footer a:hover {
+	text-decoration: underline;
+}
+
+#vendoSelectDiv label {
+	font-weight: 600;
+	color: #334155;
+	font-size: 14px;
+	margin-bottom: 6px;
+}
+
+.voucher-section-label {
+	font-weight: 700;
+	color: #475569;
+	letter-spacing: 0.5px;
+	font-size: 12px;
+}
+
+.inscoinholder {
+	background: #1e293b;
+	border-radius: 14px;
+	padding: 16px;
+	margin: 10px 0;
+	box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 </style>
 </head>
 
 <body id="loginBody">
 
-
-
-
-
-	 $(if chap-id)
+	$(if chap-id)
     <form name="sendin" action="$(link-login-only)" method="post" style="display:none">
         <input type="hidden" name="username" />
         <input type="hidden" name="password" />
@@ -172,336 +322,318 @@
 	$(endif)
 
     <div class="container">
-        <div class="row">
-			
-            <div class="col-sm-5">
-                <div class="row" style="margin-bottom: 20px">
-                    <img src="assets/MainPic.PNG" class="img-fluid" />
-                </div>
-				
-				<div class="info"><center>
-						<div class="info-ip">
-						<img src="assets/img/ip.png" width="20px" height="20px" />
-						<span>$(ip)</span>
+        <div class="row justify-content-center">
+            <div class="col-md-8 col-lg-7">
+				<div class="main-card">
+					<div class="row align-items-center">
+						<div class="col-sm-5 text-center">
+							<div class="brand-img-container">
+								<img src="assets/MainPic.PNG" class="img-fluid rounded" alt="Aircoins Logo" />
+							</div>
+							
+							<div class="info">
+								<div class="d-flex align-items-center justify-content-center mb-1">
+									<img src="assets/img/ip.png" width="18px" height="18px" class="mr-2" />
+									<span>$(ip)</span>
+								</div>
+								<div class="d-flex align-items-center justify-content-center">
+									<img src="assets/img/mac.png" width="18px" height="18px" class="mr-2" />
+									<span>$(mac)</span>
+								</div>
+							</div>
+							
+							<div class="mb-4">
+								<span class="status-badge">Status: <span class="blinking1 text-danger font-weight-bold">Disconnected</span></span>
+							</div>
 						</div>
-						<div class="info-mac">
-						<img src="assets/img/mac.png" width="20px" height="20px" />
-						<span>$(mac)</span>
+						
+						<div class="col-sm-7">
+							<div class="login">
+								<div id="vendoSelectDiv" class="form-group">
+									<label for="vendoSelected">Select Vendo</label>
+									<select class="form-control" name="vendoSelected" id="vendoSelected">
+									</select>
+								</div>
+								
+								<button type="button" id="insertBtn" onclick="insertBtnAction(); return false" class="btn btn-success btn-block" data-toggle="modal">INSERT COIN</button>
+								<div class="mt-3"></div>
+								
+								<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn portal-btn mb-3">PROMO RATES</button>
+								<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn portal-btn mb-3">CHARGING STATION</button>
+								<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn portal-btn mb-3">E-LOAD</button>
+								<button type="button" id="memberLoginBtn" class="btn portal-btn mb-3" data-toggle="modal" data-target="#memberModal">MEMBER LOGIN</button>
+									
+								<div class="form-group mt-4">
+									<span class="form-text voucher-section-label mb-1">VOUCHER CODE</span>
+									<input type="voucher" class="form-control" id="voucherInput" aria-describedby="voucherHelp" placeholder="Enter voucher code..">
+									<button type="button" id="scanQrBtn" onclick="$('#scanQrModal').modal('show'); return false" class="btn btn-primary btn-block mt-2" style="display: none">Purchase Via QR</button>
+									<small id="voucherHelp" class="form-text text-muted mt-1 px-1">Please enter voucher code if you have an existing one.</small>
+									<button type="button" id="connectBtn" onClick="doLogin(); return false" class="btn portal-btn mt-3">CONNECT</button>
+								</div>
+							</div>
 						</div>
-					</center>
+					</div>
 				</div>
 				
-				<center>
-				<span class="status-disconnected">Status: <span class="blinking1">Disconnected</span></span><br>
-                </center>
-            </div>
-			
-            <div class="col-sm-7">
-                <div class="login">
-					<div id="vendoSelectDiv">
-						<label for="exampleFormControlSelect2">Select Vendo</label>
-						<select class="form-control" name="vendoSelected" id="vendoSelected" >
-						
-						</select>
-					</div>
-					<br>
-					<button type="button" id="insertBtn" onclick="insertBtnAction(); return false" class="btn btn-success btn-block"  data-toggle="modal" >INSERT COIN</button>
-					<div style="margin-bottom:-5px"></div>
-					<br>
-					<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn btn-warning" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">PROMO RATES</button>
-					<div style="margin-top: 18px"></div>
-					
-					<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn btn-success" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">CHARGING STATION</button>
-					<div style="margin-top: 18px"></div>
-					
-					<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn btn-info" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">E-LOAD</button>
-					<div style="margin-top: 18px"></div>
-					
-					<button type="button" id="memberLoginBtn" class="btn btn-secondary" data-toggle="modal" data-target="#memberModal" style="display: block; width: 100%; text-shadow: 0px 1px 3px #000;">MEMBER LOGIN</button>
-					<div style="margin-bottom:-5px"></div>
-					<br>
-						
-					<div class="form-group">
-						<span class="form-text text-muted" style="padding: 5px">VOUCHER</span>
-						<input type="voucher" class="form-control" id="voucherInput" aria-describedby="voucherHelp" placeholder="Voucher here..">
-						<br/>
-						<button type="button" id="scanQrBtn" onclick="$('#scanQrModal').modal('show'); return false" class="btn btn-primary btn-block" style="display: none">Purchase Via QR</button>
-						<small id="voucherHelp" class="form-text text-muted" style="padding: 5px">Please enter voucher code if have existing</small>
-						<button type="button" id="connectBtn" onClick="doLogin(); return false" class="btn btn-info btn-block" style="margin-top: 20px; display: block; width: 100%; text-shadow: 0px 1px 3px #000;">CONNECT</button>
-					</div>
-					
-					
-					<div class="modal fade" id="insertCoinModal" style="z-index: 1500" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-labelledby="insertCoinModalTitle" aria-hidden="true">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="insertCoinModalTitle">Please insert the coin</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							    <div class="progress" style="margin-bottom: 20px">
-									<div id="progressDiv" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width: 100%; height: 30px"></div>
-								</div>
-
-								<div id="noticeDiv" style="display: none">
-									<center>
-										<h4 id="noticeText">Reading coin, please wait</h4>
-									</center>
-								</div>
-								
-								<div class="inscoin">
-								<center>
-								<div class="inscoinholder vcCodeHolder" id="vcCodeDiv" >
-								<span style="color: #747d8c">Your code is</span><br>
-								<span id="codeGeneratedBlock">
-									<span id="codeGenerated" style="font-size: 35px; font-weight: bold; color: #4cd137">*****</span>
-								</span>
-								</div>
-
-								<div class="inscoinholder convertVoucherBlock" id="convertVoucherBlockDiv">
-									<span style="color: #747d8c">Convert unsed voucher</span><br>
-								<input type="text" class="form-control" id="convertVoucherCode" placeholder="Enter voucher" style="width: 140px; text-align: center; ">
-								<br>
-								<button type="button" id="convertBtn" class="btn btn-success" onclick="convertVoucherAction(); return false">Convert</button>
-								</div>
-								
-								<div class="inscoinholder">
-								<span id="totalCoin" style="font-size: 20px; font-weight: bold; color: #fff">0</span><span style="font-size: 20px; font-weight: bold; color: #fff">.00 Php</span><br>
-								<span style="color: #747d8c">Coin</span>
-								</div>
-								
-								<div class="inscoinholder" id="totalTimeDiv">
-								<span id="totalTime" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
-								<span style="color: #747d8c">Time: </span>
-								</div>
-								
-								<div class="inscoinholder" id="expectedCoinDiv" style="display: none">
-								<span id="expectedCoin" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
-								<span style="color: #747d8c">Expected Coin </span>
-								</div>
-								
-								</center>
-								</div>
-								
-								
-								
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" id="saveVoucherButton" onclick="saveVoucherBtnAction(); return false" class="btn btn-primary" data-dismiss="modal">
-							  Done
-							</button>
-							<button type="button" id="cncl" class="btn btn-danger" data-dismiss="modal">Cancel</button>
-						  </div>
-						</div>
+				<!-- Modals & Hidden Elements -->
+				<div class="modal fade" id="insertCoinModal" style="z-index: 1500" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-labelledby="insertCoinModalTitle" aria-hidden="true">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="insertCoinModalTitle">Please insert the coin</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
 					  </div>
-					</div>
-					
-					<div class="modal fade" id="promoRatesModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">Promo Rates</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
+					  <div class="modal-body">
+						    <div class="progress" style="margin-bottom: 20px; height: 8px; border-radius: 4px;">
+								<div id="progressDiv" class="progress-bar progress-bar-striped progress-bar-animated bg-danger" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width: 100%;"></div>
+							</div>
+
+							<div id="noticeDiv" style="display: none" class="mb-3">
+								<center>
+									<h4 id="noticeText" class="text-secondary font-weight-bold">Reading coin, please wait</h4>
+								</center>
+							</div>
+							
+							<div class="inscoin">
 							<center>
-								<div id="rateTypeDiv">
-								<label for="rateType" class="rate-title"><b>Rate Type</b></label>
-								<select name="rateType" class="form-control" id="rateType" onChange="onRateTypeChange(this)">
-								  <option value="1">Internet</option>
-								  <option value="2">Charging</option>
-								</select>
-								</div>
-							</center>
-							<br/>
-							<center>	
-							<div id="ratesBody"></div>
-							<div id="totalTime"></div>							
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" class="btn btn-danger" data-dismiss="modal">Close</button>
-						  </div>
-						</div>
-					  </div>
-					</div>
-					
-					<div class="modal fade" id="chargingModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">Charging Station</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							<center>	
-							<div id="chargingBody"></div>
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" class="btn btn-danger" data-dismiss="modal">Close</button>
-						  </div>
-						</div>
-					  </div>
-					</div>
-					<div class="modal fade" id="eloadModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false" >
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">E-LOAD</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							<center>	
-							<div id="eloadingBody">
-								<h4 id="eloadConfirm" style="display: none"><span style="color: #2e86de; text-shadow: 1px 2px 3px #000">CONFIRM YOUR SELECTED DETAILS</span></h4>
-								<div id="mobileNumDiv" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2">Mobile #</label>
-									<input type="number" class="form-control" id="mobileNo" aria-describedby="mobileNo"  pattern="\d*" maxlength="11" placeholder="Enter mobile number (Ex: 09182392234)" required>
-								</div>
-								<div id="loadTypeDiv" style="display: none;" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2" >Select Load Type</label>
-									<select class="form-control" name="loadType" onChange="loadTypeChanged(this)" id="loadTypeSelected" >
-									</select>
-								</div>
-								<div id="productTypeDiv" style="display: none;" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2">Select Product</label>
-									<select class="form-control input-bottom-space-20px" name="productType" id="productTypeSelected" onChange="productTypeChanged(this)">
-									</select>
-									<label for="exampleFormControlSelect2">Price (PHP)</label>
-									<input type="text" class="form-control" id="price" aria-describedby="mobileNo" disabled>
-								</div>
-								<br/>
-								<h5 id="eloadConfirm2" style="display: none;" class="input-bottom-space-20px"><span style="color: #2e86de; text-shadow: 1px 2px 3px #000">Please make sure to insert the exact amount <ul style="
-									font-size: medium;
-									color: white;
-									text-align: left;
-								"><li>In case theres an excess amount or amount is insufficient, it will be converted to a voucher code and you can use it for your next e-Loading or you can use it on internet service.</li></ul></span></h5>
+							<div class="inscoinholder vcCodeHolder" id="vcCodeDiv">
+							<span style="color: #94a3b8; font-size: 13px;">Your code is</span><br>
+							<span id="codeGeneratedBlock">
+								<span id="codeGenerated" style="font-size: 32px; font-weight: bold; color: #4cd137">*****</span>
+							</span>
 							</div>
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" id="buyEloadPrevBtn" class="btn btn-danger" onclick="buyEloadPrevAction(); return false">Close</button>
-						    <button type="button" id="buyEloadBtn" onclick="buyEloadAction(); return false" class="btn btn-success">Next</button>
-						  </div>
-						</div>
-					  </div>
-					</div>
 
-					<div class="modal fade" id="scanQrModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-						<div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						  <div class="modal-content">
-							<div class="modal-header">
-							  <h5 class="modal-title" id="exampleModalLabel">Purchase Voucher using QR Code</h5>
-							  <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-								<span aria-hidden="true" style="color: #fff">&times;</span>
-							  </button>
+							<div class="inscoinholder convertVoucherBlock" id="convertVoucherBlockDiv">
+								<span style="color: #94a3b8; font-size: 13px;">Convert unused voucher</span><br>
+							<input type="text" class="form-control mt-2 mb-2 mx-auto" id="convertVoucherCode" placeholder="Enter voucher" style="width: 180px; text-align: center;">
+							<button type="button" id="convertBtn" class="btn btn-success btn-sm px-4" onclick="convertVoucherAction(); return false">Convert</button>
 							</div>
-							<div class="modal-body">
-								<center>
-									<p>Present this QR code to the vendo owner</p>
-									
-									<div id="qrcode" class="qrcode-wrapper"></div>
-									<br/>
-									<p>Once your request has been approved you will be automatically logged in.</p>
-								</center>
+							
+							<div class="inscoinholder">
+							<span id="totalCoin" style="font-size: 24px; font-weight: bold; color: #fff">0</span><span style="font-size: 24px; font-weight: bold; color: #fff">.00 Php</span><br>
+							<span style="color: #94a3b8; font-size: 13px;">Coin</span>
 							</div>
-							<div class="modal-footer">
-							  <button type="button" class="btn btn-danger" data-dismiss="modal">Close</button>
+							
+							<div class="inscoinholder" id="totalTimeDiv">
+							<span id="totalTime" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
+							<span style="color: #94a3b8; font-size: 13px;">Time: </span>
 							</div>
-						  </div>
+							
+							<div class="inscoinholder" id="expectedCoinDiv" style="display: none">
+							<span id="expectedCoin" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
+							<span style="color: #94a3b8; font-size: 13px;">Expected Coin </span>
+							</div>
+							
+							</center>
+							</div>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" id="saveVoucherButton" onclick="saveVoucherBtnAction(); return false" class="btn btn-primary px-4" data-dismiss="modal">
+						  Done
+						</button>
+						<button type="button" id="cncl" class="btn btn-outline-danger px-4" data-dismiss="modal">Cancel</button>
+					  </div>
+					</div>
+				  </div>
+				</div>
+				
+				<div class="modal fade" id="promoRatesModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">Promo Rates</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>
+							<div id="rateTypeDiv" class="w-50 mx-auto">
+							<label for="rateType" class="rate-title font-weight-bold text-secondary mb-2">Rate Type</label>
+							<select name="rateType" class="form-control" id="rateType" onChange="onRateTypeChange(this)">
+							  <option value="1">Internet</option>
+							  <option value="2">Charging</option>
+							</select>
+							</div>
+						</center>
+						<br/>
+						<center>	
+						<div id="ratesBody"></div>
+						<div id="totalTime"></div>							
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
+					  </div>
+					</div>
+				  </div>
+				</div>
+				
+				<div class="modal fade" id="chargingModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">Charging Station</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>	
+						<div id="chargingBody"></div>
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
+					  </div>
+					</div>
+				  </div>
+				</div>
+
+				<div class="modal fade" id="eloadModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">E-LOAD</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>	
+						<div id="eloadingBody">
+							<h4 id="eloadConfirm" style="display: none" class="mb-3"><span style="color: #2e86de; font-weight: bold;">CONFIRM YOUR SELECTED DETAILS</span></h4>
+							<div id="mobileNumDiv" class="input-bottom-space-20px text-left">
+								<label for="mobileNo" class="font-weight-bold text-secondary">Mobile #</label>
+								<input type="number" class="form-control" id="mobileNo" aria-describedby="mobileNo" pattern="\d*" maxlength="11" placeholder="Enter mobile number (Ex: 09182392234)" required>
+							</div>
+							<div id="loadTypeDiv" style="display: none;" class="input-bottom-space-20px text-left">
+								<label for="loadTypeSelected" class="font-weight-bold text-secondary">Select Load Type</label>
+								<select class="form-control" name="loadType" onChange="loadTypeChanged(this)" id="loadTypeSelected">
+								</select>
+							</div>
+							<div id="productTypeDiv" style="display: none;" class="input-bottom-space-20px text-left">
+								<label for="productTypeSelected" class="font-weight-bold text-secondary">Select Product</label>
+								<select class="form-control input-bottom-space-20px" name="productType" id="productTypeSelected" onChange="productTypeChanged(this)">
+								</select>
+								<label for="price" class="font-weight-bold text-secondary">Price (PHP)</label>
+								<input type="text" class="form-control" id="price" aria-describedby="mobileNo" disabled>
+							</div>
+							<br/>
+							<h5 id="eloadConfirm2" style="display: none;" class="input-bottom-space-20px bg-light p-3 rounded text-left border">
+								<span style="color: #334155; font-size: 14px;">Please make sure to insert the exact amount 
+									<ul class="text-secondary mt-2 mb-0" style="font-size: 13px;">
+										<li>In case there's an excess amount or amount is insufficient, it will be converted to a voucher code and you can use it for your next e-Loading or you can use it on internet service.</li>
+									</ul>
+								</span>
+							</h5>
+						</div>
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" id="buyEloadPrevBtn" class="btn btn-outline-danger px-4" onclick="buyEloadPrevAction(); return false">Close</button>
+					    <button type="button" id="buyEloadBtn" onclick="buyEloadAction(); return false" class="btn btn-success px-4">Next</button>
+					  </div>
+					</div>
+				  </div>
+				</div>
+
+				<div class="modal fade" id="scanQrModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+					<div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					  <div class="modal-content">
+						<div class="modal-header">
+						  <h5 class="modal-title font-weight-bold" id="exampleModalLabel">Purchase Voucher using QR Code</h5>
+						  <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+							<span aria-hidden="true">&times;</span>
+						  </button>
+						</div>
+						<div class="modal-body text-center">
+							<p class="text-secondary">Present this QR code to the vendo owner</p>
+							<div id="qrcode" class="qrcode-wrapper my-3"></div>
+							<br/>
+							<p class="text-muted small">Once your request has been approved you will be automatically logged in.</p>
+						</div>
+						<div class="modal-footer bg-light">
+						  <button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
 						</div>
 					  </div>
-					
-					
+					</div>
+				</div>
 		
 				<div class="modal fade" id="memberModal" role="dialog" data-backdrop="static" data-keyboard="false">
-					<div class="modal-dialog">
+					<div class="modal-dialog modal-dialog-centered">
 					<div class="modal-content">
 						<div class="modal-header">
-						
-						<button type="button" class="close" data-dismiss="modal" style="color: #fff">&times;</button><br>        
-		  
+							<h5 class="modal-title font-weight-bold">Member Login</h5>
+							<button type="button" class="close text-white" data-dismiss="modal">&times;</button>
 						</div>
 						<div class="modal-body">
-						<!-- content -->
-						<div class="memdiv">
-						<center>
-						<!-- title -->
-						<h4 class="modal-title"><span style="color: #2e86de; text-shadow: 1px 2px 3px #000">Member Login</span></h4>
-						<form name="login" action="$(link-login-only)" method="post" $(if chap-id) onSubmit="return doLoginMember()" $(endif)>
-							<input type="hidden" name="dst" value="$(link-orig)" />
-							<input type="hidden" name="popup" value="true" />
-							<span style="float: left; color: #a4b0be">Username</span><br>
-							<input name="username" type="text" value="$(username)" /><br>
-							<span style="float: left; color: #a4b0be">Password</span><br>
-							<input name="password" type="password" /><br>
-							<button class="btn btn-primary" type="submit" value="Connect" style="width: 50%">Login</button>
-						</form>
-						</center>
-		  
+							<div class="memdiv text-left">
+								<form name="login" action="$(link-login-only)" method="post" $(if chap-id) onSubmit="return doLoginMember()" $(endif)>
+									<input type="hidden" name="dst" value="$(link-orig)" />
+									<input type="hidden" name="popup" value="true" />
+									<div class="form-group">
+										<label style="color: #475569; font-weight: 600; font-size: 13px;">Username</label>
+										<input name="username" type="text" class="form-control" value="$(username)" />
+									</div>
+									<div class="form-group">
+										<label style="color: #475569; font-weight: 600; font-size: 13px;">Password</label>
+										<input name="password" type="password" class="form-control" />
+									</div>
+									<div class="text-center mt-4">
+										<button class="btn btn-primary btn-block py-2 font-weight-bold" type="submit" value="Connect">Login</button>
+									</div>
+								</form>
+							</div>
 						</div>
-		  
+						<div class="modal-footer bg-light">
+							<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
 						</div>
-					<div class="modal-footer">
-						<button type="button" class="btn btn-default" data-dismiss="modal" style="color: #fff">Close</button>
+					</div>
 					</div>
 				</div>
-      
-				</div>
-			</div>
 
-                </div>
 				<div class="footer">
 					<span class="footers">
-					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.1</a> &copy; All rights reserved 2022<br>
-					
+					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.1</a> &copy; All rights reserved 2022
 					</span>				
 				</div>
             </div>
-			<script src="assets/js/jquery.min.js"></script>
-			<script src="assets/js/popper.min.js"></script>
-			<script src="assets/js/bootstrap.min.js"></script>
-			<script src="assets/js/toast.min.js"></script>
-			<script src="assets/js/core.js"></script>
-			<script src="assets/js/eload.js"></script>
-			<script>
-				var reLogin = getStorageValue('reLogin');
-				var hotspotAddress = "$(server-address)"; 
-				var interfaceName = "$(interface-name)";
-				if(reLogin == '1'){
-					setStorageValue('reLogin', '0');
-					doLogin();
-				}
-			</script>
-			<script>
-				function off() {
-					document.getElementById("overlay").style.display = "none";
-				}
-				
-				var purchaseInfo = "juanfi://purchasevoucher?mac="+mac+"&ip="+uIp;
-				
-				new QRCode(document.getElementById("qrcode"), JSON.stringify(purchaseInfo) );
-			</script>
+        </div>
 			
-			<div id="loaderDiv" class="spinner hidden">
-				<center>
-					<img src="assets/loading.svg" />
-				</center>
-			</div>
-	</div>	
-
-</div>	
-</div>
-</div>
+		<script src="assets/js/jquery.min.js"></script>
+		<script src="assets/js/popper.min.js"></script>
+		<script src="assets/js/bootstrap.min.js"></script>
+		<script src="assets/js/toast.min.js"></script>
+		<script src="assets/js/core.js"></script>
+		<script src="assets/js/eload.js"></script>
+		<script>
+			var reLogin = getStorageValue('reLogin');
+			var hotspotAddress = "$(server-address)"; 
+			var interfaceName = "$(interface-name)";
+			if(reLogin == '1'){
+				setStorageValue('reLogin', '0');
+				doLogin();
+			}
+		</script>
+		<script>
+			function off() {
+				document.getElementById("overlay").style.display = "none";
+			}
+			
+			var purchaseInfo = "juanfi://purchasevoucher?mac="+mac+"&ip="+uIp;
+			
+			new QRCode(document.getElementById("qrcode"), JSON.stringify(purchaseInfo) );
+		</script>
+		
+		<div id="loaderDiv" class="spinner hidden">
+			<center>
+				<img src="assets/loading.svg" />
+			</center>
+		</div>
+	</div>
 </body>
 
 </html>

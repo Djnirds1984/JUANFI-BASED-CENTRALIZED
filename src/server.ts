@@ -17,6 +17,7 @@ import hotspotRoutes from './api/hotspot';
 import voucherRoutes from './api/vouchers';
 import monitoringRoutes from './api/monitoring';
 import portalRoutes from './api/portal';
+import subvendoRoutes from './api/subvendo';
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +43,7 @@ app.use('/api/hotspot', hotspotRoutes);
 app.use('/api/vouchers', voucherRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/portal', portalRoutes);
+app.use('/api/subvendo', subvendoRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

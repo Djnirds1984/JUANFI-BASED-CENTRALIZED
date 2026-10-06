@@ -88,6 +88,7 @@ const App = {
       vouchers: 'Vouchers',
       monitoring: 'Monitoring',
       portal: 'Portal',
+      subvendo: 'SubVendo',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -106,6 +107,7 @@ const App = {
         case 'vouchers': await this.renderVouchers(); break;
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
+        case 'subvendo': await this.renderSubVendo(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -1161,6 +1163,313 @@ const App = {
       }
     } catch (err) {
       this.toast(err.message, 'error');
+    }
+  },
+
+  async renderSubVendo() {
+    const content = document.getElementById('page-content');
+    const routers = (await api.getRouters()).filter((r) => r.connected);
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>SubVendo Configuration</h3>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            ${routers.length > 0 ? `
+              <select id="subvendo-router-select" class="btn btn-outline">
+                ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="App.saveAndPushSubVendo()">Save & Push</button>
+            ` : '<span class="status-badge disconnected">No connected routers</span>'}
+          </div>
+        </div>
+        <div class="subvendo-form">
+          <div class="subvendo-section">
+            <h4>Multi-Vendo Setup</h4>
+            <div class="form-row">
+              <label class="checkbox-label">
+                <input type="checkbox" id="subvendo-isMultiVendo">
+                <span>Enable Multi-Vendo</span>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Multi-Vendo Mode:</label>
+              <select id="subvendo-multiVendoOption" class="form-control">
+                <option value="0">Traditional (client chooses vendo)</option>
+                <option value="1">Auto-select by hotspot address</option>
+                <option value="2">Interface name</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="subvendo-section">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+              <h4 style="margin:0">Vendo Entries</h4>
+              <button class="btn btn-sm btn-primary" onclick="App.addVendoEntry()">Add Vendo</button>
+            </div>
+            <div id="subvendo-vendo-list"></div>
+          </div>
+
+          <div class="subvendo-section">
+            <h4>Login & General</h4>
+            <div class="form-row">
+              <label>Login Mode:</label>
+              <select id="subvendo-loginOption" class="form-control">
+                <option value="0">Username only</option>
+                <option value="1">Username + Password</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="checkbox-label">
+                <input type="checkbox" id="subvendo-dataRateOption">
+                <span>Enable Data Rates</span>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Default Vendor IP:</label>
+              <input type="text" id="subvendo-vendorIpAddress" class="form-control" placeholder="10.1.0.41">
+            </div>
+          </div>
+
+          <div class="subvendo-section">
+            <h4>Feature Flags</h4>
+            <div class="toggle-group">
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-chargingEnable"><span>Charging Station</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-eloadEnable"><span>E-Load</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-showPauseTime"><span>Show Pause/Logout</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-showMemberLogin"><span>Member Login</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-showExtendTimeButton"><span>Extend Time Button</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-disableVoucherInput"><span>Disable Voucher Input</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-macAsVoucherCode"><span>MAC as Voucher Code</span></label>
+              <label class="checkbox-label"><input type="checkbox" id="subvendo-qrCodeVoucherPurchase"><span>QR Code Voucher Purchase</span></label>
+            </div>
+          </div>
+
+          <div class="subvendo-section">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+              <h4 style="margin:0">Preview (config.js)</h4>
+              <button class="btn btn-sm btn-outline" onclick="App.updateSubVendoPreview()">Refresh Preview</button>
+            </div>
+            <textarea id="subvendo-preview" class="subvendo-preview" readonly></textarea>
+          </div>
+
+          <div class="subvendo-actions">
+            <button class="btn btn-outline" onclick="App.updateSubVendoPreview()">Preview</button>
+            <button class="btn btn-primary" onclick="App.saveSubVendo()">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    if (routers.length > 0) {
+      if (!this.selectedRouterId || !routers.find((r) => r.id === this.selectedRouterId)) {
+        this.selectedRouterId = routers[0].id;
+        document.getElementById('subvendo-router-select').value = this.selectedRouterId;
+      }
+      document.getElementById('subvendo-router-select').addEventListener('change', (e) => {
+        this.selectedRouterId = parseInt(e.target.value);
+      });
+    }
+
+    try {
+      const config = await api.getSubVendoConfig();
+      this.populateSubVendoForm(config);
+    } catch (err) {
+      this.toast('Failed to load config: ' + err.message, 'error');
+    }
+
+    this.updateSubVendoPreview();
+  },
+
+  populateSubVendoForm(config) {
+    document.getElementById('subvendo-isMultiVendo').checked = config.isMultiVendo;
+    document.getElementById('subvendo-multiVendoOption').value = config.multiVendoOption;
+    document.getElementById('subvendo-loginOption').value = config.loginOption;
+    document.getElementById('subvendo-dataRateOption').checked = config.dataRateOption;
+    document.getElementById('subvendo-vendorIpAddress').value = config.vendorIpAddress;
+    document.getElementById('subvendo-chargingEnable').checked = config.chargingEnable;
+    document.getElementById('subvendo-eloadEnable').checked = config.eloadEnable;
+    document.getElementById('subvendo-showPauseTime').checked = config.showPauseTime;
+    document.getElementById('subvendo-showMemberLogin').checked = config.showMemberLogin;
+    document.getElementById('subvendo-showExtendTimeButton').checked = config.showExtendTimeButton;
+    document.getElementById('subvendo-disableVoucherInput').checked = config.disableVoucherInput;
+    document.getElementById('subvendo-macAsVoucherCode').checked = config.macAsVoucherCode;
+    document.getElementById('subvendo-qrCodeVoucherPurchase').checked = config.qrCodeVoucherPurchase;
+
+    const vendoList = document.getElementById('subvendo-vendo-list');
+    vendoList.innerHTML = '';
+    (config.multiVendoAddresses || []).forEach((v) => this.addVendoEntry(v));
+  },
+
+  addVendoEntry(data = null) {
+    const vendoList = document.getElementById('subvendo-vendo-list');
+    const entry = document.createElement('div');
+    entry.className = 'vendo-entry';
+    entry.innerHTML = `
+      <button class="vendo-remove" onclick="this.parentElement.remove()">&times;</button>
+      <div class="vendo-entry-grid">
+        <div class="form-row">
+          <label>Vendo Name:</label>
+          <input type="text" class="vendo-name form-control" value="${data ? this.escapeHtml(data.vendoName) : ''}" placeholder="Vendo 1">
+        </div>
+        <div class="form-row">
+          <label>Vendo IP:</label>
+          <input type="text" class="vendo-ip form-control" value="${data ? this.escapeHtml(data.vendoIp) : ''}" placeholder="10.1.0.41">
+        </div>
+        <div class="form-row">
+          <label class="checkbox-label">
+            <input type="checkbox" class="vendo-charging" ${data && data.chargingEnable ? 'checked' : ''}>
+            <span>Charging</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="checkbox-label">
+            <input type="checkbox" class="vendo-eload" ${data && data.eloadEnable ? 'checked' : ''}>
+            <span>E-Load</span>
+          </label>
+        </div>
+        <div class="form-row vendo-hotspot-row" style="display:none">
+          <label>Hotspot Address:</label>
+          <input type="text" class="vendo-hotspot form-control" value="${data && data.hotspotAddress ? this.escapeHtml(data.hotspotAddress) : ''}">
+        </div>
+        <div class="form-row vendo-interface-row" style="display:none">
+          <label>Interface Name:</label>
+          <input type="text" class="vendo-interface form-control" value="${data && data.interfaceName ? this.escapeHtml(data.interfaceName) : ''}">
+        </div>
+      </div>
+    `;
+    vendoList.appendChild(entry);
+  },
+
+  collectSubVendoData() {
+    const multiVendoOption = parseInt(document.getElementById('subvendo-multiVendoOption').value);
+    const vendoEntries = [];
+    document.querySelectorAll('.vendo-entry').forEach((entry) => {
+      const vendo = {
+        vendoName: entry.querySelector('.vendo-name').value,
+        vendoIp: entry.querySelector('.vendo-ip').value,
+        chargingEnable: entry.querySelector('.vendo-charging').checked,
+        eloadEnable: entry.querySelector('.vendo-eload').checked,
+      };
+      if (multiVendoOption === 1) {
+        vendo.hotspotAddress = entry.querySelector('.vendo-hotspot').value;
+      }
+      if (multiVendoOption === 2) {
+        vendo.interfaceName = entry.querySelector('.vendo-interface').value;
+      }
+      vendoEntries.push(vendo);
+    });
+
+    return {
+      isMultiVendo: document.getElementById('subvendo-isMultiVendo').checked,
+      multiVendoOption,
+      multiVendoAddresses: vendoEntries,
+      loginOption: parseInt(document.getElementById('subvendo-loginOption').value),
+      dataRateOption: document.getElementById('subvendo-dataRateOption').checked,
+      vendorIpAddress: document.getElementById('subvendo-vendorIpAddress').value,
+      chargingEnable: document.getElementById('subvendo-chargingEnable').checked,
+      eloadEnable: document.getElementById('subvendo-eloadEnable').checked,
+      showPauseTime: document.getElementById('subvendo-showPauseTime').checked,
+      showMemberLogin: document.getElementById('subvendo-showMemberLogin').checked,
+      showExtendTimeButton: document.getElementById('subvendo-showExtendTimeButton').checked,
+      disableVoucherInput: document.getElementById('subvendo-disableVoucherInput').checked,
+      macAsVoucherCode: document.getElementById('subvendo-macAsVoucherCode').checked,
+      qrCodeVoucherPurchase: document.getElementById('subvendo-qrCodeVoucherPurchase').checked,
+    };
+  },
+
+  generateConfigJsPreview(config) {
+    const vendoEntries = config.multiVendoAddresses.map((v) => {
+      let entry = `\t{
+\t\tvendoName: "${v.vendoName}",
+\t\tvendoIp: "${v.vendoIp}",
+\t\tchargingEnable: ${v.chargingEnable},
+\t\teloadEnable: ${v.eloadEnable}`;
+      if (v.hotspotAddress) {
+        entry += `,
+\t\thotspotAddress: "${v.hotspotAddress}"`;
+      }
+      if (v.interfaceName) {
+        entry += `,
+\t\tinterfaceName: "${v.interfaceName}"`;
+      }
+      entry += '\n\t}';
+      return entry;
+    });
+
+    return `//this is to enable multi vendo setup, set to true when multi vendo is supported
+var isMultiVendo = ${config.isMultiVendo};
+// 0 = traditional (client choose a vendo) , 1 = auto select vendo base on hotspot address, 2 = interface name ( this will preserve one hotspot server ip only)
+var multiVendoOption = ${config.multiVendoOption};
+
+//list here all node mcu address for multi vendo setup
+var multiVendoAddresses = [
+${vendoEntries.join(',\n')}
+];
+
+
+//0 means its login by username only, 1 = means if login by username + password
+var loginOption = ${config.loginOption}; //replace 1 if you want login voucher by username + password
+
+var dataRateOption = ${config.dataRateOption}; //replace true if you enable data rates
+//put here the default selected address
+var vendorIpAddress = "${config.vendorIpAddress}";
+
+var chargingEnable = ${config.chargingEnable}; //replace true if you enable charging, this can be override if multivendo setup
+
+var eloadEnable = ${config.eloadEnable}; //replace true if you enable eload, this can be override if multivendo setup
+
+//hide pause time / logout true = you want to show pause / logout button
+var showPauseTime = ${config.showPauseTime};
+
+//enable member login, true = if you want to enable member login
+var showMemberLogin = ${config.showMemberLogin};
+
+//enable extend time button for customers
+var showExtendTimeButton = ${config.showExtendTimeButton};
+
+//disable voucher input
+var disableVoucherInput = ${config.disableVoucherInput};
+
+//enable mac address as voucher code
+var macAsVoucherCode = ${config.macAsVoucherCode};
+
+var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
+`;
+  },
+
+  updateSubVendoPreview() {
+    const config = this.collectSubVendoData();
+    const preview = document.getElementById('subvendo-preview');
+    if (preview) {
+      preview.value = this.generateConfigJsPreview(config);
+    }
+  },
+
+  async saveSubVendo() {
+    try {
+      const config = this.collectSubVendoData();
+      await api.saveSubVendoConfig(config);
+      this.toast('SubVendo config saved', 'success');
+    } catch (err) {
+      this.toast('Failed to save: ' + err.message, 'error');
+    }
+  },
+
+  async saveAndPushSubVendo() {
+    const routerId = this.selectedRouterId;
+    if (!routerId) {
+      this.toast('Select a router first', 'error');
+      return;
+    }
+
+    try {
+      const config = this.collectSubVendoData();
+      await api.saveSubVendoConfig(config);
+      await api.pushSubVendoConfig(routerId);
+      this.toast('Config saved and pushed to router', 'success');
+    } catch (err) {
+      this.toast('Failed: ' + err.message, 'error');
     }
   },
 

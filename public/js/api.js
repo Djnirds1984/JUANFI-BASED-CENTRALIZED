@@ -187,6 +187,18 @@ class ApiClient {
   async pushPortalFiles(routerId) {
     return this.post(`/portal/push/${routerId}`, {});
   }
+
+  async getSubVendoConfig() {
+    return this.get('/subvendo/config');
+  }
+
+  async saveSubVendoConfig(data) {
+    return this.put('/subvendo/config', data);
+  }
+
+  async pushSubVendoConfig(routerId) {
+    return this.post(`/subvendo/push/${routerId}`, {});
+  }
 }
 
 window.api = new ApiClient();

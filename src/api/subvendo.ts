@@ -210,7 +210,11 @@ router.put('/config', (req: Request, res: Response) => {
     ).run(CONFIG_PATH, content);
 
     const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
-    fs.writeFileSync(filePath, content, 'utf8');
+    try {
+      fs.writeFileSync(filePath, content, 'utf8');
+    } catch (err: any) {
+      console.warn(`Could not write config file to disk: ${err.message}`);
+    }
 
     res.json({ message: 'Config saved', content });
   } catch (error: any) {

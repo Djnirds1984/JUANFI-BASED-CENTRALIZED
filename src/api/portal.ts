@@ -101,6 +101,15 @@ router.put('/file/*', (req: Request, res: Response) => {
     }
 
     const row = upsertPortalFile(filePath, content);
+
+    const diskPath = path.join(__dirname, '..', '..', 'hotspot', filePath);
+    try {
+      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+      fs.writeFileSync(diskPath, content, 'utf8');
+    } catch (err: any) {
+      console.warn(`Could not write file to disk: ${err.message}`);
+    }
+
     res.json({ message: 'File saved', file: row });
   } catch (error: any) {
     console.error('Save portal file error:', error);
@@ -127,6 +136,15 @@ router.post('/reset/*', (req: Request, res: Response) => {
     }
 
     const row = upsertPortalFile(filePath, content);
+
+    const diskPath = path.join(__dirname, '..', '..', 'hotspot', filePath);
+    try {
+      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+      fs.writeFileSync(diskPath, content, 'utf8');
+    } catch (err: any) {
+      console.warn(`Could not write file to disk: ${err.message}`);
+    }
+
     res.json({ message: 'File reset to default', file: row });
   } catch (error: any) {
     console.error('Reset portal file error:', error);

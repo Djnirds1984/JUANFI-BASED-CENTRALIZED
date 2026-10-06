@@ -900,7 +900,7 @@ const App = {
 
   async renderPortal() {
     const content = document.getElementById('page-content');
-    const routers = (await api.getRouters()).filter((r) => r.connected && !r.use_rest_api);
+    const routers = (await api.getRouters()).filter((r) => r.connected);
 
     if (this.portalDirty && !confirm('You have unsaved changes. Reloading will discard them. Continue?')) {
       return;
@@ -917,7 +917,7 @@ const App = {
                 ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
               </select>
               <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push to Router</button>
-            ` : '<span class="status-badge disconnected">No API-connected router (REST cannot upload files)</span>'}
+            ` : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>'}
           </div>
         </div>
         <div class="portal-toolbar">

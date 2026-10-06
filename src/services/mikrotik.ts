@@ -477,12 +477,27 @@ class MikroTikService {
     if (!config) {
       throw new Error(`Router ${routerId} not found`);
     }
-    if (config.useRestApi) {
-      throw new Error('Pushing files is not supported for REST API routers (use RouterOS API mode)');
-    }
-
     const remoteName = `hotspot/${filename}`;
     const data = Buffer.from(content, 'utf8');
+
+    if (config.useRestApi) {
+      const protocol = config.port === 443 ? 'https' : 'http';
+      const url = `${protocol}://${config.host}:${config.port}/rest/file/add?name=${encodeURIComponent(remoteName)}`;
+      const auth = Buffer.from(`${config.username}:${config.password}`).toString('base64');
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/octet-stream',
+        },
+        body: data,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`REST upload failed: ${response.status} ${response.statusText}${text ? ' - ' + text.slice(0, 200) : ''}`);
+      }
+      return;
+    }
 
     await new Promise<void>((resolve, reject) => {
       const socket = new net.Socket();

@@ -552,7 +552,7 @@ class MikroTikService {
 
       const timeout = setTimeout(() => {
         fail(new Error('File upload timed out'));
-      }, 30000);
+      }, 60000); // Increased from 30s to 60s for large files
 
       const fail = (err: Error) => {
         if (settled) return;
@@ -573,18 +573,48 @@ class MikroTikService {
       const sendChunks = () => {
         const CHUNK = 8192;
         let totalSent = 0;
+        let chunkIndex = 0;
+        const chunks: Buffer[] = [];
+
+        // Prepare all chunks
         while (chunkOffset < data.length) {
           const end = Math.min(chunkOffset + CHUNK, data.length);
           const chunk = data.subarray(chunkOffset, end);
-          // Send raw binary chunks without API sentence framing
-          socket.write(chunk);
+          // Send with length encoding as per MikroTik API spec
+          chunks.push(Buffer.concat([this.encodeApiLength(chunk.length), chunk]));
           totalSent += chunk.length;
           chunkOffset = end;
+          chunkIndex++;
         }
-        console.log(`[uploadFile] Sent ${totalSent} bytes in chunks, sending terminator`);
-        // Send zero-length terminator as raw byte
-        socket.write(Buffer.from([0]));
-        state = 'final';
+
+        console.log(`[uploadFile] Prepared ${chunkIndex} chunks (${totalSent} bytes), sending with flush`);
+
+        // Send all chunks sequentially with proper flushing
+        let sendIndex = 0;
+        const sendNext = () => {
+          if (sendIndex < chunks.length) {
+            const written = socket.write(chunks[sendIndex], () => {
+              sendIndex++;
+              sendNext();
+            });
+            if (!written) {
+              // Wait for drain if buffer is full
+              socket.once('drain', () => {
+                sendIndex++;
+                sendNext();
+              });
+            }
+          } else {
+            // All chunks sent, now send zero-length terminator
+            console.log(`[uploadFile] All chunks sent, sending terminator`);
+            socket.write(Buffer.from([0]), () => {
+              console.log(`[uploadFile] Terminator sent, waiting for router response`);
+              state = 'final';
+            });
+          }
+        };
+
+        sendNext();
       };
 
       socket.on('data', (buf: Buffer) => {

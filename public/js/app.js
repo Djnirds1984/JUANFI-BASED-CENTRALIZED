@@ -988,7 +988,7 @@ const App = {
                 <textarea id="portal-editor" class="portal-editor" spellcheck="false" wrap="off"></textarea>
               </div>
               <div class="portal-preview-pane">
-                <iframe id="portal-preview" class="portal-preview" sandbox=""></iframe>
+                <iframe id="portal-preview" class="portal-preview" sandbox="allow-same-origin"></iframe>
               </div>
             </div>
           </div>

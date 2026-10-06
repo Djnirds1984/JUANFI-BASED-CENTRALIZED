@@ -49,6 +49,7 @@ class MikroTikService {
   private routerConfigs: Map<number, RouterConnection> = new Map();
   private reconnectTimers: Map<number, NodeJS.Timeout> = new Map();
   private reconnectAttempts: Map<number, number> = new Map();
+  private hasFlashCache: Map<number, boolean> = new Map();
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY = 5000;
 
@@ -472,12 +473,55 @@ class MikroTikService {
     }
   }
 
+  private async hasFlashDirectory(routerId: number): Promise<boolean> {
+    if (this.hasFlashCache.has(routerId)) {
+      return this.hasFlashCache.get(routerId)!;
+    }
+
+    const config = this.routerConfigs.get(routerId);
+    if (!config) return false;
+
+    try {
+      if (config.useRestApi) {
+        const protocol = config.port === 443 ? 'https' : 'http';
+        const url = `${protocol}://${config.host}:${config.port}/rest/file/print`;
+        const auth = Buffer.from(`${config.username}:${config.password}`).toString('base64');
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Authorization': `Basic ${auth}` },
+        });
+        if (response.ok) {
+          const files = await response.json();
+          const hasFlash = Array.isArray(files) && files.some((f: any) => f.name && f.name.startsWith('flash/'));
+          this.hasFlashCache.set(routerId, hasFlash);
+          return hasFlash;
+        }
+      } else {
+        const client = this.getClient(routerId);
+        const files = await client.write('/file/print');
+        const hasFlash = Array.isArray(files) && files.some((f: any) => f.name && f.name.startsWith('flash/'));
+        this.hasFlashCache.set(routerId, hasFlash);
+        return hasFlash;
+      }
+    } catch (err) {
+      console.error(`Failed to check flash directory for router ${routerId}:`, (err as Error).message);
+    }
+
+    this.hasFlashCache.set(routerId, false);
+    return false;
+  }
+
   async uploadFile(routerId: number, filename: string, content: string | Buffer): Promise<void> {
     const config = this.routerConfigs.get(routerId);
     if (!config) {
       throw new Error(`Router ${routerId} not found`);
     }
-    const remoteName = filename.startsWith('flash/') ? filename : `flash/${filename}`;
+
+    const hasFlash = await this.hasFlashDirectory(routerId);
+    const remoteName = hasFlash
+      ? (filename.startsWith('flash/') ? filename : `flash/${filename}`)
+      : (filename.startsWith('flash/') ? filename.slice(6) : filename);
+
     const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
 
     if (config.useRestApi) {

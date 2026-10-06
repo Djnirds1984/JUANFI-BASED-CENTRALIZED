@@ -640,12 +640,17 @@ class MikroTikService {
           } else if (state === 'adding' && type === '!trap') {
             fail(new Error(words.slice(1).join(' ') || 'Failed to create file'));
             return;
+          } else if (state === 'final' && type === '!trap') {
+            const errorMsg = words.slice(1).join(' ') || 'Failed to write file content';
+            console.log(`[uploadFile] Router rejected file content: ${errorMsg}`);
+            fail(new Error(errorMsg));
+            return;
           } else if (state === 'final' && type === '!done') {
             console.log(`[uploadFile] Upload complete`);
             succeed();
             return;
           } else {
-            console.log(`[uploadFile] Unhandled: state=${state}, type=${type}`);
+            console.log(`[uploadFile] Unhandled: state=${state}, type=${type}, words=${words.join(', ')}`);
           }
 
           parsed = this.parseApiSentence(incoming);

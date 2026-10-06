@@ -545,7 +545,7 @@ class MikroTikService {
     await new Promise<void>((resolve, reject) => {
       const socket = new net.Socket();
       let incoming: Buffer = Buffer.alloc(0);
-      let state: 'login' | 'query' | 'remove' | 'add' | 'final' = 'login';
+      let state: 'login' | 'query' | 'removing' | 'adding' | 'final' = 'login';
       let settled = false;
       let chunkOffset = 0;
       let fileId = '';
@@ -616,18 +616,18 @@ class MikroTikService {
             }
           } else if (state === 'query' && type === '!done') {
             if (fileId) {
-              state = 'remove';
+              state = 'removing';
               socket.write(this.buildApiSentence(['/file/remove', `=.id=${fileId}`]));
             } else {
-              state = 'add';
+              state = 'adding';
               socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
             }
-          } else if (state === 'remove') {
-            state = 'add';
+          } else if (state === 'removing' && type === '!done') {
+            state = 'adding';
             socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
-          } else if (state === 'add' && type === '!done') {
+          } else if (state === 'adding' && type === '!done') {
             sendChunks();
-          } else if (state === 'add' && type === '!trap') {
+          } else if (state === 'adding' && type === '!trap') {
             fail(new Error(words.slice(1).join(' ') || 'Failed to create file'));
             return;
           } else if (state === 'final' && type === '!done') {

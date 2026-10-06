@@ -243,7 +243,7 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
-    await mikroTikService.uploadFile(routerId, ROUTER_CONFIG_PATH, row.content);
+    await mikroTikService.uploadFileSFTP(routerId, ROUTER_CONFIG_PATH, row.content);
     res.json({ message: 'Config pushed to router' });
   } catch (error: any) {
     console.error('Push SubVendo config error:', error);

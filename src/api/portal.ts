@@ -176,11 +176,11 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
         if (f.editable) {
           const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(f.path) as any;
           const content: string = row ? row.content : getPortalDefaultContent(f.path)!;
-          await mikroTikService.uploadFile(routerId, routerPath, content);
+          await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
         } else {
           const fullPath = path.join(hotspotRoot, f.path);
           const data = fs.readFileSync(fullPath);
-          await mikroTikService.uploadFile(routerId, routerPath, data);
+          await mikroTikService.uploadFileSFTP(routerId, routerPath, data);
         }
         results.push({ file: f.path, ok: true });
       } catch (err: any) {

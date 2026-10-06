@@ -1,6 +1,7 @@
 import { RouterOSAPI } from 'node-routeros';
 import net from 'net';
 import crypto from 'crypto';
+import { Client as SSHClient } from 'ssh2';
 
 export interface RouterConnection {
   id: number;
@@ -700,6 +701,102 @@ class MikroTikService {
 
       socket.connect(config.port, config.host, () => {
         socket.write(this.buildApiSentence(['/login', `=name=${config.username}`, `=password=${config.password}`]));
+      });
+    });
+  }
+
+  async uploadFileSFTP(routerId: number, filename: string, content: string | Buffer): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+    if (!config) {
+      throw new Error(`Router ${routerId} not found`);
+    }
+
+    const hasFlash = await this.hasFlashDirectory(routerId);
+    const remotePath = hasFlash
+      ? (filename.startsWith('flash/') ? filename : `flash/${filename}`)
+      : (filename.startsWith('flash/') ? filename.slice(6) : filename);
+
+    const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+
+    console.log(`[SFTP] Uploading ${data.length} bytes to ${remotePath} on ${config.host}`);
+
+    return new Promise<void>((resolve, reject) => {
+      const conn = new SSHClient();
+
+      conn.on('ready', () => {
+        console.log(`[SFTP] SSH connection established`);
+        conn.sftp((err, sftp) => {
+          if (err) {
+            console.error(`[SFTP] SFTP error: ${err.message}`);
+            reject(new Error(`SFTP connection failed: ${err.message}`));
+            return;
+          }
+
+          console.log(`[SFTP] SFTP session opened, writing file`);
+
+          // Ensure directory exists
+          const dir = remotePath.substring(0, remotePath.lastIndexOf('/'));
+          if (dir) {
+            sftp.mkdir(dir, { mode: 0o755 }, (mkdirErr) => {
+              if (mkdirErr) {
+                console.log(`[SFTP] Directory may already exist: ${mkdirErr.message}`);
+              }
+
+              // Write file
+              const writeStream = sftp.createWriteStream(remotePath);
+
+              writeStream.on('close', () => {
+                console.log(`[SFTP] File written successfully`);
+                sftp.end();
+                conn.end();
+                resolve();
+              });
+
+              writeStream.on('error', (writeErr: Error) => {
+                console.error(`[SFTP] Write error: ${writeErr.message}`);
+                sftp.end();
+                conn.end();
+                reject(new Error(`File write failed: ${writeErr.message}`));
+              });
+
+              writeStream.write(data);
+              writeStream.end();
+            });
+          } else {
+            // No directory prefix, write directly
+            const writeStream = sftp.createWriteStream(remotePath);
+
+            writeStream.on('close', () => {
+              console.log(`[SFTP] File written successfully`);
+              sftp.end();
+              conn.end();
+              resolve();
+            });
+
+            writeStream.on('error', (writeErr: Error) => {
+              console.error(`[SFTP] Write error: ${writeErr.message}`);
+              sftp.end();
+              conn.end();
+              reject(new Error(`File write failed: ${writeErr.message}`));
+            });
+
+            writeStream.write(data);
+            writeStream.end();
+          }
+        });
+      });
+
+      conn.on('error', (err) => {
+        console.error(`[SFTP] Connection error: ${err.message}`);
+        reject(new Error(`SSH connection failed: ${err.message}`));
+      });
+
+      conn.connect({
+        host: config.host,
+        port: 22,
+        username: config.username,
+        password: config.password,
+        readyTimeout: 30000,
       });
     });
   }

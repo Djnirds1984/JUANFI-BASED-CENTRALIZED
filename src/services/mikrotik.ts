@@ -615,6 +615,7 @@ class MikroTikService {
               fileId = idWord.slice(5);
             }
           } else if (state === 'query' && type === '!done') {
+            console.log(`[uploadFile] Query done, fileId=${fileId || 'none'}`);
             if (fileId) {
               state = 'removing';
               socket.write(this.buildApiSentence(['/file/remove', `=.id=${fileId}`]));
@@ -623,14 +624,19 @@ class MikroTikService {
               socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
             }
           } else if (state === 'removing' && type === '!done') {
+            console.log(`[uploadFile] Remove done, adding file`);
             state = 'adding';
             socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
+          } else if (state === 'adding' && type === '!re') {
+            // Router may send file info before !done, ignore it
           } else if (state === 'adding' && type === '!done') {
+            console.log(`[uploadFile] File created, sending ${data.length} bytes`);
             sendChunks();
           } else if (state === 'adding' && type === '!trap') {
             fail(new Error(words.slice(1).join(' ') || 'Failed to create file'));
             return;
           } else if (state === 'final' && type === '!done') {
+            console.log(`[uploadFile] Upload complete`);
             succeed();
             return;
           }

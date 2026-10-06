@@ -472,13 +472,13 @@ class MikroTikService {
     }
   }
 
-  async uploadFile(routerId: number, filename: string, content: string): Promise<void> {
+  async uploadFile(routerId: number, filename: string, content: string | Buffer): Promise<void> {
     const config = this.routerConfigs.get(routerId);
     if (!config) {
       throw new Error(`Router ${routerId} not found`);
     }
     const remoteName = `hotspot/${filename}`;
-    const data = Buffer.from(content, 'utf8');
+    const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
 
     if (config.useRestApi) {
       const protocol = config.port === 443 ? 'https' : 'http';

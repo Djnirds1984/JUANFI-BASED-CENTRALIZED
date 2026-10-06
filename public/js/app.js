@@ -907,6 +907,38 @@ const App = {
     }
     this.portalDirty = false;
 
+    let filesData = [];
+    try {
+      const res = await api.getPortalFiles();
+      filesData = res.files || [];
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+      return;
+    }
+
+    const categories = {
+      'Pages': filesData.filter(f => f.path.endsWith('.html')),
+      'Config': filesData.filter(f => f.path.endsWith('.txt')),
+      'Styles': filesData.filter(f => f.path.endsWith('.css')),
+      'Scripts': filesData.filter(f => f.path.endsWith('.js')),
+      'Other': filesData.filter(f => f.editable && !f.path.match(/\.(html|txt|css|js)$/i)),
+      'Assets (push-only)': filesData.filter(f => !f.editable),
+    };
+
+    const fileIcon = (f) => {
+      if (!f.editable) return '&#128206;';
+      if (f.path.endsWith('.html')) return '&#128196;';
+      if (f.path.endsWith('.css')) return '&#127912;';
+      if (f.path.endsWith('.js')) return '&#9889;';
+      if (f.path.endsWith('.txt')) return '&#128221;';
+      return '&#128196;';
+    };
+
+    const formatSize = (bytes) => {
+      if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return bytes + ' B';
+    };
+
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
@@ -916,30 +948,49 @@ const App = {
               <select id="portal-router-select" class="btn btn-outline">
                 ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
               </select>
-              <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push to Router</button>
+              <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push All to Router</button>
             ` : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>'}
           </div>
         </div>
-        <div class="portal-toolbar">
-          <div class="portal-tabs" id="portal-tabs">
-            <button class="portal-tab" data-file="login.html" onclick="App.selectPortalFile('login.html')">login.html</button>
-            <button class="portal-tab" data-file="alogin.html" onclick="App.selectPortalFile('alogin.html')">alogin.html</button>
-            <button class="portal-tab" data-file="error.html" onclick="App.selectPortalFile('error.html')">error.html</button>
-            <button class="portal-tab" data-file="logout.html" onclick="App.selectPortalFile('logout.html')">logout.html</button>
+        <div class="portal-main-layout">
+          <div class="portal-file-list" id="portal-file-list">
+            ${Object.entries(categories).map(([cat, files]) => {
+              if (files.length === 0) return '';
+              return `
+                <div class="portal-file-group">
+                  <div class="portal-file-group-label">${cat}</div>
+                  ${files.map((f) => `
+                    <div class="portal-file-item ${f.path === this.portalCurrentFile ? 'active' : ''} ${!f.editable ? 'binary' : ''}"
+                         data-path="${this.escapeHtml(f.path)}"
+                         onclick="App.selectPortalFile('${this.escapeHtml(f.path)}')"
+                         title="${this.escapeHtml(f.path)} (${formatSize(f.size)})">
+                      <span class="portal-file-icon">${fileIcon(f)}</span>
+                      <span class="portal-file-name">${this.escapeHtml(f.path.split('/').pop())}</span>
+                      ${f.path.includes('/') ? `<span class="portal-file-subpath">${this.escapeHtml(f.path.split('/').slice(0, -1).join('/'))}</span>` : ''}
+                    </div>
+                  `).join('')}
+                </div>
+              `;
+            }).join('')}
           </div>
-          <div class="portal-actions">
-            <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
-            <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
-            <button class="btn btn-sm btn-outline" onclick="App.resetPortalFile()">Reset to Default</button>
-            <button class="btn btn-sm btn-primary" id="portal-save-btn" onclick="App.savePortalFile()">Save</button>
-          </div>
-        </div>
-        <div class="portal-editor-layout" id="portal-layout">
-          <div class="portal-editor-pane">
-            <textarea id="portal-editor" class="portal-editor" spellcheck="false" wrap="off"></textarea>
-          </div>
-          <div class="portal-preview-pane">
-            <iframe id="portal-preview" class="portal-preview" sandbox=""></iframe>
+          <div class="portal-editor-area">
+            <div class="portal-toolbar">
+              <div class="portal-file-info" id="portal-file-info"></div>
+              <div class="portal-actions">
+                <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
+                <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
+                <button class="btn btn-sm btn-outline" id="portal-reset-btn" onclick="App.resetPortalFile()">Reset to Default</button>
+                <button class="btn btn-sm btn-primary" id="portal-save-btn" onclick="App.savePortalFile()">Save</button>
+              </div>
+            </div>
+            <div class="portal-editor-layout" id="portal-layout">
+              <div class="portal-editor-pane">
+                <textarea id="portal-editor" class="portal-editor" spellcheck="false" wrap="off"></textarea>
+              </div>
+              <div class="portal-preview-pane">
+                <iframe id="portal-preview" class="portal-preview" sandbox=""></iframe>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -973,30 +1024,62 @@ const App = {
       }
     });
 
-    await this.selectPortalFile(this.portalCurrentFile || 'login.html', true);
+    const firstEditable = filesData.find(f => f.editable);
+    if (firstEditable) {
+      await this.selectPortalFile(this.portalCurrentFile && filesData.find(f => f.path === this.portalCurrentFile) ? this.portalCurrentFile : firstEditable.path, true);
+    }
   },
 
-  async selectPortalFile(name, force = false) {
+  async selectPortalFile(filePath, force = false) {
     if (!force && this.portalDirty && !confirm('You have unsaved changes. Switching files will discard them. Continue?')) {
       return;
     }
 
-    document.querySelectorAll('.portal-tab').forEach((tab) => {
-      tab.classList.toggle('active', tab.dataset.file === name);
+    document.querySelectorAll('.portal-file-item').forEach((item) => {
+      item.classList.toggle('active', item.dataset.path === filePath);
     });
 
     const editor = document.getElementById('portal-editor');
+    const fileInfo = document.getElementById('portal-file-info');
+    const saveBtn = document.getElementById('portal-save-btn');
+    const resetBtn = document.getElementById('portal-reset-btn');
+    const toggleBtn = document.getElementById('portal-toggle-preview');
     if (!editor) return;
+
+    const isEditable = !document.querySelector(`.portal-file-item[data-path="${filePath}"]`)?.classList.contains('binary');
+    const isHtml = filePath.endsWith('.html');
+
+    editor.disabled = !isEditable;
+    saveBtn.style.display = isEditable ? '' : 'none';
+    resetBtn.style.display = isEditable ? '' : 'none';
+    toggleBtn.style.display = isHtml ? '' : 'none';
+
+    if (!isEditable) {
+      editor.value = '';
+      fileInfo.textContent = `${filePath} — binary file (pushed to router as-is)`;
+      this.portalDirty = false;
+      document.getElementById('portal-dirty').style.visibility = 'hidden';
+      const preview = document.getElementById('portal-preview');
+      if (preview) preview.srcdoc = '<p style="color:#999;text-align:center;margin-top:2rem">Preview not available for binary files</p>';
+      return;
+    }
+
     editor.disabled = true;
     editor.value = 'Loading...';
+    fileInfo.textContent = filePath;
 
     try {
-      const row = await api.getPortalFile(name);
-      this.portalCurrentFile = name;
+      const row = await api.getPortalFile(filePath);
+      this.portalCurrentFile = filePath;
       this.portalDirty = false;
       document.getElementById('portal-dirty').style.visibility = 'hidden';
       editor.value = row.content;
-      this.updatePortalPreview();
+      if (isHtml) {
+        this.updatePortalPreview();
+      } else {
+        const preview = document.getElementById('portal-preview');
+        if (preview) preview.srcdoc = '<p style="color:#999;text-align:center;margin-top:2rem">Preview available for HTML files only</p>';
+      }
     } catch (err) {
       editor.value = `Error loading file: ${err.message}`;
       this.toast(err.message, 'error');
@@ -1057,13 +1140,13 @@ const App = {
       this.toast('Select a router first', 'error');
       return;
     }
-    if (!confirm(`Push all 4 portal files to the router's hotspot folder? This overwrites the current hotspot pages.`)) return;
+    if (!confirm(`Push ALL portal files (HTML, CSS, JS, config, images, sounds) to the router's hotspot folder? This overwrites everything in the hotspot directory.`)) return;
 
     try {
       const res = await api.pushPortalFiles(routerId);
       const failed = (res.results || []).filter((r) => !r.ok);
       if (failed.length === 0) {
-        this.toast('All 4 files pushed to router hotspot folder', 'success');
+        this.toast(res.message || 'All files pushed to router hotspot folder', 'success');
       } else {
         const details = failed.map((f) => `${f.file}: ${f.error}`).join('\n');
         this.toast(`${res.message} — ${failed.map((f) => f.file).join(', ')}`, 'error');

@@ -95,7 +95,7 @@ export function initializeDatabase(): void {
     );
 
     CREATE TABLE IF NOT EXISTS portal_files (
-      name TEXT PRIMARY KEY,
+      path TEXT PRIMARY KEY,
       content TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -112,21 +112,58 @@ export function initializeDatabase(): void {
     db.exec("ALTER TABLE routers ADD COLUMN use_rest_api INTEGER NOT NULL DEFAULT 0");
   }
 
-  const seedStmt = db.prepare('INSERT OR IGNORE INTO portal_files (name, content) VALUES (?, ?)');
-  for (const filename of PORTAL_FILE_NAMES) {
-    const content = getPortalDefaultContent(filename);
+  const portalCols = db.prepare("PRAGMA table_info('portal_files')").all() as any[];
+  if (portalCols.some((c: any) => c.name === 'name') && !portalCols.some((c: any) => c.name === 'path')) {
+    db.exec("ALTER TABLE portal_files RENAME COLUMN name TO path");
+  }
+
+  const allFiles = listHotspotFiles();
+  const seedStmt = db.prepare('INSERT OR IGNORE INTO portal_files (path, content) VALUES (?, ?)');
+  for (const f of allFiles) {
+    if (!f.editable) continue;
+    const content = getPortalDefaultContent(f.path);
     if (content !== null) {
-      seedStmt.run(filename, content);
+      seedStmt.run(f.path, content);
     }
   }
 }
 
-export const PORTAL_FILE_NAMES = ['login.html', 'alogin.html', 'error.html', 'logout.html'] as const;
+export const EDITABLE_EXTENSIONS = new Set(['.html', '.htm', '.txt', '.css', '.js', '.svg']);
 
-export function getPortalDefaultContent(filename: string): string | null {
-  const filePath = path.join(__dirname, '..', 'hotspot', filename);
+export interface HotspotFile {
+  path: string;
+  editable: boolean;
+  size: number;
+}
+
+export function listHotspotFiles(): HotspotFile[] {
+  const root = path.join(__dirname, '..', 'hotspot');
+  const files: HotspotFile[] = [];
+  const walk = (dir: string, prefix: string) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        walk(path.join(dir, e.name), rel);
+      } else if (e.isFile()) {
+        const ext = path.extname(e.name).toLowerCase();
+        const editable = EDITABLE_EXTENSIONS.has(ext);
+        const stat = fs.statSync(path.join(dir, e.name));
+        files.push({ path: rel, editable, size: stat.size });
+      }
+    }
+  };
+  walk(root, '');
+  return files;
+}
+
+export function getPortalDefaultContent(filePath: string): string | null {
+  const fullPath = path.join(__dirname, '..', 'hotspot', filePath);
+  const realHotspot = path.resolve(__dirname, '..', 'hotspot');
+  const realFull = path.resolve(fullPath);
+  if (!realFull.startsWith(realHotspot + path.sep) && realFull !== realHotspot) return null;
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return fs.readFileSync(realFull, 'utf8');
   } catch {
     return null;
   }

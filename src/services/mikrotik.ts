@@ -572,12 +572,15 @@ class MikroTikService {
 
       const sendChunks = () => {
         const CHUNK = 8192;
+        let totalSent = 0;
         while (chunkOffset < data.length) {
           const end = Math.min(chunkOffset + CHUNK, data.length);
           const chunk = data.subarray(chunkOffset, end);
           socket.write(Buffer.concat([this.encodeApiLength(chunk.length), chunk]));
+          totalSent += chunk.length;
           chunkOffset = end;
         }
+        console.log(`[uploadFile] Sent ${totalSent} bytes in chunks, sending terminator`);
         socket.write(Buffer.from([0]));
         state = 'final';
       };
@@ -589,6 +592,8 @@ class MikroTikService {
           incoming = parsed.rest;
           const words = parsed.sentence;
           const type = words[0] || '';
+
+          console.log(`[uploadFile] State: ${state}, Received: ${type}`);
 
           if (type === '!fatal') {
             fail(new Error(words.slice(1).join(' ') || 'Router rejected the command'));
@@ -628,9 +633,9 @@ class MikroTikService {
             state = 'adding';
             socket.write(this.buildApiSentence(['/file/add', `=name=${remoteName}`]));
           } else if (state === 'adding' && type === '!re') {
-            // Router may send file info before !done, ignore it
+            console.log(`[uploadFile] Ignoring !re in adding state`);
           } else if (state === 'adding' && type === '!done') {
-            console.log(`[uploadFile] File created, sending ${data.length} bytes`);
+            console.log(`[uploadFile] File created, sending ${data.length} bytes in chunks`);
             sendChunks();
           } else if (state === 'adding' && type === '!trap') {
             fail(new Error(words.slice(1).join(' ') || 'Failed to create file'));
@@ -639,14 +644,22 @@ class MikroTikService {
             console.log(`[uploadFile] Upload complete`);
             succeed();
             return;
+          } else {
+            console.log(`[uploadFile] Unhandled: state=${state}, type=${type}`);
           }
 
           parsed = this.parseApiSentence(incoming);
         }
       });
 
-      socket.on('error', (err) => fail(err));
-      socket.on('close', () => fail(new Error('Connection closed unexpectedly during file upload')));
+      socket.on('error', (err) => {
+        console.log(`[uploadFile] Socket error: ${err.message}`);
+        fail(err);
+      });
+      socket.on('close', () => {
+        console.log(`[uploadFile] Socket closed`);
+        fail(new Error('Connection closed unexpectedly during file upload'));
+      });
 
       socket.connect(config.port, config.host, () => {
         socket.write(this.buildApiSentence(['/login', `=name=${config.username}`, `=password=${config.password}`]));

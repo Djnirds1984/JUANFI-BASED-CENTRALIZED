@@ -9,12 +9,17 @@ const router = Router();
 
 router.use(authMiddleware);
 
+const HOTSPOT_ROOT = path.resolve(__dirname, '..', '..', 'hotspot');
+
+function resolveDiskPath(filePath: string): string {
+  return path.join(HOTSPOT_ROOT, filePath.replace(/\\/g, '/'));
+}
+
 function validatePortalPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
   if (normalized.includes('..')) return false;
-  const hotspotRoot = path.resolve(__dirname, '..', '..', 'hotspot');
-  const full = path.resolve(__dirname, '..', '..', 'hotspot', normalized);
-  return full.startsWith(hotspotRoot + path.sep) || full === hotspotRoot;
+  const full = path.resolve(HOTSPOT_ROOT, normalized);
+  return full.startsWith(HOTSPOT_ROOT + path.sep) || full === HOTSPOT_ROOT;
 }
 
 function isEditable(filePath: string): boolean {
@@ -64,8 +69,25 @@ router.get('/file/*', (req: Request, res: Response) => {
       return;
     }
 
+    const diskPath = resolveDiskPath(filePath);
     const db = getDb();
     const row = db.prepare('SELECT path, content, updated_at FROM portal_files WHERE path = ?').get(filePath) as any;
+
+    let diskMtime: number | null = null;
+    try {
+      diskMtime = fs.statSync(diskPath).mtimeMs;
+    } catch {}
+
+    if (row && diskMtime != null && row.updated_at) {
+      const dbTime = new Date(row.updated_at + 'Z').getTime();
+      if (diskMtime > dbTime) {
+        const diskContent = fs.readFileSync(diskPath, 'utf8');
+        db.prepare('UPDATE portal_files SET content = ?, updated_at = datetime(\'now\') WHERE path = ?').run(diskContent, filePath);
+        res.json({ path: filePath, content: diskContent, updated_at: new Date().toISOString() });
+        return;
+      }
+    }
+
     if (!row) {
       const content = getPortalDefaultContent(filePath);
       if (content === null) {
@@ -102,13 +124,9 @@ router.put('/file/*', (req: Request, res: Response) => {
 
     const row = upsertPortalFile(filePath, content);
 
-    const diskPath = path.join(__dirname, '..', '..', 'hotspot', filePath);
-    try {
-      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-      fs.writeFileSync(diskPath, content, 'utf8');
-    } catch (err: any) {
-      console.warn(`Could not write file to disk: ${err.message}`);
-    }
+    const diskPath = resolveDiskPath(filePath);
+    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+    fs.writeFileSync(diskPath, content, 'utf8');
 
     res.json({ message: 'File saved', file: row });
   } catch (error: any) {
@@ -137,13 +155,9 @@ router.post('/reset/*', (req: Request, res: Response) => {
 
     const row = upsertPortalFile(filePath, content);
 
-    const diskPath = path.join(__dirname, '..', '..', 'hotspot', filePath);
-    try {
-      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-      fs.writeFileSync(diskPath, content, 'utf8');
-    } catch (err: any) {
-      console.warn(`Could not write file to disk: ${err.message}`);
-    }
+    const diskPath = resolveDiskPath(filePath);
+    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+    fs.writeFileSync(diskPath, content, 'utf8');
 
     res.json({ message: 'File reset to default', file: row });
   } catch (error: any) {
@@ -167,7 +181,6 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
 
     const allFiles = listHotspotFiles();
     const db = getDb();
-    const hotspotRoot = path.resolve(__dirname, '..', '..', 'hotspot');
     const results: { file: string; ok: boolean; error?: string }[] = [];
 
     for (const f of allFiles) {
@@ -178,7 +191,7 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
           const content: string = row ? row.content : getPortalDefaultContent(f.path)!;
           await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
         } else {
-          const fullPath = path.join(hotspotRoot, f.path);
+          const fullPath = path.join(HOTSPOT_ROOT, f.path);
           const data = fs.readFileSync(fullPath);
           await mikroTikService.uploadFileSFTP(routerId, routerPath, data);
         }

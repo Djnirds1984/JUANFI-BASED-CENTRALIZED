@@ -576,11 +576,13 @@ class MikroTikService {
         while (chunkOffset < data.length) {
           const end = Math.min(chunkOffset + CHUNK, data.length);
           const chunk = data.subarray(chunkOffset, end);
-          socket.write(Buffer.concat([this.encodeApiLength(chunk.length), chunk]));
+          // Send raw binary chunks without API sentence framing
+          socket.write(chunk);
           totalSent += chunk.length;
           chunkOffset = end;
         }
         console.log(`[uploadFile] Sent ${totalSent} bytes in chunks, sending terminator`);
+        // Send zero-length terminator as raw byte
         socket.write(Buffer.from([0]));
         state = 'final';
       };

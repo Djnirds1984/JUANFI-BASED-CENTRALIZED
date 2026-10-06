@@ -477,7 +477,7 @@ class MikroTikService {
     if (!config) {
       throw new Error(`Router ${routerId} not found`);
     }
-    const remoteName = `hotspot/${filename}`;
+    const remoteName = filename.startsWith('hotspot/') ? filename : `hotspot/${filename}`;
     const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
 
     if (config.useRestApi) {

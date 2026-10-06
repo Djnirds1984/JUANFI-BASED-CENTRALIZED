@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
 import { getDb, getPortalDefaultContent } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
@@ -206,6 +208,9 @@ router.put('/config', (req: Request, res: Response) => {
       `INSERT INTO portal_files (path, content, updated_at) VALUES (?, ?, datetime('now'))
        ON CONFLICT(path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
     ).run(CONFIG_PATH, content);
+
+    const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
+    fs.writeFileSync(filePath, content, 'utf8');
 
     res.json({ message: 'Config saved', content });
   } catch (error: any) {

@@ -748,7 +748,7 @@ class MikroTikService {
       }
 
       // Step 5: Create user profile
-      const userProfileName = 'default';
+      const userProfileName = `hsuser-${config.interface}`;
       try {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {

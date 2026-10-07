@@ -770,7 +770,21 @@ const App = {
     }
   },
 
-  showGenerateVouchersModal() {
+  async showGenerateVouchersModal() {
+    let profileOptions = '<option value="default">default</option>';
+    let profileError = null;
+
+    try {
+      const profiles = await api.getHotspotProfiles(this.selectedRouterId);
+      if (profiles && profiles.length > 0) {
+        profileOptions = profiles.map(p =>
+          `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`
+        ).join('');
+      }
+    } catch (err) {
+      profileError = err.message;
+    }
+
     this.openModal('Generate Vouchers', `
       <form id="generate-vouchers-form">
         <div class="form-group">
@@ -779,7 +793,10 @@ const App = {
         </div>
         <div class="form-group">
           <label>Profile</label>
-          <input type="text" name="profile" value="default">
+          <select name="profile" class="form-control">
+            ${profileOptions}
+          </select>
+          ${profileError ? `<small style="color: var(--danger); display: block; margin-top: 0.25rem;">Warning: Could not fetch profiles (${profileError}). Using default.</small>` : ''}
         </div>
         <div class="form-group">
           <label>Duration (days, optional)</label>

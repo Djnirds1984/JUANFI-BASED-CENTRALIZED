@@ -772,6 +772,7 @@ class MikroTikService {
       // Step 6: Create admin user
       try {
         if (isRestApi) {
+          // Ensure user profile exists before creating user
           try {
             await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {
               name: userProfileName,
@@ -780,6 +781,15 @@ class MikroTikService {
           } catch (err: any) {
             if (!skipIfExists(err)) throw err;
           }
+          
+          // Verify profile exists by fetching it
+          const profiles = await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot/user/profile');
+          const profileExists = Array.isArray(profiles) && profiles.some((p: any) => p.name === userProfileName);
+          
+          if (!profileExists) {
+            throw new Error(`User profile '${userProfileName}' does not exist`);
+          }
+          
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/add', {
             name: config.adminUsername,
             password: config.adminPassword,

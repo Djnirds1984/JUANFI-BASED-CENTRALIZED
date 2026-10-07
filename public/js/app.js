@@ -1576,13 +1576,6 @@ const App = {
           <label>Idle Timeout</label>
           <input type="text" name="idle-timeout" value="${this.escapeHtml(profile['idle-timeout'] || '')}">
         </div>
-        <div class="form-group">
-          <label>Disabled</label>
-          <select name="disabled" class="form-control">
-            <option value="no" ${profile.disabled !== 'true' ? 'selected' : ''}>No</option>
-            <option value="yes" ${profile.disabled === 'true' ? 'selected' : ''}>Yes</option>
-          </select>
-        </div>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },

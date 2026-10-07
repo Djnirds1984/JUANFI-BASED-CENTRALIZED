@@ -691,26 +691,42 @@ class MikroTikService {
         results.pool = `${poolName} (already exists)`;
       }
 
-      // Step 3: Create hotspot profile
-      const profileName = `hsprof-${config.interface}`;
+      // Step 3: Use existing hotspot profile or create new one
+      let profileName = `hsprof-${config.interface}`;
       try {
+        // Try to fetch existing profiles
+        let existingProfiles: any[] = [];
         if (isRestApi) {
-          await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/profile/add', {
-            name: profileName,
-            pool: poolName,
-            'dns-server': config.dnsServers,
-            'dns-name': config.dnsName,
-          });
+          existingProfiles = await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot/profile');
         } else {
           const client = this.getClient(routerId);
-          await client.write('/ip/hotspot/profile/add', [
-            `=name=${profileName}`,
-            `=address-pool=${poolName}`,
-            `=dns-server=${config.dnsServers}`,
-            `=dns-name=${config.dnsName}`,
-          ]);
+          existingProfiles = await client.write('/ip/hotspot/profile/print');
         }
-        results.profile = profileName;
+        
+        // Use first existing profile if available
+        if (Array.isArray(existingProfiles) && existingProfiles.length > 0) {
+          profileName = existingProfiles[0].name;
+          results.profile = `${profileName} (existing)`;
+        } else {
+          // No existing profiles, create new one
+          if (isRestApi) {
+            await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/profile/add', {
+              name: profileName,
+              pool: poolName,
+              'dns-server': config.dnsServers,
+              'dns-name': config.dnsName,
+            });
+          } else {
+            const client = this.getClient(routerId);
+            await client.write('/ip/hotspot/profile/add', [
+              `=name=${profileName}`,
+              `=address-pool=${poolName}`,
+              `=dns-server=${config.dnsServers}`,
+              `=dns-name=${config.dnsName}`,
+            ]);
+          }
+          results.profile = profileName;
+        }
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
         results.profile = `${profileName} (already exists)`;
@@ -747,7 +763,7 @@ class MikroTikService {
         results.server = `${serverName} (already exists)`;
       }
 
-      // Step 5: Create user profile
+      // Step 6: Create user profile
       const userProfileName = `hsuser-${config.interface}`;
       try {
         if (isRestApi) {
@@ -769,7 +785,7 @@ class MikroTikService {
         results.userProfile = `${userProfileName} (already exists)`;
       }
 
-      // Step 6: Create admin user
+      // Step 7: Create admin user
       try {
         if (isRestApi) {
           // Verify profile exists by fetching it

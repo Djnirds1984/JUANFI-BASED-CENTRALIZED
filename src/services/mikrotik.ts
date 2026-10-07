@@ -1013,7 +1013,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/list', '/interface/list/print');
   }
   async createInterfaceList(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/list/add', '/interface/list/add', data);
+    return this.genericCreate(routerId, '/interface/list', '/interface/list/add', data);
   }
   async updateInterfaceList(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/list', '/interface/list/set', id, data);
@@ -1033,7 +1033,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/vlan', '/interface/vlan/print');
   }
   async createVlan(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/vlan/add', '/interface/vlan/add', data);
+    return this.genericCreate(routerId, '/interface/vlan', '/interface/vlan/add', data);
   }
   async updateVlan(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/vlan', '/interface/vlan/set', id, data);
@@ -1046,7 +1046,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/bridge', '/interface/bridge/print');
   }
   async createBridge(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/bridge/add', '/interface/bridge/add', data);
+    return this.genericCreate(routerId, '/interface/bridge', '/interface/bridge/add', data);
   }
   async updateBridge(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/bridge', '/interface/bridge/set', id, data);
@@ -1059,7 +1059,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/eoip', '/interface/eoip/print');
   }
   async createEoIP(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/eoip/add', '/interface/eoip/add', data);
+    return this.genericCreate(routerId, '/interface/eoip', '/interface/eoip/add', data);
   }
   async updateEoIP(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/eoip', '/interface/eoip/set', id, data);
@@ -1072,7 +1072,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/ipip', '/interface/ipip/print');
   }
   async createIpTunnel(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/ipip/add', '/interface/ipip/add', data);
+    return this.genericCreate(routerId, '/interface/ipip', '/interface/ipip/add', data);
   }
   async updateIpTunnel(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/ipip', '/interface/ipip/set', id, data);
@@ -1085,7 +1085,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/gre', '/interface/gre/print');
   }
   async createGRE(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/gre/add', '/interface/gre/add', data);
+    return this.genericCreate(routerId, '/interface/gre', '/interface/gre/add', data);
   }
   async updateGRE(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/gre', '/interface/gre/set', id, data);
@@ -1098,7 +1098,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/vrrp', '/interface/vrrp/print');
   }
   async createVRRP(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/vrrp/add', '/interface/vrrp/add', data);
+    return this.genericCreate(routerId, '/interface/vrrp', '/interface/vrrp/add', data);
   }
   async updateVRRP(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/vrrp', '/interface/vrrp/set', id, data);
@@ -1111,7 +1111,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/bonding', '/interface/bonding/print');
   }
   async createBonding(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/bonding/add', '/interface/bonding/add', data);
+    return this.genericCreate(routerId, '/interface/bonding', '/interface/bonding/add', data);
   }
   async updateBonding(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/bonding', '/interface/bonding/set', id, data);
@@ -1124,7 +1124,7 @@ class MikroTikService {
     return this.genericList(routerId, '/interface/macsec', '/interface/macsec/print');
   }
   async createMACsec(routerId: number, data: Record<string, any>): Promise<any> {
-    return this.genericCreate(routerId, '/interface/macsec/add', '/interface/macsec/add', data);
+    return this.genericCreate(routerId, '/interface/macsec', '/interface/macsec/add', data);
   }
   async updateMACsec(routerId: number, id: string, data: Record<string, any>): Promise<any> {
     return this.genericUpdate(routerId, '/interface/macsec', '/interface/macsec/set', id, data);

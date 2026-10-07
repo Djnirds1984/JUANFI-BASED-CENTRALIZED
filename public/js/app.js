@@ -1261,10 +1261,10 @@ const App = {
 
   async renderVouchers() {
     const content = document.getElementById('page-content');
-    const routers = (await api.getRouters()).filter((r) => r.connected);
+    const routers = await api.getRouters();
 
     if (routers.length === 0) {
-      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3></div>';
+      content.innerHTML = '<div class="empty-state"><h3>No routers configured</h3></div>';
       return;
     }
 
@@ -1299,45 +1299,99 @@ const App = {
     const container = document.getElementById('vouchers-table');
     try {
       const data = await api.getVouchers(this.selectedRouterId);
-      const vouchers = data.vouchers;
+      const vouchers = data.vouchers || [];
+      const routerUsers = data.routerUsers || [];
+
+      let html = '';
+
+      html += `
+        <div style="margin-bottom:1.5rem">
+          <h4 style="margin-bottom:0.75rem;font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Local Vouchers (${data.total || vouchers.length})</h4>
+      `;
 
       if (vouchers.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No vouchers generated yet.</p></div>';
-        return;
+        html += '<div class="empty-state"><p>No vouchers generated yet.</p></div>';
+      } else {
+        html += `
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Username</th>
+                  <th>Profile</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${vouchers.map((v) => {
+                  const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
+                  return `
+                  <tr>
+                    <td><strong>${this.escapeHtml(v.code)}</strong></td>
+                    <td>${this.escapeHtml(v.username)}</td>
+                    <td>${this.escapeHtml(v.profile)}</td>
+                    <td>${dur}</td>
+                    <td>${v.is_used ? '<span class="status-badge disconnected">Used</span>' : '<span class="status-badge connected">Available</span>'}</td>
+                    <td>${new Date(v.created_at).toLocaleDateString()}</td>
+                    <td>
+                      <button class="btn btn-sm btn-danger" onclick="App.deleteVoucher(${v.id})">Delete</button>
+                    </td>
+                  </tr>
+                `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
       }
 
-      container.innerHTML = `
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Username</th>
-                <th>Password</th>
-                <th>Profile</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${vouchers.map((v) => `
-                <tr>
-                  <td><strong>${this.escapeHtml(v.code)}</strong></td>
-                  <td>${this.escapeHtml(v.username)}</td>
-                  <td><code>${this.escapeHtml(v.password)}</code></td>
-                  <td>${this.escapeHtml(v.profile)}</td>
-                  <td>${v.is_used ? '<span class="status-badge disconnected">Used</span>' : '<span class="status-badge connected">Available</span>'}</td>
-                  <td>${new Date(v.created_at).toLocaleDateString()}</td>
-                  <td>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteVoucher(${v.id})">Delete</button>
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
+      html += `</div>`;
+
+      html += `
+        <div>
+          <h4 style="margin-bottom:0.75rem;font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Router Hotspot Users (${routerUsers.length})</h4>
       `;
+
+      if (routerUsers.length === 0) {
+        html += '<div class="empty-state"><p>No hotspot users found on router.</p></div>';
+      } else {
+        html += `
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Profile</th>
+                  <th>Uptime Limit</th>
+                  <th>Bytes In/Out</th>
+                  <th>Comment</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${routerUsers.map((u) => `
+                  <tr>
+                    <td><strong>${this.escapeHtml(u.name || '')}</strong></td>
+                    <td>${this.escapeHtml(u.profile || '')}</td>
+                    <td>${this.escapeHtml(u['limit-uptime'] || 'Unlimited')}</td>
+                    <td>${u['bytes-in-quota'] || 0} / ${u['bytes-out-quota'] || 0}</td>
+                    <td>${this.escapeHtml(u.comment || '')}</td>
+                    <td>${u.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      html += `</div>`;
+
+      container.innerHTML = html;
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }

@@ -17,7 +17,7 @@ function generateCode(length: number = 8): string {
   return code;
 }
 
-router.get('/router/:routerId', (req: Request, res: Response) => {
+router.get('/router/:routerId', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
     const db = getDb();
@@ -49,7 +49,16 @@ router.get('/router/:routerId', (req: Request, res: Response) => {
       .prepare('SELECT COUNT(*) as count FROM vouchers WHERE router_id = ?')
       .get(routerId) as any).count;
 
-    res.json({ vouchers, total });
+    let routerUsers: any[] = [];
+    if (mikroTikService.isConnected(routerId)) {
+      try {
+        routerUsers = await mikroTikService.getHotspotUsers(routerId);
+      } catch (err) {
+        console.error('Failed to fetch router users:', (err as Error).message);
+      }
+    }
+
+    res.json({ vouchers, total, routerUsers });
   } catch (error) {
     console.error('Get vouchers error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -163,28 +172,40 @@ router.post('/router/:routerId/:voucherId/use', (req: Request, res: Response) =>
   }
 });
 
-router.delete('/router/:routerId/:voucherId', (req: Request, res: Response) => {
+router.delete('/router/:routerId/:voucherId', async (req: Request, res: Response) => {
   try {
+    const routerId = parseInt(req.params.routerId);
+    const voucherId = req.params.voucherId;
     const db = getDb();
+
     const voucher = db
       .prepare('SELECT * FROM vouchers WHERE id = ? AND router_id = ?')
-      .get(req.params.voucherId, routerId(req)) as any;
+      .get(voucherId, routerId) as any;
 
     if (!voucher) {
       res.status(404).json({ error: 'Voucher not found' });
       return;
     }
 
-    db.prepare('DELETE FROM vouchers WHERE id = ?').run(req.params.voucherId);
+    if (mikroTikService.isConnected(routerId)) {
+      try {
+        const routerUsers = await mikroTikService.getHotspotUsers(routerId);
+        const routerUser = routerUsers.find((u: any) => u.name === voucher.username);
+        if (routerUser && routerUser['.id']) {
+          await mikroTikService.removeHotspotUser(routerId, routerUser['.id']);
+        }
+      } catch (err) {
+        console.error('Failed to delete user from router:', (err as Error).message);
+      }
+    }
+
+    db.prepare('DELETE FROM vouchers WHERE id = ?').run(voucherId);
     res.json({ message: 'Voucher deleted' });
   } catch (error) {
+    console.error('Delete voucher error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-function routerId(req: Request): number {
-  return parseInt(req.params.routerId);
-}
 
 router.get('/router/:routerId/:code/lookup', (req: Request, res: Response) => {
   try {

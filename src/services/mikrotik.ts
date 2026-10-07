@@ -295,7 +295,7 @@ class MikroTikService {
       if (user.bytesOutQuota) body['bytes-out-quota'] = user.bytesOutQuota;
       if (user.comment) body.comment = user.comment;
 
-      await this.restApiCall(config, 'POST', '/ip/hotspot/user', body);
+      await this.restApiCall(config, 'POST', '/ip/hotspot/user/add', body);
       return;
     }
 

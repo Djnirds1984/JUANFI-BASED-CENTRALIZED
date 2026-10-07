@@ -89,7 +89,6 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
-      nodemcu: 'NodeMCU',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -109,7 +108,6 @@ const App = {
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
-        case 'nodemcu': await this.renderNodeMcu(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -1200,90 +1198,128 @@ const App = {
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>SubVendo Configuration</h3>
-          <div style="display:flex;gap:0.5rem;align-items:center">
+          <h3>SubVendo</h3>
+        </div>
+        <div class="tab-bar">
+          <button class="tab-btn active" data-subtab="config" onclick="App.switchSubVendoTab('config')">Configuration</button>
+          <button class="tab-btn" data-subtab="devices" onclick="App.switchSubVendoTab('devices')">Sub-Vendo Devices</button>
+        </div>
+        <div id="subvendo-tab-content"></div>
+      </div>
+    `;
+
+    this._subvendoTab = 'config';
+    await this.loadSubVendoTab();
+  },
+
+  async switchSubVendoTab(tab) {
+    this._subvendoTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.subtab === tab);
+    });
+    await this.loadSubVendoTab();
+  },
+
+  async loadSubVendoTab() {
+    const container = document.getElementById('subvendo-tab-content');
+    if (this._subvendoTab === 'config') {
+      await this.renderSubVendoConfig(container);
+    } else {
+      await this.renderNodeMcu(container);
+    }
+  },
+
+  async renderSubVendoConfig(container) {
+    const routers = (await api.getRouters()).filter((r) => r.connected);
+
+    container.innerHTML = `
+      <div class="subvendo-form">
+        <div class="subvendo-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h4 style="margin:0">Router Selection</h4>
             ${routers.length > 0 ? `
-              <select id="subvendo-router-select" class="btn btn-outline">
-                ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
-              </select>
-              <button class="btn btn-primary btn-sm" onclick="App.saveAndPushSubVendo()">Save & Push</button>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="subvendo-router-select" class="btn btn-outline">
+                  ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="App.saveAndPushSubVendo()">Save & Push</button>
+              </div>
             ` : '<span class="status-badge disconnected">No connected routers</span>'}
           </div>
         </div>
-        <div class="subvendo-form">
-          <div class="subvendo-section">
-            <h4>Multi-Vendo Setup</h4>
-            <div class="form-row">
-              <label class="checkbox-label">
-                <input type="checkbox" id="subvendo-isMultiVendo">
-                <span>Enable Multi-Vendo</span>
-              </label>
-            </div>
-            <div class="form-row">
-              <label>Multi-Vendo Mode:</label>
-              <select id="subvendo-multiVendoOption" class="form-control">
-                <option value="0">Traditional (client chooses vendo)</option>
-                <option value="1">Auto-select by hotspot address</option>
-                <option value="2">Interface name</option>
-              </select>
-            </div>
-          </div>
 
-          <div class="subvendo-section">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-              <h4 style="margin:0">Vendo Entries</h4>
-              <button class="btn btn-sm btn-primary" onclick="App.addVendoEntry()">Add Vendo</button>
-            </div>
-            <div id="subvendo-vendo-list"></div>
+        <div class="subvendo-section">
+          <h4>Multi-Vendo Setup</h4>
+          <div class="form-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="subvendo-isMultiVendo">
+              <span>Enable Multi-Vendo</span>
+            </label>
           </div>
+          <div class="form-row">
+            <label>Multi-Vendo Mode:</label>
+            <select id="subvendo-multiVendoOption" class="form-control">
+              <option value="0">Traditional (client chooses vendo)</option>
+              <option value="1">Auto-select by hotspot address</option>
+              <option value="2">Interface name</option>
+            </select>
+          </div>
+        </div>
 
-          <div class="subvendo-section">
-            <h4>Login & General</h4>
-            <div class="form-row">
-              <label>Login Mode:</label>
-              <select id="subvendo-loginOption" class="form-control">
-                <option value="0">Username only</option>
-                <option value="1">Username + Password</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label class="checkbox-label">
-                <input type="checkbox" id="subvendo-dataRateOption">
-                <span>Enable Data Rates</span>
-              </label>
-            </div>
-            <div class="form-row">
-              <label>Default Vendor IP:</label>
-              <input type="text" id="subvendo-vendorIpAddress" class="form-control" placeholder="10.1.0.41">
-            </div>
+        <div class="subvendo-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h4 style="margin:0">Vendo Entries</h4>
+            <button class="btn btn-sm btn-primary" onclick="App.addVendoEntry()">Add Vendo</button>
           </div>
+          <div id="subvendo-vendo-list"></div>
+        </div>
 
-          <div class="subvendo-section">
-            <h4>Feature Flags</h4>
-            <div class="toggle-group">
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-chargingEnable"><span>Charging Station</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-eloadEnable"><span>E-Load</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-showPauseTime"><span>Show Pause/Logout</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-showMemberLogin"><span>Member Login</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-showExtendTimeButton"><span>Extend Time Button</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-disableVoucherInput"><span>Disable Voucher Input</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-macAsVoucherCode"><span>MAC as Voucher Code</span></label>
-              <label class="checkbox-label"><input type="checkbox" id="subvendo-qrCodeVoucherPurchase"><span>QR Code Voucher Purchase</span></label>
-            </div>
+        <div class="subvendo-section">
+          <h4>Login & General</h4>
+          <div class="form-row">
+            <label>Login Mode:</label>
+            <select id="subvendo-loginOption" class="form-control">
+              <option value="0">Username only</option>
+              <option value="1">Username + Password</option>
+            </select>
           </div>
+          <div class="form-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="subvendo-dataRateOption">
+              <span>Enable Data Rates</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label>Default Vendor IP:</label>
+            <input type="text" id="subvendo-vendorIpAddress" class="form-control" placeholder="10.1.0.41">
+          </div>
+        </div>
 
-          <div class="subvendo-section">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-              <h4 style="margin:0">Preview (config.js)</h4>
-              <button class="btn btn-sm btn-outline" onclick="App.updateSubVendoPreview()">Refresh Preview</button>
-            </div>
-            <textarea id="subvendo-preview" class="subvendo-preview" readonly></textarea>
+        <div class="subvendo-section">
+          <h4>Feature Flags</h4>
+          <div class="toggle-group">
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-chargingEnable"><span>Charging Station</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-eloadEnable"><span>E-Load</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-showPauseTime"><span>Show Pause/Logout</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-showMemberLogin"><span>Member Login</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-showExtendTimeButton"><span>Extend Time Button</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-disableVoucherInput"><span>Disable Voucher Input</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-macAsVoucherCode"><span>MAC as Voucher Code</span></label>
+            <label class="checkbox-label"><input type="checkbox" id="subvendo-qrCodeVoucherPurchase"><span>QR Code Voucher Purchase</span></label>
           </div>
+        </div>
 
-          <div class="subvendo-actions">
-            <button class="btn btn-outline" onclick="App.updateSubVendoPreview()">Preview</button>
-            <button class="btn btn-primary" onclick="App.saveSubVendo()">Save</button>
+        <div class="subvendo-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h4 style="margin:0">Preview (config.js)</h4>
+            <button class="btn btn-sm btn-outline" onclick="App.updateSubVendoPreview()">Refresh Preview</button>
           </div>
+          <textarea id="subvendo-preview" class="subvendo-preview" readonly></textarea>
+        </div>
+
+        <div class="subvendo-actions">
+          <button class="btn btn-outline" onclick="App.updateSubVendoPreview()">Preview</button>
+          <button class="btn btn-primary" onclick="App.saveSubVendo()">Save</button>
         </div>
       </div>
     `;
@@ -1530,23 +1566,17 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
   _nodemcuSelectedId: null,
   _nodemcuTab: 'dashboard',
 
-  async renderNodeMcu() {
-    const content = document.getElementById('page-content');
+  async renderNodeMcu(container) {
     const data = await api.nodemcuListDevices();
     const devices = data.devices || [];
     this._nodemcuDevices = devices;
 
     if (devices.length === 0) {
-      content.innerHTML = `
-        <div class="card">
-          <div class="card-header">
-            <h3>NodeMCU Vending Machines</h3>
-          </div>
-          <div class="empty-state">
-            <h3>No NodeMCU devices configured</h3>
-            <p>Add a JuanFI NodeMCU vending machine to manage it from this panel.</p>
-            <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
-          </div>
+      container.innerHTML = `
+        <div class="empty-state">
+          <h3>No Sub-Vendo Devices configured</h3>
+          <p>Add a JuanFI NodeMCU vending machine to manage it from this panel.</p>
+          <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
         </div>
       `;
       return;
@@ -1556,10 +1586,10 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
       this._nodemcuSelectedId = devices[0].id;
     }
 
-    content.innerHTML = `
+    container.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>NodeMCU Vending Machines</h3>
+          <h3>Sub-Vendo Devices</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
             <select id="nodemcu-device-select" class="btn btn-outline" onchange="App.selectNodeMcuDevice(this.value)">
               ${devices.map(d => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
@@ -1588,7 +1618,10 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
       clearInterval(this._nodemcuRefreshInterval);
       this._nodemcuRefreshInterval = null;
     }
-    this.renderNodeMcu();
+    const container = document.getElementById('subvendo-tab-content');
+    if (container) {
+      this.renderNodeMcu(container);
+    }
   },
 
   selectNodeMcuDevice(id) {

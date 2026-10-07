@@ -1161,10 +1161,6 @@ const App = {
           </select>
         </div>
         <div class="form-group">
-          <label>Addresses</label>
-          <input type="text" name="addresses" value="${this.escapeHtml(server.addresses || '')}">
-        </div>
-        <div class="form-group">
           <label>Disabled</label>
           <select name="disabled" class="form-control">
             <option value="no" ${server.disabled !== 'true' ? 'selected' : ''}>No</option>
@@ -1227,16 +1223,8 @@ const App = {
           <input type="text" name="html-directory-override" placeholder="e.g. flash/hotspot">
         </div>
         <div class="form-group">
-          <label>Rate Limit (rx/tx)</label>
-          <input type="text" name="rate-limit" placeholder="e.g. 10M/20M">
-        </div>
-        <div class="form-group">
           <label>HTTP Proxy</label>
           <input type="text" name="http-proxy" placeholder="e.g. 192.168.1.1">
-        </div>
-        <div class="form-group">
-          <label>HTTP Proxy Port</label>
-          <input type="number" name="http-proxy-port" value="0" min="0" max="65535">
         </div>
         <div class="form-group">
           <label>SMTP Server</label>
@@ -1385,16 +1373,8 @@ const App = {
           <input type="text" name="html-directory-override" value="${this.escapeHtml(profile['html-directory-override'] || '')}">
         </div>
         <div class="form-group">
-          <label>Rate Limit (rx/tx)</label>
-          <input type="text" name="rate-limit" value="${this.escapeHtml(profile['rate-limit'] || '')}">
-        </div>
-        <div class="form-group">
           <label>HTTP Proxy</label>
           <input type="text" name="http-proxy" value="${this.escapeHtml(profile['http-proxy'] || '')}">
-        </div>
-        <div class="form-group">
-          <label>HTTP Proxy Port</label>
-          <input type="number" name="http-proxy-port" value="${profile['http-proxy-port'] || 0}" min="0" max="65535">
         </div>
         <div class="form-group">
           <label>SMTP Server</label>
@@ -1780,10 +1760,6 @@ const App = {
             <option value="">Select profile...</option>
             ${profiles.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
           </select>
-        </div>
-        <div class="form-group">
-          <label>Addresses</label>
-          <input type="text" name="addresses" placeholder="e.g. 192.168.1.0/24">
         </div>
       </form>
     `, [

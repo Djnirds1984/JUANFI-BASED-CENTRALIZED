@@ -6,12 +6,12 @@ var multiVendoOption = 0;
 //list here all node mcu address for multi vendo setup
 var multiVendoAddresses = [
 	{
-		vendoName: "Vendo 1 - ESP32 Wireless", //change accordingly to your vendo name
-		vendoIp: "10.1.0.41", //change accordingly to your vendo ip
+		vendoName: "TEST1", //change accordingly to your vendo name
+		vendoIp: "10.0.0.243", //change accordingly to your vendo ip
 		chargingEnable: true,  //change true if you want to enable charging station
 		eloadEnable: true, //change true if you want to enable eloading station
-		hotspotAddress: "10.1.0.1", // use for multi vendo option = 1, means your vendo map to this hotspot and autoselect it when client connected to this
-		interfaceName: "vlan11-hotspot1" // hotspot interface name preser
+		hotspotAddress: "10.0.0.1", // use for multi vendo option = 1, means your vendo map to this hotspot and autoselect it when client connected to this
+		interfaceName: "bridge-HS" // hotspot interface name preser
 	},
 	{
 		vendoName: "Vendo 2", //change accordingly to your vendo name
@@ -39,7 +39,7 @@ var loginOption = 0; //replace 1 if you want login voucher by username + passwor
 
 var dataRateOption = false; //replace true if you enable data rates
 //put here the default selected address
-var vendorIpAddress = "10.1.0.41";
+var vendorIpAddress = "10.0.0.243";
 
 var chargingEnable = false; //replace true if you enable charging, this can be override if multivendo setup
 

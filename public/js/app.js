@@ -1091,20 +1091,10 @@ const App = {
   },
 
   updatePortalPreview() {
-    const editor = document.getElementById('portal-editor');
     const preview = document.getElementById('portal-preview');
-    if (!editor || !preview) return;
-    let html = editor.value;
-    html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
-    html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
-    if (html.includes('<head>')) {
-      html = html.replace('<head>', '<head><base href="/hotspot-assets/">');
-    } else if (html.includes('<html')) {
-      html = html.replace(/<html[^>]*>/i, (m) => m + '<head><base href="/hotspot-assets/"></head>');
-    } else {
-      html = '<base href="/hotspot-assets/">' + html;
-    }
-    preview.srcdoc = html;
+    if (!preview) return;
+    preview.removeAttribute('srcdoc');
+    preview.src = '/hotspot-assets/' + this.portalCurrentFile + '?t=' + Date.now();
   },
 
   togglePortalPreview() {

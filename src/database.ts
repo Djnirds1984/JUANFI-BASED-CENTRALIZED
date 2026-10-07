@@ -63,7 +63,7 @@ export function initializeDatabase(): void {
       router_id INTEGER NOT NULL,
       code TEXT NOT NULL UNIQUE,
       username TEXT NOT NULL,
-      password TEXT NOT NULL,
+      password TEXT,
       profile TEXT NOT NULL,
       duration_minutes INTEGER,
       data_limit_mb INTEGER,
@@ -115,6 +115,33 @@ export function initializeDatabase(): void {
   const portalCols = db.prepare("PRAGMA table_info('portal_files')").all() as any[];
   if (portalCols.some((c: any) => c.name === 'name') && !portalCols.some((c: any) => c.name === 'path')) {
     db.exec("ALTER TABLE portal_files RENAME COLUMN name TO path");
+  }
+
+  const voucherCols = db.prepare("PRAGMA table_info('vouchers')").all() as any[];
+  const passwordCol = voucherCols.find((c: any) => c.name === 'password');
+  if (passwordCol && passwordCol.notnull === 1) {
+    db.exec(`
+      CREATE TABLE vouchers_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        router_id INTEGER NOT NULL,
+        code TEXT NOT NULL UNIQUE,
+        username TEXT NOT NULL,
+        password TEXT,
+        profile TEXT NOT NULL,
+        duration_minutes INTEGER,
+        data_limit_mb INTEGER,
+        is_used INTEGER NOT NULL DEFAULT 0,
+        used_at TEXT,
+        expires_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+      );
+      INSERT INTO vouchers_new SELECT * FROM vouchers;
+      DROP TABLE vouchers;
+      ALTER TABLE vouchers_new RENAME TO vouchers;
+      CREATE INDEX idx_vouchers_router ON vouchers(router_id);
+      CREATE INDEX idx_vouchers_code ON vouchers(code);
+    `);
   }
 
   const allFiles = listHotspotFiles();

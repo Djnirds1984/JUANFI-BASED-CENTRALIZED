@@ -274,7 +274,7 @@ class MikroTikService {
     routerId: number,
     user: {
       username: string;
-      password: string;
+      password?: string;
       profile: string;
       uptimeLimit?: string;
       bytesInQuota?: number;
@@ -287,9 +287,9 @@ class MikroTikService {
     if (config?.useRestApi) {
       const body: any = {
         name: user.username,
-        password: user.password,
         profile: user.profile,
       };
+      if (user.password) body.password = user.password;
       if (user.uptimeLimit) body['limit-uptime'] = user.uptimeLimit;
       if (user.bytesInQuota) body['bytes-in-quota'] = user.bytesInQuota;
       if (user.bytesOutQuota) body['bytes-out-quota'] = user.bytesOutQuota;
@@ -303,9 +303,10 @@ class MikroTikService {
 
     const command: string[] = [
       `=name=${user.username}`,
-      `=password=${user.password}`,
       `=profile=${user.profile}`,
     ];
+
+    if (user.password) command.push(`=password=${user.password}`);
 
     if (user.uptimeLimit) command.push(`=limit-uptime=${user.uptimeLimit}`);
     if (user.bytesInQuota) command.push(`=bytes-in-quota=${user.bytesInQuota}`);

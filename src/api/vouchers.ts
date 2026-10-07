@@ -80,7 +80,6 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
       for (let i = 0; i < quantity; i++) {
         const code = prefix ? `${prefix}-${generateCode()}` : generateCode();
         const username = code;
-        const password = generateCode(6);
 
         let expiresAt: string | null = null;
         if (durationMinutes) {
@@ -93,7 +92,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           routerId,
           code,
           username,
-          password,
+          null,
           profile || 'default',
           durationMinutes || null,
           dataLimitMb || null,
@@ -103,7 +102,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         vouchers.push({
           code,
           username,
-          password,
+          password: null,
           profile: profile || 'default',
           durationMinutes,
           dataLimitMb,
@@ -123,7 +122,6 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           const mins = v.durationMinutes ? v.durationMinutes % 60 : 0;
           await mikroTikService.createHotspotUser(routerId, {
             username: v.username,
-            password: v.password,
             profile: v.profile,
             uptimeLimit: v.durationMinutes ? `${hours}:${String(mins).padStart(2, '0')}:00` : undefined,
             comment: `Voucher: ${v.code}`,

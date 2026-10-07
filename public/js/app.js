@@ -1503,11 +1503,25 @@ const App = {
   },
 
   async showCreateUserProfileModal() {
+    let pools = [];
+    try {
+      pools = await api.getAddressPools(this.selectedRouterId);
+    } catch (err) {
+      // ignore
+    }
+
     this.openModal('Create User Profile', `
       <form id="create-user-profile-form">
         <div class="form-group">
           <label>Name</label>
           <input type="text" name="name" required placeholder="e.g. 1hour-10M">
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <select name="address-pool" class="form-control">
+            <option value="">None</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Rate Limit</label>
@@ -1554,11 +1568,25 @@ const App = {
     const profile = profiles.find((p) => p['.id'] === profileId);
     if (!profile) { this.toast('Profile not found', 'error'); return; }
 
+    let pools = [];
+    try {
+      pools = await api.getAddressPools(this.selectedRouterId);
+    } catch (err) {
+      // ignore
+    }
+
     this.openModal('Edit User Profile', `
       <form id="edit-user-profile-form">
         <div class="form-group">
           <label>Name</label>
           <input type="text" name="name" required value="${this.escapeHtml(profile.name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <select name="address-pool" class="form-control">
+            <option value="">None</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}" ${p.name === profile['address-pool'] ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Rate Limit</label>

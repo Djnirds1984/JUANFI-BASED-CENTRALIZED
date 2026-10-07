@@ -430,7 +430,21 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'POST', '/ip/hotspot/profile/add', data);
+      const restData = { ...data };
+      if (restData['address-pool'] !== undefined) {
+        restData.pool = restData['address-pool'];
+        delete restData['address-pool'];
+      }
+      if (restData['install-queue'] !== undefined) {
+        restData['install-queue'] = restData['install-queue'] === 'yes';
+      }
+      if (restData['mac-cookie'] !== undefined) {
+        restData['mac-cookie'] = restData['mac-cookie'] === 'yes';
+      }
+      if (restData['split-user-domain'] !== undefined) {
+        restData['split-user-domain'] = restData['split-user-domain'] === 'yes';
+      }
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/profile/add', restData);
     }
 
     const client = this.getClient(routerId);
@@ -452,7 +466,21 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'PUT', `/ip/hotspot/profile/${profileId}`, data);
+      const restData = { ...data };
+      if (restData['address-pool'] !== undefined) {
+        restData.pool = restData['address-pool'];
+        delete restData['address-pool'];
+      }
+      if (restData['install-queue'] !== undefined) {
+        restData['install-queue'] = restData['install-queue'] === 'yes';
+      }
+      if (restData['mac-cookie'] !== undefined) {
+        restData['mac-cookie'] = restData['mac-cookie'] === 'yes';
+      }
+      if (restData['split-user-domain'] !== undefined) {
+        restData['split-user-domain'] = restData['split-user-domain'] === 'yes';
+      }
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/profile/${profileId}`, restData);
     }
 
     const client = this.getClient(routerId);

@@ -1196,41 +1196,114 @@ const App = {
   },
 
   async showCreateServerProfileModal() {
-    let pools = [];
+    let userProfiles = [];
     try {
-      pools = await api.getAddressPools(this.selectedRouterId);
+      userProfiles = await api.getUserProfiles(this.selectedRouterId);
     } catch (err) {
       // ignore
     }
 
     this.openModal('Create Server Profile', `
       <form id="create-server-profile-form">
+        <h4 style="margin: 0 0 10px 0; color: #666;">General</h4>
         <div class="form-group">
           <label>Name</label>
           <input type="text" name="name" required placeholder="e.g. hs-profile-1">
         </div>
         <div class="form-group">
-          <label>Address Pool</label>
-          <select name="address-pool" class="form-control">
-            <option value="">Select pool...</option>
-            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
-          </select>
+          <label>Hotspot Address</label>
+          <input type="text" name="hotspot-address" placeholder="e.g. 192.168.1.1">
         </div>
         <div class="form-group">
-          <label>Rate Limit</label>
+          <label>DNS Name</label>
+          <input type="text" name="dns-name" placeholder="e.g. hotspot.example.com">
+        </div>
+        <div class="form-group">
+          <label>HTML Directory</label>
+          <input type="text" name="html-directory" value="hotspot" placeholder="e.g. hotspot">
+        </div>
+        <div class="form-group">
+          <label>HTML Directory Override</label>
+          <input type="text" name="html-directory-override" placeholder="e.g. flash/hotspot">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit (rx/tx)</label>
           <input type="text" name="rate-limit" placeholder="e.g. 10M/20M">
         </div>
         <div class="form-group">
-          <label>Shared Users</label>
-          <input type="number" name="shared-users" value="1" min="1">
+          <label>HTTP Proxy</label>
+          <input type="text" name="http-proxy" placeholder="e.g. 192.168.1.1">
         </div>
         <div class="form-group">
-          <label>Session Timeout</label>
-          <input type="text" name="session-timeout" placeholder="e.g. 1d or 00:00:00">
+          <label>HTTP Proxy Port</label>
+          <input type="number" name="http-proxy-port" value="0" min="0" max="65535">
         </div>
         <div class="form-group">
-          <label>Idle Timeout</label>
-          <input type="text" name="idle-timeout" placeholder="e.g. 30m or 00:30:00">
+          <label>SMTP Server</label>
+          <input type="text" name="smtp-server" placeholder="e.g. mail.example.com">
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="install-queue" value="yes"> Install Hotspot Queue
+          </label>
+        </div>
+
+        <h4 style="margin: 20px 0 10px 0; color: #666;">Login</h4>
+        <div class="form-group">
+          <label>Login By</label>
+          <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <label><input type="checkbox" name="login-by-mac" value="yes"> MAC</label>
+            <label><input type="checkbox" name="login-by-cookie" value="yes" checked> Cookie</label>
+            <label><input type="checkbox" name="login-by-http-chap" value="yes" checked> HTTP CHAP</label>
+            <label><input type="checkbox" name="login-by-https" value="yes"> HTTPS</label>
+            <label><input type="checkbox" name="login-by-http-pap" value="yes" checked> HTTP PAP</label>
+            <label><input type="checkbox" name="login-by-trial" value="yes"> Trial</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="mac-cookie" value="yes"> MAC Cookie
+          </label>
+        </div>
+        <div class="form-group">
+          <label>MAC Auth. Mode</label>
+          <select name="mac-auth-mode" class="form-control">
+            <option value="mac-as-username">MAC as username</option>
+            <option value="mac-as-password">MAC as password</option>
+            <option value="mac-as-username-and-password">MAC as username and password</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>MAC Auth. Password</label>
+          <input type="text" name="mac-auth-password" placeholder="MAC auth password">
+        </div>
+        <div class="form-group">
+          <label>HTTP Cookie Lifetime</label>
+          <input type="text" name="http-cookie-lifetime" value="3d 00:00:00" placeholder="e.g. 3d 00:00:00">
+        </div>
+        <div class="form-group">
+          <label>SSL Certificate</label>
+          <input type="text" name="ssl-certificate" value="none" placeholder="e.g. none">
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="split-user-domain" value="yes"> Split User Domain
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Trial Uptime Limit</label>
+          <input type="text" name="trial-uptime-limit" value="00:30:00" placeholder="e.g. 00:30:00">
+        </div>
+        <div class="form-group">
+          <label>Trial Uptime Reset</label>
+          <input type="text" name="trial-uptime-reset" value="1d 00:00:00" placeholder="e.g. 1d 00:00:00">
+        </div>
+        <div class="form-group">
+          <label>Trial User Profile</label>
+          <select name="trial-user-profile" class="form-control">
+            <option value="">Select profile...</option>
+            ${userProfiles.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
       </form>
     `, [
@@ -1243,6 +1316,23 @@ const App = {
           const formData = new FormData(form);
           const data = {};
           formData.forEach((value, key) => { if (value) data[key] = value; });
+          
+          const loginByValues = [];
+          if (data['login-by-mac']) loginByValues.push('mac');
+          if (data['login-by-cookie']) loginByValues.push('cookie');
+          if (data['login-by-http-chap']) loginByValues.push('http-chap');
+          if (data['login-by-https']) loginByValues.push('https');
+          if (data['login-by-http-pap']) loginByValues.push('http-pap');
+          if (data['login-by-trial']) loginByValues.push('trial');
+          data['login-by'] = loginByValues.join(',');
+          
+          delete data['login-by-mac'];
+          delete data['login-by-cookie'];
+          delete data['login-by-http-chap'];
+          delete data['login-by-https'];
+          delete data['login-by-http-pap'];
+          delete data['login-by-trial'];
+          
           try {
             await api.createHotspotProfile(this.selectedRouterId, data);
             this.closeModal();
@@ -1261,41 +1351,117 @@ const App = {
     const profile = profiles.find((p) => p['.id'] === profileId);
     if (!profile) { this.toast('Profile not found', 'error'); return; }
 
-    let pools = [];
+    let userProfiles = [];
     try {
-      pools = await api.getAddressPools(this.selectedRouterId);
+      userProfiles = await api.getUserProfiles(this.selectedRouterId);
     } catch (err) {
       // ignore
     }
 
+    const loginBy = profile['login-by'] || '';
+    const loginByList = loginBy.split(',').map(s => s.trim());
+
     this.openModal('Edit Server Profile', `
       <form id="edit-server-profile-form">
+        <h4 style="margin: 0 0 10px 0; color: #666;">General</h4>
         <div class="form-group">
           <label>Name</label>
           <input type="text" name="name" required value="${this.escapeHtml(profile.name || '')}">
         </div>
         <div class="form-group">
-          <label>Address Pool</label>
-          <select name="address-pool" class="form-control">
-            <option value="">Select pool...</option>
-            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}" ${p.name === profile['address-pool'] ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
-          </select>
+          <label>Hotspot Address</label>
+          <input type="text" name="hotspot-address" value="${this.escapeHtml(profile['hotspot-address'] || '')}">
         </div>
         <div class="form-group">
-          <label>Rate Limit</label>
+          <label>DNS Name</label>
+          <input type="text" name="dns-name" value="${this.escapeHtml(profile['dns-name'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>HTML Directory</label>
+          <input type="text" name="html-directory" value="${this.escapeHtml(profile['html-directory'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>HTML Directory Override</label>
+          <input type="text" name="html-directory-override" value="${this.escapeHtml(profile['html-directory-override'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit (rx/tx)</label>
           <input type="text" name="rate-limit" value="${this.escapeHtml(profile['rate-limit'] || '')}">
         </div>
         <div class="form-group">
-          <label>Shared Users</label>
-          <input type="number" name="shared-users" value="${profile['shared-users'] || 1}" min="1">
+          <label>HTTP Proxy</label>
+          <input type="text" name="http-proxy" value="${this.escapeHtml(profile['http-proxy'] || '')}">
         </div>
         <div class="form-group">
-          <label>Session Timeout</label>
-          <input type="text" name="session-timeout" value="${this.escapeHtml(profile['session-timeout'] || '')}">
+          <label>HTTP Proxy Port</label>
+          <input type="number" name="http-proxy-port" value="${profile['http-proxy-port'] || 0}" min="0" max="65535">
         </div>
         <div class="form-group">
-          <label>Idle Timeout</label>
-          <input type="text" name="idle-timeout" value="${this.escapeHtml(profile['idle-timeout'] || '')}">
+          <label>SMTP Server</label>
+          <input type="text" name="smtp-server" value="${this.escapeHtml(profile['smtp-server'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="install-queue" value="yes" ${profile['install-queue'] === 'true' ? 'checked' : ''}> Install Hotspot Queue
+          </label>
+        </div>
+
+        <h4 style="margin: 20px 0 10px 0; color: #666;">Login</h4>
+        <div class="form-group">
+          <label>Login By</label>
+          <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <label><input type="checkbox" name="login-by-mac" value="yes" ${loginByList.includes('mac') ? 'checked' : ''}> MAC</label>
+            <label><input type="checkbox" name="login-by-cookie" value="yes" ${loginByList.includes('cookie') ? 'checked' : ''}> Cookie</label>
+            <label><input type="checkbox" name="login-by-http-chap" value="yes" ${loginByList.includes('http-chap') ? 'checked' : ''}> HTTP CHAP</label>
+            <label><input type="checkbox" name="login-by-https" value="yes" ${loginByList.includes('https') ? 'checked' : ''}> HTTPS</label>
+            <label><input type="checkbox" name="login-by-http-pap" value="yes" ${loginByList.includes('http-pap') ? 'checked' : ''}> HTTP PAP</label>
+            <label><input type="checkbox" name="login-by-trial" value="yes" ${loginByList.includes('trial') ? 'checked' : ''}> Trial</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="mac-cookie" value="yes" ${profile['mac-cookie'] === 'true' ? 'checked' : ''}> MAC Cookie
+          </label>
+        </div>
+        <div class="form-group">
+          <label>MAC Auth. Mode</label>
+          <select name="mac-auth-mode" class="form-control">
+            <option value="mac-as-username" ${profile['mac-auth-mode'] === 'mac-as-username' ? 'selected' : ''}>MAC as username</option>
+            <option value="mac-as-password" ${profile['mac-auth-mode'] === 'mac-as-password' ? 'selected' : ''}>MAC as password</option>
+            <option value="mac-as-username-and-password" ${profile['mac-auth-mode'] === 'mac-as-username-and-password' ? 'selected' : ''}>MAC as username and password</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>MAC Auth. Password</label>
+          <input type="text" name="mac-auth-password" value="${this.escapeHtml(profile['mac-auth-password'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>HTTP Cookie Lifetime</label>
+          <input type="text" name="http-cookie-lifetime" value="${this.escapeHtml(profile['http-cookie-lifetime'] || '3d 00:00:00')}">
+        </div>
+        <div class="form-group">
+          <label>SSL Certificate</label>
+          <input type="text" name="ssl-certificate" value="${this.escapeHtml(profile['ssl-certificate'] || 'none')}">
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="split-user-domain" value="yes" ${profile['split-user-domain'] === 'true' ? 'checked' : ''}> Split User Domain
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Trial Uptime Limit</label>
+          <input type="text" name="trial-uptime-limit" value="${this.escapeHtml(profile['trial-uptime-limit'] || '00:30:00')}">
+        </div>
+        <div class="form-group">
+          <label>Trial Uptime Reset</label>
+          <input type="text" name="trial-uptime-reset" value="${this.escapeHtml(profile['trial-uptime-reset'] || '1d 00:00:00')}">
+        </div>
+        <div class="form-group">
+          <label>Trial User Profile</label>
+          <select name="trial-user-profile" class="form-control">
+            <option value="">Select profile...</option>
+            ${userProfiles.map((p) => `<option value="${this.escapeHtml(p.name)}" ${profile['trial-user-profile'] === p.name ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Disabled</label>
@@ -1315,6 +1481,23 @@ const App = {
           const formData = new FormData(form);
           const data = {};
           formData.forEach((value, key) => { data[key] = value; });
+          
+          const loginByValues = [];
+          if (data['login-by-mac']) loginByValues.push('mac');
+          if (data['login-by-cookie']) loginByValues.push('cookie');
+          if (data['login-by-http-chap']) loginByValues.push('http-chap');
+          if (data['login-by-https']) loginByValues.push('https');
+          if (data['login-by-http-pap']) loginByValues.push('http-pap');
+          if (data['login-by-trial']) loginByValues.push('trial');
+          data['login-by'] = loginByValues.join(',');
+          
+          delete data['login-by-mac'];
+          delete data['login-by-cookie'];
+          delete data['login-by-http-chap'];
+          delete data['login-by-https'];
+          delete data['login-by-http-pap'];
+          delete data['login-by-trial'];
+          
           try {
             await api.updateHotspotProfile(this.selectedRouterId, profileId, data);
             this.closeModal();

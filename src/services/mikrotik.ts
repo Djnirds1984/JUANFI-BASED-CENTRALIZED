@@ -655,12 +655,23 @@ class MikroTikService {
       // Step 4: Create hotspot server
       const serverName = `hotspot-${config.interface}`;
       if (isRestApi) {
-        await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
+        // Create server without address-pool (REST API limitation)
+        const createResult = await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
           name: serverName,
           interface: config.interface,
-          addressPool: poolName,
           profile: profileName,
         });
+        
+        // Try to update with address-pool if server was created
+        if (createResult && createResult['.id']) {
+          try {
+            await this.restApiCall(routerConfig!, 'PUT', `/ip/hotspot/${createResult['.id']}`, {
+              'address-pool': poolName,
+            });
+          } catch (err) {
+            console.log('Could not set address-pool via REST API, pool is linked through profile');
+          }
+        }
       } else {
         const client = this.getClient(routerId);
         await client.write('/ip/hotspot/add', [

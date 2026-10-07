@@ -582,6 +582,140 @@ class MikroTikService {
     }
   }
 
+  async setupHotspot(routerId: number, config: {
+    interface: string;
+    address: string;
+    poolStart: string;
+    poolEnd: string;
+    dnsServers: string;
+    dnsName: string;
+    adminUsername: string;
+    adminPassword: string;
+  }): Promise<any> {
+    const routerConfig = this.routerConfigs.get(routerId);
+    const isRestApi = routerConfig?.useRestApi;
+
+    const results: any = {};
+
+    try {
+      // Step 1: Add IP address to interface
+      const addressName = `${config.interface}-hotspot`;
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/address/add', {
+          address: config.address,
+          interface: config.interface,
+          comment: 'Hotspot',
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/address/add', [
+          `=address=${config.address}`,
+          `=interface=${config.interface}`,
+          `=comment=Hotspot`,
+        ]);
+      }
+      results.address = addressName;
+
+      // Step 2: Create address pool
+      const poolName = `hs-pool-${config.interface}`;
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/pool/add', {
+          name: poolName,
+          ranges: `${config.poolStart}-${config.poolEnd}`,
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/pool/add', [
+          `=name=${poolName}`,
+          `=ranges=${config.poolStart}-${config.poolEnd}`,
+        ]);
+      }
+      results.pool = poolName;
+
+      // Step 3: Create hotspot profile
+      const profileName = `hsprof-${config.interface}`;
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/profile/add', {
+          name: profileName,
+          'address-pool': poolName,
+          'dns-server': config.dnsServers,
+          'dns-name': config.dnsName,
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/hotspot/profile/add', [
+          `=name=${profileName}`,
+          `=address-pool=${poolName}`,
+          `=dns-server=${config.dnsServers}`,
+          `=dns-name=${config.dnsName}`,
+        ]);
+      }
+      results.profile = profileName;
+
+      // Step 4: Create hotspot server
+      const serverName = `hotspot-${config.interface}`;
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
+          name: serverName,
+          interface: config.interface,
+          'address-pool': poolName,
+          profile: profileName,
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/hotspot/add', [
+          `=name=${serverName}`,
+          `=interface=${config.interface}`,
+          `=address-pool=${poolName}`,
+          `=profile=${profileName}`,
+        ]);
+      }
+      results.server = serverName;
+
+      // Step 5: Create user profile
+      const userProfileName = 'default';
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {
+          name: userProfileName,
+          'address-pool': poolName,
+          'rate-limit': '1M/1M',
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/hotspot/user/profile/add', [
+          `=name=${userProfileName}`,
+          `=address-pool=${poolName}`,
+          `=rate-limit=1M/1M`,
+        ]);
+      }
+      results.userProfile = userProfileName;
+
+      // Step 6: Create admin user
+      if (isRestApi) {
+        await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/add', {
+          name: config.adminUsername,
+          password: config.adminPassword,
+          profile: userProfileName,
+          comment: 'Hotspot Admin',
+        });
+      } else {
+        const client = this.getClient(routerId);
+        await client.write('/ip/hotspot/user/add', [
+          `=name=${config.adminUsername}`,
+          `=password=${config.adminPassword}`,
+          `=profile=${userProfileName}`,
+          `=comment=Hotspot Admin`,
+        ]);
+      }
+      results.adminUser = config.adminUsername;
+
+      return results;
+    } catch (err) {
+      console.error(`setupHotspot failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getWalledGarden(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 

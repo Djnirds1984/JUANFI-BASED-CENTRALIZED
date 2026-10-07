@@ -582,4 +582,46 @@ router.delete('/router/:routerId/ip-binding/:bindingId', async (req: Request, re
   }
 });
 
+router.post('/router/:routerId/setup', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const {
+      interface: interfaceName,
+      address,
+      poolStart,
+      poolEnd,
+      dnsServers,
+      dnsName,
+      adminUsername,
+      adminPassword,
+    } = req.body;
+
+    if (!interfaceName || !address || !poolStart || !poolEnd || !dnsName || !adminUsername || !adminPassword) {
+      res.status(400).json({ error: 'Missing required fields' });
+      return;
+    }
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.setupHotspot(routerId, {
+      interface: interfaceName,
+      address,
+      poolStart,
+      poolEnd,
+      dnsServers: dnsServers || '8.8.8.8,8.8.4.4',
+      dnsName,
+      adminUsername,
+      adminPassword,
+    });
+
+    res.json({ message: 'Hotspot setup completed successfully', data: result });
+  } catch (error: any) {
+    console.error('Hotspot setup error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

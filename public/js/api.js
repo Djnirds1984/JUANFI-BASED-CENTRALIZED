@@ -143,6 +143,10 @@ class ApiClient {
     return this.delete(`/hotspot/router/${routerId}/server/${serverId}`);
   }
 
+  async setupHotspot(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/setup`, data);
+  }
+
   async getWalledGarden(routerId) {
     return this.get(`/hotspot/router/${routerId}/walled-garden`);
   }

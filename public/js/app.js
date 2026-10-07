@@ -854,7 +854,10 @@ const App = {
       <div class="settings-section">
         <div class="settings-section-header">
           <h4>Hotspot Servers</h4>
-          <button class="btn btn-primary btn-sm" onclick="App.showCreateServerModal()">Add Server</button>
+          <div>
+            <button class="btn btn-primary btn-sm" onclick="App.showHotspotSetupWizard()" style="margin-right: 8px;">Hotspot Setup</button>
+            <button class="btn btn-primary btn-sm" onclick="App.showCreateServerModal()">Add Server</button>
+          </div>
         </div>
         <div class="table-wrapper">
           <table>
@@ -1571,6 +1574,105 @@ const App = {
         },
       },
     ]);
+  },
+
+  async showHotspotSetupWizard() {
+    let interfaces = [];
+    try {
+      interfaces = await api.getRouterInterfaces(this.selectedRouterId);
+    } catch (err) {
+      this.toast('Could not fetch interfaces', 'error');
+    }
+
+    const step = { current: 0 };
+    const data = { interface: '', address: '', poolStart: '', poolEnd: '', dnsServers: '8.8.8.8,8.8.4.4', dnsName: '', adminUsername: '', adminPassword: '' };
+    const steps = [
+      { title: 'Select Interface', desc: 'Select the interface to run the HotSpot on.' },
+      { title: 'IP Address', desc: 'Set the IP address and network mask for the HotSpot interface.' },
+      { title: 'Address Pool', desc: 'Define the IP address pool for HotSpot users.' },
+      { title: 'DNS Servers', desc: 'Set the DNS servers for HotSpot clients.' },
+      { title: 'DNS Name', desc: 'Set the DNS name for the HotSpot redirect.' },
+      { title: 'Admin User', desc: 'Create the default admin user for HotSpot management.' },
+    ];
+
+    const saveCurrentStep = () => {
+      if (step.current === 0) { const el = document.getElementById('hs-wiz-interface'); data.interface = el ? el.value : ''; }
+      else if (step.current === 1) { const el = document.getElementById('hs-wiz-address'); data.address = el ? el.value : ''; }
+      else if (step.current === 2) { const s = document.getElementById('hs-wiz-pool-start'); const e = document.getElementById('hs-wiz-pool-end'); data.poolStart = s ? s.value : ''; data.poolEnd = e ? e.value : ''; }
+      else if (step.current === 3) { const el = document.getElementById('hs-wiz-dns'); data.dnsServers = el ? el.value : ''; }
+      else if (step.current === 4) { const el = document.getElementById('hs-wiz-dns-name'); data.dnsName = el ? el.value : ''; }
+      else if (step.current === 5) { const u = document.getElementById('hs-wiz-user'); const p = document.getElementById('hs-wiz-pass'); data.adminUsername = u ? u.value : ''; data.adminPassword = p ? p.value : ''; }
+    };
+
+    const validateStep = () => {
+      saveCurrentStep();
+      const checks = [
+        [!data.interface, 'Please select an interface'],
+        [!data.address, 'Please enter an IP address'],
+        [!data.poolStart || !data.poolEnd, 'Please enter pool start and end addresses'],
+        [!data.dnsServers, 'Please enter DNS servers'],
+        [!data.dnsName, 'Please enter a DNS name'],
+        [!data.adminUsername || !data.adminPassword, 'Please enter admin username and password'],
+      ];
+      const fail = checks[step.current];
+      if (fail && fail[0]) { this.toast(fail[1], 'error'); return false; }
+      return true;
+    };
+
+    const renderStepContent = () => {
+      const s = steps[step.current];
+      const total = steps.length;
+      const num = step.current + 1;
+      let fields = '';
+      if (step.current === 0) {
+        fields = `<div class="form-group"><label>HotSpot Interface</label><select id="hs-wiz-interface" class="form-control" required><option value="">Select interface...</option>${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}" ${data.interface === i.name ? 'selected' : ''}>${this.escapeHtml(i.name)}</option>`).join('')}</select></div>`;
+      } else if (step.current === 1) {
+        fields = `<div class="form-group"><label>IP Address</label><input type="text" id="hs-wiz-address" value="${this.escapeHtml(data.address)}" placeholder="e.g. 10.0.0.1/24" required></div>`;
+      } else if (step.current === 2) {
+        fields = `<div class="form-group"><label>Pool Start Address</label><input type="text" id="hs-wiz-pool-start" value="${this.escapeHtml(data.poolStart)}" placeholder="e.g. 10.0.0.10" required></div><div class="form-group"><label>Pool End Address</label><input type="text" id="hs-wiz-pool-end" value="${this.escapeHtml(data.poolEnd)}" placeholder="e.g. 10.0.0.254" required></div>`;
+      } else if (step.current === 3) {
+        fields = `<div class="form-group"><label>DNS Servers</label><input type="text" id="hs-wiz-dns" value="${this.escapeHtml(data.dnsServers)}" placeholder="e.g. 8.8.8.8,8.8.4.4" required></div>`;
+      } else if (step.current === 4) {
+        fields = `<div class="form-group"><label>DNS Name</label><input type="text" id="hs-wiz-dns-name" value="${this.escapeHtml(data.dnsName)}" placeholder="e.g. hotspot.local" required></div>`;
+      } else if (step.current === 5) {
+        fields = `<div class="form-group"><label>Admin Username</label><input type="text" id="hs-wiz-user" value="${this.escapeHtml(data.adminUsername)}" placeholder="e.g. admin" required></div><div class="form-group"><label>Admin Password</label><input type="password" id="hs-wiz-pass" value="${this.escapeHtml(data.adminPassword)}" placeholder="Password" required></div>`;
+      }
+      return `<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="font-size:13px;color:var(--text-muted)">Step ${num} of ${total}</span><div style="flex:1;height:4px;background:var(--border-color);border-radius:2px;overflow:hidden"><div style="width:${(num/total)*100}%;height:100%;background:var(--primary-color);border-radius:2px;transition:width 0.2s"></div></div></div><h3 style="margin:0 0 4px 0;font-size:16px">${s.title}</h3><p style="margin:0;font-size:13px;color:var(--text-muted)">${s.desc}</p></div>${fields}`;
+    };
+
+    const render = () => {
+      const isLast = step.current === steps.length - 1;
+      this.openModal('HotSpot Setup', renderStepContent(), [
+        { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+        {
+          label: 'Back',
+          class: 'btn btn-outline',
+          action: () => {
+            if (step.current > 0) { saveCurrentStep(); step.current--; render(); }
+          },
+        },
+        {
+          label: isLast ? 'Finish' : 'Next',
+          class: 'btn btn-primary',
+          action: async () => {
+            if (!validateStep()) return;
+            if (!isLast) { step.current++; render(); }
+            else {
+              try {
+                await api.setupHotspot(this.selectedRouterId, data);
+                this.closeModal();
+                this.toast('HotSpot setup complete', 'success');
+                this.loadHotspotSettingsTab();
+              } catch (err) {
+                this.toast(err.message, 'error');
+              }
+            }
+          },
+        },
+      ]);
+    };
+
+    render();
   },
 
   async showCreateIpBindingModal() {

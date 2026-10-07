@@ -76,9 +76,6 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    let mikrotikSuccess = 0;
-    let mikrotikFailed = 0;
-
     const insertMany = db.transaction(() => {
       for (let i = 0; i < quantity; i++) {
         const code = prefix ? `${prefix}-${generateCode()}` : generateCode();
@@ -103,23 +100,6 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           expiresAt
         );
 
-        if (mikroTikService.isConnected(routerId)) {
-          const hours = Math.floor(durationMinutes / 60);
-          const mins = durationMinutes % 60;
-          mikroTikService.createHotspotUser(routerId, {
-            username,
-            password,
-            profile: profile || 'default',
-            uptimeLimit: durationMinutes ? `${hours}:${String(mins).padStart(2, '0')}:00` : undefined,
-            comment: `Voucher: ${code}`,
-          })
-            .then(() => { mikrotikSuccess++; })
-            .catch((err) => {
-              mikrotikFailed++;
-              console.error('Failed to create hotspot user:', err);
-            });
-        }
-
         vouchers.push({
           code,
           username,
@@ -133,8 +113,28 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
 
     insertMany();
 
-    // Wait for MikroTik operations to complete
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    let mikrotikSuccess = 0;
+    let mikrotikFailed = 0;
+
+    if (mikroTikService.isConnected(routerId)) {
+      for (const v of vouchers) {
+        try {
+          const hours = v.durationMinutes ? Math.floor(v.durationMinutes / 60) : 0;
+          const mins = v.durationMinutes ? v.durationMinutes % 60 : 0;
+          await mikroTikService.createHotspotUser(routerId, {
+            username: v.username,
+            password: v.password,
+            profile: v.profile,
+            uptimeLimit: v.durationMinutes ? `${hours}:${String(mins).padStart(2, '0')}:00` : undefined,
+            comment: `Voucher: ${v.code}`,
+          });
+          mikrotikSuccess++;
+        } catch (err) {
+          mikrotikFailed++;
+          console.error(`Failed to create hotspot user ${v.username}:`, (err as Error).message);
+        }
+      }
+    }
 
     res.status(201).json({
       message: `Generated ${quantity} voucher(s)`,

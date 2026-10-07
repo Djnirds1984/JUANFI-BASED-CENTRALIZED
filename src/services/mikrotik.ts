@@ -290,7 +290,7 @@ class MikroTikService {
         password: user.password,
         profile: user.profile,
       };
-      if (user.uptimeLimit) body['uptime-limit'] = user.uptimeLimit;
+      if (user.uptimeLimit) body['limit-uptime'] = user.uptimeLimit;
       if (user.bytesInQuota) body['bytes-in-quota'] = user.bytesInQuota;
       if (user.bytesOutQuota) body['bytes-out-quota'] = user.bytesOutQuota;
       if (user.comment) body.comment = user.comment;
@@ -307,7 +307,7 @@ class MikroTikService {
       `=profile=${user.profile}`,
     ];
 
-    if (user.uptimeLimit) command.push(`=uptime-limit=${user.uptimeLimit}`);
+    if (user.uptimeLimit) command.push(`=limit-uptime=${user.uptimeLimit}`);
     if (user.bytesInQuota) command.push(`=bytes-in-quota=${user.bytesInQuota}`);
     if (user.bytesOutQuota) command.push(`=bytes-out-quota=${user.bytesOutQuota}`);
     if (user.comment) command.push(`=comment=${user.comment}`);

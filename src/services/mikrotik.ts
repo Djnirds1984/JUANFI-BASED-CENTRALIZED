@@ -598,7 +598,7 @@ class MikroTikService {
     const results: any = {};
     const skipIfExists = (err: any) => {
       const msg = String(err.message || err).toLowerCase();
-      return msg.includes('already have such') || msg.includes('already exists') || msg.includes('duplicate') || msg.includes('such name exists') || msg.includes('with such');
+      return msg.includes('already have such') || msg.includes('already exists') || msg.includes('duplicate') || msg.includes('such name exists') || msg.includes('with such') || msg.includes('unknown parameter');
     };
 
     try {
@@ -652,7 +652,7 @@ class MikroTikService {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/profile/add', {
             name: profileName,
-            'address-pool': poolName,
+            pool: poolName,
             'dns-server': config.dnsServers,
             'dns-name': config.dnsName,
           });
@@ -683,7 +683,7 @@ class MikroTikService {
           if (createResult && createResult['.id']) {
             try {
               await this.restApiCall(routerConfig!, 'PUT', `/ip/hotspot/${createResult['.id']}`, {
-                'address-pool': poolName,
+                pool: poolName,
               });
             } catch { /* pool linked through profile */ }
           }
@@ -708,7 +708,6 @@ class MikroTikService {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {
             name: userProfileName,
-            'address-pool': poolName,
             'rate-limit': '1M/1M',
           });
         } else {

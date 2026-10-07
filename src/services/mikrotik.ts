@@ -658,7 +658,6 @@ class MikroTikService {
         await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
           name: serverName,
           interface: config.interface,
-          'address-pool': poolName,
           profile: profileName,
         });
       } else {

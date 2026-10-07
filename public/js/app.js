@@ -3670,15 +3670,8 @@ const App = {
 
   toggleVendoFields() {
     const opt = parseInt(document.getElementById('subvendo-multiVendoOption').value);
-    console.log('toggleVendoFields called, option:', opt);
-    document.querySelectorAll('.vendo-hotspot-row').forEach(el => {
-      el.style.display = opt === 1 ? 'block' : 'none';
-      console.log('hotspot row display:', el.style.display);
-    });
-    document.querySelectorAll('.vendo-interface-row').forEach(el => {
-      el.style.display = opt === 2 ? 'block' : 'none';
-      console.log('interface row display:', el.style.display);
-    });
+    document.querySelectorAll('.vendo-hotspot-row').forEach(el => { el.style.display = opt === 1 ? 'block' : 'none'; });
+    document.querySelectorAll('.vendo-interface-row').forEach(el => { el.style.display = opt === 2 ? 'block' : 'none'; });
   },
 
   populateSubVendoForm(config) {

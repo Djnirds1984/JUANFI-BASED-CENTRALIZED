@@ -441,6 +441,156 @@ class MikroTikService {
     }
   }
 
+  async getHotspotServers(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const servers = await this.restApiCall(config, 'GET', '/ip/hotspot');
+      return Array.isArray(servers) ? servers : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/hotspot/print');
+    } catch (err) {
+      console.error(`getHotspotServers failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createHotspotServer(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createHotspotServer failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getWalledGarden(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const entries = await this.restApiCall(config, 'GET', '/ip/hotspot/walled-garden');
+      return Array.isArray(entries) ? entries : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/hotspot/walled-garden/print');
+    } catch (err) {
+      console.error(`getWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createWalledGarden(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/walled-garden', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/walled-garden/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async deleteWalledGarden(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/walled-garden/${id}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/walled-garden/remove', `=.id=${id}`]);
+    } catch (err) {
+      console.error(`deleteWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getHotspotCookie(routerId: number): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const cookie = await this.restApiCall(config, 'GET', '/ip/hotspot/cookie');
+      return Array.isArray(cookie) && cookie.length > 0 ? cookie[0] : null;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const result = await client.write('/ip/hotspot/cookie/print');
+      return Array.isArray(result) && result.length > 0 ? result[0] : null;
+    } catch (err) {
+      console.error(`getHotspotCookie failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async setHotspotCookie(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const existing = await this.getHotspotCookie(routerId);
+      if (existing && existing['.id']) {
+        return await this.restApiCall(config, 'PUT', `/ip/hotspot/cookie/${existing['.id']}`, data);
+      }
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/cookie', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const existing = await client.write('/ip/hotspot/cookie/print');
+      if (Array.isArray(existing) && existing.length > 0 && existing[0]['.id']) {
+        const command = ['/ip/hotspot/cookie/set', `=.id=${existing[0]['.id']}`];
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined && value !== null && value !== '') {
+            command.push(`=${key}=${value}`);
+          }
+        }
+        return await client.write(command);
+      } else {
+        const command = ['/ip/hotspot/cookie/add'];
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined && value !== null && value !== '') {
+            command.push(`=${key}=${value}`);
+          }
+        }
+        return await client.write(command);
+      }
+    } catch (err) {
+      console.error(`setHotspotCookie failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getInterfaces(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 

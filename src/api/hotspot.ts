@@ -203,4 +203,117 @@ router.get('/router/:routerId/hosts', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/router/:routerId/servers', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const servers = await mikroTikService.getHotspotServers(routerId);
+    res.json(servers);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/router/:routerId/servers', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.createHotspotServer(routerId, req.body);
+    res.status(201).json({ message: 'Hotspot server created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/router/:routerId/walled-garden', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const entries = await mikroTikService.getWalledGarden(routerId);
+    res.json(entries);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/router/:routerId/walled-garden', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.createWalledGarden(routerId, req.body);
+    res.status(201).json({ message: 'Walled garden entry created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/router/:routerId/walled-garden/:entryId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const entryId = req.params.entryId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    await mikroTikService.deleteWalledGarden(routerId, entryId);
+    res.json({ message: 'Walled garden entry deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/router/:routerId/cookie', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const cookie = await mikroTikService.getHotspotCookie(routerId);
+    res.json(cookie || {});
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/cookie', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.setHotspotCookie(routerId, req.body);
+    res.json({ message: 'Cookie settings updated successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

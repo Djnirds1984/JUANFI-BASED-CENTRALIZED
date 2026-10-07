@@ -294,6 +294,40 @@ body {
   font-weight: 600;
 }
 
+/* Settings Sections */
+.settings-section {
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.settings-section-header h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-form {
+  max-width: 500px;
+}
+
+.settings-form .form-group {
+  margin-bottom: 1rem;
+}
+
 /* Stats Grid */
 .stats-grid {
   display: grid;

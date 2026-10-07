@@ -127,6 +127,34 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/hosts`);
   }
 
+  async getHotspotServers(routerId) {
+    return this.get(`/hotspot/router/${routerId}/servers`);
+  }
+
+  async createHotspotServer(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/servers`, data);
+  }
+
+  async getWalledGarden(routerId) {
+    return this.get(`/hotspot/router/${routerId}/walled-garden`);
+  }
+
+  async createWalledGarden(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/walled-garden`, data);
+  }
+
+  async deleteWalledGarden(routerId, entryId) {
+    return this.delete(`/hotspot/router/${routerId}/walled-garden/${entryId}`);
+  }
+
+  async getHotspotCookie(routerId) {
+    return this.get(`/hotspot/router/${routerId}/cookie`);
+  }
+
+  async setHotspotCookie(routerId, data) {
+    return this.put(`/hotspot/router/${routerId}/cookie`, data);
+  }
+
   async getVouchers(routerId, params = {}) {
     const query = new URLSearchParams(params).toString();
     return this.get(`/vouchers/router/${routerId}${query ? '?' + query : ''}`);

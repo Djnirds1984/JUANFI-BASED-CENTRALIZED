@@ -85,6 +85,7 @@ const App = {
       overview: 'Overview',
       routers: 'Routers',
       hotspot: 'Hotspot Users',
+      'hotspot-settings': 'Hotspot Settings',
       vouchers: 'Vouchers',
       monitoring: 'Monitoring',
       portal: 'Portal',
@@ -104,6 +105,7 @@ const App = {
         case 'overview': await this.renderOverview(); break;
         case 'routers': await this.renderRouters(); break;
         case 'hotspot': await this.renderHotspot(); break;
+        case 'hotspot-settings': await this.renderHotspotSettings(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
@@ -681,6 +683,291 @@ const App = {
       await api.deleteHotspotUser(this.selectedRouterId, userId);
       this.toast('User removed', 'success');
       this.loadHotspotHosts();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async renderHotspotSettings() {
+    const content = document.getElementById('page-content');
+    const routers = (await api.getRouters()).filter((r) => r.connected);
+
+    if (routers.length === 0) {
+      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3></div>';
+      return;
+    }
+
+    if (!this.selectedRouterId || !routers.find((r) => r.id === this.selectedRouterId)) {
+      this.selectedRouterId = routers[0].id;
+    }
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Hotspot Settings</h3>
+          <select id="hotspot-settings-router-select" class="btn btn-outline">
+            ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div id="hotspot-settings-content">Loading...</div>
+      </div>
+    `;
+
+    document.getElementById('hotspot-settings-router-select').addEventListener('change', (e) => {
+      this.selectedRouterId = parseInt(e.target.value);
+      this.loadHotspotSettings();
+    });
+
+    this.loadHotspotSettings();
+  },
+
+  async loadHotspotSettings() {
+    const container = document.getElementById('hotspot-settings-content');
+    container.innerHTML = 'Loading...';
+
+    try {
+      const [servers, profiles, walledGarden, cookie] = await Promise.all([
+        api.getHotspotServers(this.selectedRouterId),
+        api.getHotspotProfiles(this.selectedRouterId),
+        api.getWalledGarden(this.selectedRouterId),
+        api.getHotspotCookie(this.selectedRouterId),
+      ]);
+
+      container.innerHTML = `
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <h4>Hotspot Servers</h4>
+            <button class="btn btn-primary btn-sm" onclick="App.showCreateServerModal()">Add Server</button>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Interface</th>
+                  <th>Address Pool</th>
+                  <th>Profile</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${servers.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No servers configured</td></tr>' : servers.map((s) => `
+                  <tr>
+                    <td>${this.escapeHtml(s.name || '-')}</td>
+                    <td>${this.escapeHtml(s.interface || '-')}</td>
+                    <td>${this.escapeHtml(s['address-pool'] || '-')}</td>
+                    <td>${this.escapeHtml(s.profile || '-')}</td>
+                    <td>${s.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <h4>Server Profiles</h4>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Address Pool</th>
+                  <th>Rate Limit</th>
+                  <th>Shared Users</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${profiles.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No profiles found</td></tr>' : profiles.map((p) => `
+                  <tr>
+                    <td>${this.escapeHtml(p.name || '-')}</td>
+                    <td>${this.escapeHtml(p['address-pool'] || '-')}</td>
+                    <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
+                    <td>${this.escapeHtml(p['shared-users'] || '1')}</td>
+                    <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <h4>Walled Garden</h4>
+            <button class="btn btn-primary btn-sm" onclick="App.showCreateWalledGardenModal()">Add Entry</button>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Host</th>
+                  <th>Action</th>
+                  <th>Comment</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${walledGarden.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No walled garden entries</td></tr>' : walledGarden.map((w) => `
+                  <tr>
+                    <td>${this.escapeHtml(w.host || '-')}</td>
+                    <td>${this.escapeHtml(w.action || '-')}</td>
+                    <td>${this.escapeHtml(w.comment || '-')}</td>
+                    <td>
+                      <button class="btn btn-sm btn-danger" onclick="App.deleteWalledGarden('${w['.id']}')">Delete</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <h4>Cookie Settings</h4>
+          </div>
+          <form id="cookie-settings-form" class="settings-form">
+            <div class="form-group">
+              <label>Cookie Lifetime</label>
+              <input type="text" name="lifetime" value="${this.escapeHtml(cookie.lifetime || '3d')}" placeholder="e.g. 3d, 1h, 30m">
+              <small style="color:var(--text-muted)">Format: number + unit (d=days, h=hours, m=minutes)</small>
+            </div>
+            <button type="submit" class="btn btn-primary">Save Cookie Settings</button>
+          </form>
+        </div>
+      `;
+
+      document.getElementById('cookie-settings-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const data = {
+          lifetime: formData.get('lifetime'),
+        };
+        try {
+          await api.setHotspotCookie(this.selectedRouterId, data);
+          this.toast('Cookie settings updated', 'success');
+        } catch (err) {
+          this.toast(err.message, 'error');
+        }
+      });
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async showCreateServerModal() {
+    let interfaces = [];
+    try {
+      interfaces = await api.getRouterInterfaces(this.selectedRouterId);
+    } catch (err) {
+      this.toast('Could not fetch interfaces', 'error');
+    }
+
+    this.openModal('Create Hotspot Server', `
+      <form id="create-server-form">
+        <div class="form-group">
+          <label>Server Name</label>
+          <input type="text" name="name" required placeholder="e.g. hotspot1">
+        </div>
+        <div class="form-group">
+          <label>Interface</label>
+          <select name="interface" class="form-control" required>
+            <option value="">Select interface...</option>
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}">${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <input type="text" name="address-pool" placeholder="e.g. dhcp-pool1">
+        </div>
+        <div class="form-group">
+          <label>Profile</label>
+          <input type="text" name="profile" value="default" placeholder="e.g. default">
+        </div>
+        <div class="form-group">
+          <label>Addresses</label>
+          <input type="text" name="addresses" placeholder="e.g. 192.168.1.0/24">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Create',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('create-server-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => {
+            if (value) data[key] = value;
+          });
+          try {
+            await api.createHotspotServer(this.selectedRouterId, data);
+            this.closeModal();
+            this.toast('Hotspot server created', 'success');
+            this.loadHotspotSettings();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showCreateWalledGardenModal() {
+    this.openModal('Add Walled Garden Entry', `
+      <form id="create-walled-garden-form">
+        <div class="form-group">
+          <label>Host</label>
+          <input type="text" name="host" required placeholder="e.g. *.example.com or 192.168.1.0/24">
+        </div>
+        <div class="form-group">
+          <label>Action</label>
+          <select name="action" class="form-control" required>
+            <option value="accept">Accept</option>
+            <option value="reject">Reject</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comment (optional)</label>
+          <input type="text" name="comment" placeholder="e.g. Allow Facebook">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Add',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('create-walled-garden-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => {
+            if (value) data[key] = value;
+          });
+          try {
+            await api.createWalledGarden(this.selectedRouterId, data);
+            this.closeModal();
+            this.toast('Walled garden entry added', 'success');
+            this.loadHotspotSettings();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async deleteWalledGarden(entryId) {
+    if (!confirm('Delete this walled garden entry?')) return;
+    try {
+      await api.deleteWalledGarden(this.selectedRouterId, entryId);
+      this.toast('Walled garden entry deleted', 'success');
+      this.loadHotspotSettings();
     } catch (err) {
       this.toast(err.message, 'error');
     }

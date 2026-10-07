@@ -89,6 +89,7 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
+      nodemcu: 'NodeMCU',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -108,6 +109,7 @@ const App = {
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'nodemcu': await this.renderNodeMcu(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -1522,6 +1524,511 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
     });
 
     document.getElementById('modal-overlay').classList.add('active');
+  },
+
+  _nodemcuRefreshInterval: null,
+  _nodemcuSelectedId: null,
+  _nodemcuTab: 'dashboard',
+
+  async renderNodeMcu() {
+    const content = document.getElementById('page-content');
+    const data = await api.nodemcuListDevices();
+    const devices = data.devices || [];
+    this._nodemcuDevices = devices;
+
+    if (devices.length === 0) {
+      content.innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <h3>NodeMCU Vending Machines</h3>
+          </div>
+          <div class="empty-state">
+            <h3>No NodeMCU devices configured</h3>
+            <p>Add a JuanFI NodeMCU vending machine to manage it from this panel.</p>
+            <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!this._nodemcuSelectedId || !devices.find(d => d.id === this._nodemcuSelectedId)) {
+      this._nodemcuSelectedId = devices[0].id;
+    }
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>NodeMCU Vending Machines</h3>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <select id="nodemcu-device-select" class="btn btn-outline" onchange="App.selectNodeMcuDevice(this.value)">
+              ${devices.map(d => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
+            </select>
+            <button class="btn btn-sm btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
+            <button class="btn btn-sm btn-outline" onclick="App.showEditNodeMcuDevice()">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="App.deleteNodeMcuDevice()">Delete</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1rem">
+          <button class="btn btn-sm ${this._nodemcuTab === 'dashboard' ? 'btn-primary' : 'btn-outline'}" onclick="App.switchNodeMcuTab('dashboard')">Dashboard</button>
+          <button class="btn btn-sm ${this._nodemcuTab === 'config' ? 'btn-primary' : 'btn-outline'}" onclick="App.switchNodeMcuTab('config')">Configuration</button>
+          <button class="btn btn-sm ${this._nodemcuTab === 'rates' ? 'btn-primary' : 'btn-outline'}" onclick="App.switchNodeMcuTab('rates')">Rates</button>
+          <button class="btn btn-sm ${this._nodemcuTab === 'control' ? 'btn-primary' : 'btn-outline'}" onclick="App.switchNodeMcuTab('control')">Controls</button>
+        </div>
+        <div id="nodemcu-tab-content"><div class="empty-state"><p>Loading...</p></div></div>
+      </div>
+    `;
+
+    this.loadNodeMcuTab();
+  },
+
+  switchNodeMcuTab(tab) {
+    this._nodemcuTab = tab;
+    if (this._nodemcuRefreshInterval) {
+      clearInterval(this._nodemcuRefreshInterval);
+      this._nodemcuRefreshInterval = null;
+    }
+    this.renderNodeMcu();
+  },
+
+  selectNodeMcuDevice(id) {
+    this._nodemcuSelectedId = parseInt(id);
+    if (this._nodemcuRefreshInterval) {
+      clearInterval(this._nodemcuRefreshInterval);
+      this._nodemcuRefreshInterval = null;
+    }
+    this.loadNodeMcuTab();
+  },
+
+  async loadNodeMcuTab() {
+    const container = document.getElementById('nodemcu-tab-content');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+
+    try {
+      switch (this._nodemcuTab) {
+        case 'dashboard': await this.loadNodeMcuDashboard(container); break;
+        case 'config': await this.loadNodeMcuConfig(container); break;
+        case 'rates': await this.loadNodeMcuRates(container); break;
+        case 'control': await this.loadNodeMcuControl(container); break;
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+    }
+  },
+
+  async loadNodeMcuDashboard(container) {
+    const d = await api.nodemcuDashboard(this._nodemcuSelectedId);
+    const uptimeSec = Math.floor(d.uptimeMs / 1000);
+    const fmtUptime = (s) => {
+      const days = Math.floor(s / 86400);
+      const hrs = Math.floor((s % 86400) / 3600);
+      const mins = Math.floor((s % 3600) / 60);
+      return days > 0 ? `${days}d ${hrs}h ${mins}m` : `${hrs}h ${mins}m`;
+    };
+
+    container.innerHTML = `
+      <div class="overview-grid">
+        <div class="dash-card">
+          <div class="dash-card-title">System Status</div>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+            <div style="display:flex;justify-content:space-between"><span>Internet</span><span style="color:${d.internetOnline ? '#4caf50' : '#f44336'}">${d.internetOnline ? 'Online' : 'Offline'}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>MikroTik</span><span style="color:${d.mikrotikConnected ? '#4caf50' : '#f44336'}">${d.mikrotikConnected ? 'Connected' : 'Disconnected'}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Uptime</span><span>${fmtUptime(uptimeSec)}</span></div>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Sales</div>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+            <div style="display:flex;justify-content:space-between"><span>Lifetime</span><span>${d.lifetimeCoins} coins</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Current Session</span><span>${d.currentCoins} coins</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Customers Served</span><span>${d.customerCount}</span></div>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Device Info</div>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+            <div style="display:flex;justify-content:space-between"><span>Hardware</span><span>${this.escapeHtml(d.hardwareType)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Firmware</span><span>v${this.escapeHtml(d.firmwareVersion)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Interface</span><span>${this.escapeHtml(d.interfaceType)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Signal</span><span>${d.signalStrength}%</span></div>
+            <div style="display:flex;justify-content:space-between"><span>MAC</span><span>${this.escapeHtml(d.macAddress)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>IP</span><span>${this.escapeHtml(d.ipAddress)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Free Heap</span><span>${d.freeHeap} bytes</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <button class="btn btn-sm btn-outline" onclick="App.loadNodeMcuTab()">Refresh</button>
+        <button class="btn btn-sm btn-outline" onclick="App.startNodeMcuAutoRefresh()" id="nodemcu-auto-refresh-btn">Auto-Refresh (10s)</button>
+      </div>
+    `;
+  },
+
+  startNodeMcuAutoRefresh() {
+    if (this._nodemcuRefreshInterval) {
+      clearInterval(this._nodemcuRefreshInterval);
+      this._nodemcuRefreshInterval = null;
+      const btn = document.getElementById('nodemcu-auto-refresh-btn');
+      if (btn) btn.textContent = 'Auto-Refresh (10s)';
+      return;
+    }
+    const btn = document.getElementById('nodemcu-auto-refresh-btn');
+    if (btn) btn.textContent = 'Stop Auto-Refresh';
+    this._nodemcuRefreshInterval = setInterval(() => {
+      if (this._nodemcuTab === 'dashboard' && this.currentPage === 'nodemcu') {
+        this.loadNodeMcuDashboard(document.getElementById('nodemcu-tab-content'));
+      }
+    }, 10000);
+  },
+
+  async loadNodeMcuConfig(container) {
+    const config = await api.nodemcuGetConfig(this._nodemcuSelectedId);
+    const pinOptions = ['NONE', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8'];
+    const pinSelect = (id, val) => `<select id="nc-${id}" class="form-control">${pinOptions.map(p => `<option value="${p === 'NONE' ? 'NONE' : p}" ${val === p ? 'selected' : ''}>${p}</option>`).join('')}</select>`;
+    const lcdOptions = [{v:'0',l:'None'},{v:'1',l:'16x2'},{v:'2',l:'20x4'}];
+    const lcdSelect = (val) => `<select id="nc-lcdScreen" class="form-control">${lcdOptions.map(o => `<option value="${o.v}" ${val === o.v ? 'selected' : ''}>${o.l}</option>`).join('')}</select>`;
+
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+        <div>
+          <h4 style="margin-bottom:0.5rem">Vendo & WiFi</h4>
+          <div class="form-row"><label>Vendo Name</label><input id="nc-vendoName" class="form-control" value="${this.escapeHtml(config.vendoName)}"></div>
+          <div class="form-row"><label>WiFi SSID</label><input id="nc-wifiSSID" class="form-control" value="${this.escapeHtml(config.wifiSSID)}"></div>
+          <div class="form-row"><label>WiFi Password</label><input id="nc-wifiPassword" class="form-control" type="password" value="${this.escapeHtml(config.wifiPassword)}"></div>
+          <div class="form-row"><label>IP Mode</label><select id="nc-ipAddressMode" class="form-control"><option value="0" ${config.ipAddressMode==='0'?'selected':''}>DHCP</option><option value="1" ${config.ipAddressMode==='1'?'selected':''}>Static</option></select></div>
+          <div class="form-row"><label>Local IP</label><input id="nc-localIpAddress" class="form-control" value="${this.escapeHtml(config.localIpAddress)}"></div>
+          <div class="form-row"><label>Gateway</label><input id="nc-gatewayIp" class="form-control" value="${this.escapeHtml(config.gatewayIp)}"></div>
+          <div class="form-row"><label>Subnet</label><input id="nc-subnetMask" class="form-control" value="${this.escapeHtml(config.subnetMask)}"></div>
+          <div class="form-row"><label>DNS</label><input id="nc-dnsServer" class="form-control" value="${this.escapeHtml(config.dnsServer)}"></div>
+
+          <h4 style="margin:1rem 0 0.5rem">MikroTik Connection</h4>
+          <div class="form-row"><label>MikroTik IP</label><input id="nc-mikrotikIp" class="form-control" value="${this.escapeHtml(config.mikrotikIp)}"></div>
+          <div class="form-row"><label>Username</label><input id="nc-mikrotikUser" class="form-control" value="${this.escapeHtml(config.mikrotikUser)}"></div>
+          <div class="form-row"><label>Password</label><input id="nc-mikrotikPassword" class="form-control" type="password" value="${this.escapeHtml(config.mikrotikPassword)}"></div>
+          <div class="form-row"><label>Connection Mode</label><select id="nc-mtConnectionMode" class="form-control"><option value="0" ${config.mtConnectionMode==='0'?'selected':''}>On-Demand</option><option value="1" ${config.mtConnectionMode==='1'?'selected':''}>Keep Alive</option></select></div>
+        </div>
+        <div>
+          <h4 style="margin-bottom:0.5rem">Coin Slot</h4>
+          <div class="form-row"><label>Coin Slot Type</label><select id="nc-coinSlotType" class="form-control"><option value="0" ${config.coinSlotType==='0'?'selected':''}>Universal</option><option value="1" ${config.coinSlotType==='1'?'selected':''}>Multicoin</option></select></div>
+          <div class="form-row"><label>Wait Time (sec)</label><input id="nc-coinSlotWaitTime" class="form-control" type="number" value="${this.escapeHtml(config.coinSlotWaitTime)}"></div>
+          <div class="form-row"><label>Abuse Count</label><input id="nc-coinSlotAbuseCount" class="form-control" type="number" value="${this.escapeHtml(config.coinSlotAbuseCount)}"></div>
+          <div class="form-row"><label>Ban Minutes</label><input id="nc-coinSlotBanMinutes" class="form-control" type="number" value="${this.escapeHtml(config.coinSlotBanMinutes)}"></div>
+          <div class="form-row"><label>Coin Multiplier</label><input id="nc-coinMultiplier" class="form-control" type="number" value="${this.escapeHtml(config.coinMultiplier)}"></div>
+          <div class="form-row"><label>Pulse Count</label><input id="nc-singleCoinPulseCount" class="form-control" type="number" value="${this.escapeHtml(config.singleCoinPulseCount)}"></div>
+
+          <h4 style="margin:1rem 0 0.5rem">Voucher</h4>
+          <div class="form-row"><label>Prefix</label><input id="nc-voucherPrefix" class="form-control" value="${this.escapeHtml(config.voucherPrefix)}"></div>
+          <div class="form-row"><label>Login Option</label><select id="nc-voucherLoginOption" class="form-control"><option value="0" ${config.voucherLoginOption==='0'?'selected':''}>Username only</option><option value="1" ${config.voucherLoginOption==='1'?'selected':''}>Username + Password</option></select></div>
+          <div class="form-row"><label>Profile</label><input id="nc-voucherProfile" class="form-control" value="${this.escapeHtml(config.voucherProfile)}"></div>
+          <div class="form-row"><label>Length</label><input id="nc-voucherLength" class="form-control" type="number" value="${this.escapeHtml(config.voucherLength)}"></div>
+          <div class="form-row"><label>Validity Mode</label><select id="nc-voucherValidity" class="form-control"><option value="0" ${config.voucherValidity==='0'?'selected':''}>First Validity</option><option value="1" ${config.voucherValidity==='1'?'selected':''}>First + Extend</option></select></div>
+
+          <h4 style="margin:1rem 0 0.5rem">Credentials</h4>
+          <div class="form-row"><label>Admin User</label><input id="nc-adminUser" class="form-control" value="${this.escapeHtml(config.adminUser)}"></div>
+          <div class="form-row"><label>Admin Password</label><input id="nc-adminPassword" class="form-control" type="password" value="${this.escapeHtml(config.adminPassword)}"></div>
+          <div class="form-row"><label>API Key</label><input id="nc-apiKey" class="form-control" value="${this.escapeHtml(config.apiKey)}"></div>
+        </div>
+      </div>
+      <div style="margin-top:1.5rem;display:flex;gap:0.5rem">
+        <button class="btn btn-primary" onclick="App.saveNodeMcuConfig()">Save Configuration</button>
+        <span style="color:#f44336;font-size:0.85rem;align-self:center">Warning: Saving will restart the device</span>
+      </div>
+    `;
+  },
+
+  async saveNodeMcuConfig() {
+    const fields = ['vendoName','wifiSSID','wifiPassword','mikrotikIp','mikrotikUser','mikrotikPassword',
+      'coinSlotWaitTime','adminUser','adminPassword','coinSlotAbuseCount','coinSlotBanMinutes',
+      'coinSlotPin','coinSlotSetPin','systemReadyLedPin','insertCoinLedPin','lcdScreen',
+      'insertCoinBtnPin','checkInternetStatus','voucherPrefix','welcomeLCDMarquee','setupDoneFlag',
+      'voucherLoginOption','voucherProfile','voucherValidity','ledTriggerType','ipAddressMode',
+      'localIpAddress','gatewayIp','subnetMask','dnsServer','coinSlotType','singleCoinPulseCount',
+      'mtConnectionMode','operatorUser','operatorPassword','apiKey','nightLightPin',
+      'buttonFunction','voucherLength','coinMultiplier','lanModeOverride','lcdSDAPin','lcdSCLPin',
+      'billAcceptorPin','billAcceptorMultiplier','thermalPrinterPin','printOption',
+      'printOptionCriteria','lanCSPin','persistLogs','includeVendoName','welcomeTextFirstLine',
+      'welcomeTextThirdLine','insertCoinText','thankYouText','restartSchedule','blackoutDetection',
+      'buzzerPin','printerBaudRate','pulseToBlock','thankYouTimeout','ethBootUpPin','ethPowerPin',
+      'ethMdcPin','ethMdioPin'];
+
+    const current = await api.nodemcuGetConfig(this._nodemcuSelectedId);
+    const config = { ...current };
+    for (const f of fields) {
+      const el = document.getElementById(`nc-${f}`);
+      if (el) config[f] = el.value;
+    }
+
+    try {
+      await api.nodemcuSaveConfig(this._nodemcuSelectedId, config);
+      this.toast('Configuration saved. Device restarting...', 'success');
+    } catch (err) {
+      this.toast('Save failed: ' + err.message, 'error');
+    }
+  },
+
+  async loadNodeMcuRates(container) {
+    const data = await api.nodemcuGetRates(this._nodemcuSelectedId);
+    const rates = data.rates || [];
+
+    container.innerHTML = `
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+          <h4 style="margin:0">Promo Rates</h4>
+          <div style="display:flex;gap:0.5rem">
+            <button class="btn btn-sm btn-outline" onclick="App.addNodeMcuRate()">Add Rate</button>
+            <button class="btn btn-sm btn-primary" onclick="App.saveNodeMcuRates()">Save Rates</button>
+          </div>
+        </div>
+        <table class="table" id="nodemcu-rates-table">
+          <thead>
+            <tr><th>Name</th><th>Price</th><th>Minutes</th><th>Validity (min)</th><th>Data Limit (MB)</th><th>Profile</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${rates.map((r, i) => `
+              <tr data-idx="${i}">
+                <td><input class="form-control rate-name" value="${this.escapeHtml(r.name)}"></td>
+                <td><input class="form-control rate-price" type="number" value="${r.price}"></td>
+                <td><input class="form-control rate-minutes" type="number" value="${r.minutes}"></td>
+                <td><input class="form-control rate-validity" type="number" value="${r.validity}"></td>
+                <td><input class="form-control rate-datalimit" type="number" value="${r.dataLimit}"></td>
+                <td><input class="form-control rate-profile" value="${this.escapeHtml(r.profile)}"></td>
+                <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()">X</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  addNodeMcuRate() {
+    const tbody = document.querySelector('#nodemcu-rates-table tbody');
+    const idx = tbody.children.length;
+    const tr = document.createElement('tr');
+    tr.dataset.idx = idx;
+    tr.innerHTML = `
+      <td><input class="form-control rate-name" value="New Rate"></td>
+      <td><input class="form-control rate-price" type="number" value="1"></td>
+      <td><input class="form-control rate-minutes" type="number" value="10"></td>
+      <td><input class="form-control rate-validity" type="number" value="20"></td>
+      <td><input class="form-control rate-datalimit" type="number" value="0"></td>
+      <td><input class="form-control rate-profile" value=""></td>
+      <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()">X</button></td>
+    `;
+    tbody.appendChild(tr);
+  },
+
+  async saveNodeMcuRates() {
+    const rows = document.querySelectorAll('#nodemcu-rates-table tbody tr');
+    const rates = [];
+    rows.forEach(row => {
+      rates.push({
+        name: row.querySelector('.rate-name').value,
+        price: parseInt(row.querySelector('.rate-price').value) || 0,
+        minutes: parseInt(row.querySelector('.rate-minutes').value) || 0,
+        validity: parseInt(row.querySelector('.rate-validity').value) || 0,
+        dataLimit: parseInt(row.querySelector('.rate-datalimit').value) || 0,
+        profile: row.querySelector('.rate-profile').value,
+      });
+    });
+    try {
+      await api.nodemcuSaveRates(this._nodemcuSelectedId, rates);
+      this.toast('Rates saved', 'success');
+    } catch (err) {
+      this.toast('Save failed: ' + err.message, 'error');
+    }
+  },
+
+  async loadNodeMcuControl(container) {
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+        <div class="dash-card">
+          <div class="dash-card-title">System Controls</div>
+          <div style="display:flex;flex-direction:column;gap:0.75rem;margin-top:0.5rem">
+            <button class="btn btn-outline" onclick="App.nodemcuRestart()">Restart NodeMCU</button>
+            <button class="btn btn-outline" onclick="App.nodemcuRestartMikrotik()">Restart MikroTik</button>
+            <button class="btn btn-outline" onclick="App.nodemcuToggleNightLight()">Toggle Night Light</button>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Reset Statistics</div>
+          <div style="display:flex;flex-direction:column;gap:0.75rem;margin-top:0.5rem">
+            <button class="btn btn-outline" onclick="App.nodemcuResetStats('coinCount')">Reset Current Coins</button>
+            <button class="btn btn-outline" onclick="App.nodemcuResetStats('customerCount')">Reset Customer Count</button>
+            <button class="btn btn-danger" onclick="App.nodemcuResetStats('lifeTimeCount')">Reset Lifetime Count</button>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Generate Vouchers</div>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+            <div class="form-row"><label>Amount (coins)</label><input id="nc-gen-amount" class="form-control" type="number" value="5"></div>
+            <div class="form-row"><label>Quantity</label><input id="nc-gen-qty" class="form-control" type="number" value="1"></div>
+            <div class="form-row"><label>Prefix</label><input id="nc-gen-prefix" class="form-control" value="P"></div>
+            <label class="checkbox-label"><input type="checkbox" id="nc-gen-sales"><span>Add to Sales</span></label>
+            <button class="btn btn-primary" onclick="App.nodemcuGenerateVouchers()">Generate</button>
+            <div id="nc-gen-result"></div>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">WiFi Scan</div>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+            <button class="btn btn-outline" onclick="App.nodemcuScanSSID()">Scan Networks</button>
+            <div id="nc-ssid-result"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  async nodemcuRestart() {
+    if (!confirm('Restart this NodeMCU device?')) return;
+    try {
+      await api.nodemcuRestart(this._nodemcuSelectedId);
+      this.toast('Restart command sent', 'success');
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  async nodemcuRestartMikrotik() {
+    if (!confirm('Restart MikroTik from this NodeMCU?')) return;
+    try {
+      await api.nodemcuRestartMikrotik(this._nodemcuSelectedId);
+      this.toast('MikroTik restart command sent', 'success');
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  async nodemcuToggleNightLight() {
+    try {
+      await api.nodemcuToggleNightLight(this._nodemcuSelectedId);
+      this.toast('Night light toggled', 'success');
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  async nodemcuResetStats(type) {
+    if (!confirm(`Reset ${type}?`)) return;
+    try {
+      await api.nodemcuResetStats(this._nodemcuSelectedId, type);
+      this.toast('Statistics reset', 'success');
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  async nodemcuGenerateVouchers() {
+    const amount = parseInt(document.getElementById('nc-gen-amount').value) || 0;
+    const qty = parseInt(document.getElementById('nc-gen-qty').value) || 0;
+    const prefix = document.getElementById('nc-gen-prefix').value;
+    const addToSales = document.getElementById('nc-gen-sales').checked;
+    try {
+      const data = await api.nodemcuGenerateVouchers(this._nodemcuSelectedId, amount, qty, prefix, addToSales);
+      const parts = (data.raw || '').split('|');
+      const vouchers = (parts[3] || '').split('#').filter(Boolean);
+      document.getElementById('nc-gen-result').innerHTML = vouchers.length > 0
+        ? `<div style="margin-top:0.5rem"><strong>Generated:</strong><br>${vouchers.map(v => this.escapeHtml(v)).join('<br>')}</div>`
+        : '<div style="margin-top:0.5rem;color:#f44336">No vouchers generated</div>';
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  async nodemcuScanSSID() {
+    const container = document.getElementById('nc-ssid-result');
+    container.innerHTML = '<p>Scanning...</p>';
+    try {
+      const data = await api.nodemcuScanSSID(this._nodemcuSelectedId);
+      const ssids = data.ssids || [];
+      container.innerHTML = ssids.length > 0
+        ? `<div style="margin-top:0.5rem">${ssids.map(s => `<div>${this.escapeHtml(s)}</div>`).join('')}</div>`
+        : '<div style="margin-top:0.5rem">No networks found</div>';
+    } catch (err) { container.innerHTML = `<div style="color:#f44336">${this.escapeHtml(err.message)}</div>`; }
+  },
+
+  showAddNodeMcuDevice() {
+    const modal = document.getElementById('modal-overlay');
+    const body = document.getElementById('modal-body');
+    const title = document.getElementById('modal-title');
+    title.textContent = 'Add NodeMCU Device';
+    body.innerHTML = `
+      <div class="form-row"><label>Device Name</label><input id="nd-name" class="form-control" placeholder="e.g. Vendo 1"></div>
+      <div class="form-row"><label>IP Address</label><input id="nd-ip" class="form-control" placeholder="10.0.0.243"></div>
+      <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="admin"></div>
+      <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password"></div>
+    `;
+    const footer = document.getElementById('modal-footer');
+    footer.innerHTML = '';
+    const btns = [
+      { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
+      { label: 'Add', cls: 'btn-primary', action: async () => {
+        try {
+          await api.nodemcuAddDevice({
+            name: document.getElementById('nd-name').value,
+            ip: document.getElementById('nd-ip').value,
+            username: document.getElementById('nd-user').value,
+            password: document.getElementById('nd-pass').value,
+          });
+          this.closeModal();
+          this.toast('Device added', 'success');
+          this.renderNodeMcu();
+        } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+      }},
+    ];
+    btns.forEach(btn => {
+      const el = document.createElement('button');
+      el.className = `btn ${btn.cls}`;
+      el.textContent = btn.label;
+      el.addEventListener('click', btn.action);
+      footer.appendChild(el);
+    });
+    modal.classList.add('active');
+  },
+
+  showEditNodeMcuDevice() {
+    const devices = this._nodemcuDevices || [];
+    const device = devices.find(d => d.id === this._nodemcuSelectedId);
+    if (!device) return;
+
+    const modal = document.getElementById('modal-overlay');
+    const body = document.getElementById('modal-body');
+    const title = document.getElementById('modal-title');
+    title.textContent = 'Edit NodeMCU Device';
+    body.innerHTML = `
+      <div class="form-row"><label>Device Name</label><input id="nd-name" class="form-control" value="${this.escapeHtml(device.name)}"></div>
+      <div class="form-row"><label>IP Address</label><input id="nd-ip" class="form-control" value="${this.escapeHtml(device.ip)}"></div>
+      <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="${this.escapeHtml(device.username)}"></div>
+      <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password" value="${this.escapeHtml(device.password)}"></div>
+    `;
+    const footer = document.getElementById('modal-footer');
+    footer.innerHTML = '';
+    const btns = [
+      { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
+      { label: 'Save', cls: 'btn-primary', action: async () => {
+        try {
+          await api.nodemcuUpdateDevice(this._nodemcuSelectedId, {
+            name: document.getElementById('nd-name').value,
+            ip: document.getElementById('nd-ip').value,
+            username: document.getElementById('nd-user').value,
+            password: document.getElementById('nd-pass').value,
+          });
+          this.closeModal();
+          this.toast('Device updated', 'success');
+          this.renderNodeMcu();
+        } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+      }},
+    ];
+    btns.forEach(btn => {
+      const el = document.createElement('button');
+      el.className = `btn ${btn.cls}`;
+      el.textContent = btn.label;
+      el.addEventListener('click', btn.action);
+      footer.appendChild(el);
+    });
+    modal.classList.add('active');
+  },
+
+  async deleteNodeMcuDevice() {
+    if (!confirm('Delete this NodeMCU device?')) return;
+    try {
+      await api.nodemcuDeleteDevice(this._nodemcuSelectedId);
+      this._nodemcuSelectedId = null;
+      this.toast('Device deleted', 'success');
+      this.renderNodeMcu();
+    } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
   },
 
   closeModal() {

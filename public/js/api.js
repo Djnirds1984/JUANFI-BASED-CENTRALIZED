@@ -203,6 +203,87 @@ class ApiClient {
   async pushSubVendoConfig(routerId) {
     return this.post(`/subvendo/push/${routerId}`, {});
   }
+
+  // NodeMCU devices
+  async nodemcuListDevices() {
+    return this.get('/nodemcu/devices');
+  }
+
+  async nodemcuAddDevice(data) {
+    return this.post('/nodemcu/devices', data);
+  }
+
+  async nodemcuUpdateDevice(id, data) {
+    return this.put(`/nodemcu/devices/${id}`, data);
+  }
+
+  async nodemcuDeleteDevice(id) {
+    return this.delete(`/nodemcu/devices/${id}`);
+  }
+
+  async nodemcuDashboard(id) {
+    return this.get(`/nodemcu/devices/${id}/dashboard`);
+  }
+
+  async nodemcuGetConfig(id) {
+    return this.get(`/nodemcu/devices/${id}/config`);
+  }
+
+  async nodemcuSaveConfig(id, config) {
+    return this.put(`/nodemcu/devices/${id}/config`, config);
+  }
+
+  async nodemcuGetRates(id) {
+    return this.get(`/nodemcu/devices/${id}/rates`);
+  }
+
+  async nodemcuSaveRates(id, rates) {
+    return this.put(`/nodemcu/devices/${id}/rates`, { rates });
+  }
+
+  async nodemcuRestart(id) {
+    return this.post(`/nodemcu/devices/${id}/restart`);
+  }
+
+  async nodemcuRestartMikrotik(id) {
+    return this.post(`/nodemcu/devices/${id}/restart-mikrotik`);
+  }
+
+  async nodemcuResetStats(id, type) {
+    return this.post(`/nodemcu/devices/${id}/reset-stats`, { type });
+  }
+
+  async nodemcuToggleNightLight(id) {
+    return this.post(`/nodemcu/devices/${id}/toggle-night-light`);
+  }
+
+  async nodemcuGenerateVouchers(id, amount, qty, prefix, addToSales) {
+    return this.post(`/nodemcu/devices/${id}/generate-vouchers`, { amount, qty, prefix, addToSales });
+  }
+
+  async nodemcuScanSSID(id) {
+    return this.post(`/nodemcu/devices/${id}/scan-ssid`);
+  }
+
+  async nodemcuGetActiveUsers(id) {
+    return this.get(`/nodemcu/devices/${id}/active-users`);
+  }
+
+  async nodemcuKickUser(id, macAddress) {
+    return this.post(`/nodemcu/devices/${id}/kick-user`, { macAddress });
+  }
+
+  async nodemcuGetSales(id) {
+    return this.get(`/nodemcu/devices/${id}/sales`);
+  }
+
+  async nodemcuGetLogs(id) {
+    return this.get(`/nodemcu/devices/${id}/logs`);
+  }
+
+  async nodemcuPing(id) {
+    return this.get(`/nodemcu/devices/${id}/ping`);
+  }
 }
 
 window.api = new ApiClient();

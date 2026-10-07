@@ -175,9 +175,15 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
 
 router.get('/config', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(CONFIG_PATH) as any;
-    const content = row ? row.content : getPortalDefaultContent(CONFIG_PATH);
+    const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
+    let content: string | null = null;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {}
+
+    if (!content) {
+      content = getPortalDefaultContent(CONFIG_PATH);
+    }
 
     if (!content) {
       res.status(404).json({ error: 'Config file not found' });
@@ -236,14 +242,16 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
-    const db = getDb();
-    const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(CONFIG_PATH) as any;
-    if (!row) {
-      res.status(404).json({ error: 'Config file not found in database' });
+    const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
+    let content: string | Buffer;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      res.status(404).json({ error: 'Config file not found on disk' });
       return;
     }
 
-    await mikroTikService.uploadFileSFTP(routerId, ROUTER_CONFIG_PATH, row.content);
+    await mikroTikService.uploadFileSFTP(routerId, ROUTER_CONFIG_PATH, content);
     res.json({ message: 'Config pushed to router' });
   } catch (error: any) {
     console.error('Push SubVendo config error:', error);

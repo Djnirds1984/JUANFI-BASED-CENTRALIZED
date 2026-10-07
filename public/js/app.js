@@ -2142,6 +2142,7 @@ const App = {
         data['mvrp'] = form.querySelector('[name="mvrp"]').checked ? 'yes' : 'no';
         if (!data['mac-address']) delete data['mac-address'];
         if (!data['vrf-interface']) delete data['vrf-interface'];
+        if (!data['arp-timeout']) delete data['arp-timeout'];
         try {
           await api.createVlan(this.selectedRouterId, data);
           this.closeModal(); this.toast('VLAN created', 'success'); this.loadInterfacesTab();

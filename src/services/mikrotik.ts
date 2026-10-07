@@ -79,7 +79,9 @@ class MikroTikService {
     const response = await fetch(url, options);
 
     if (!response.ok) {
-      throw new Error(`REST API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      console.error(`REST API ${method} ${path} failed: ${response.status} ${response.statusText}`, errorText);
+      throw new Error(`REST API error: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
     const text = await response.text();

@@ -2107,7 +2107,6 @@ const App = {
         <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. vlan100"></div>
         <div class="form-group"><label>Type</label><input type="text" value="VLAN" readonly class="form-control"></div>
         <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
-        <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="1500"></div>
         <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" placeholder="main (optional)"></div>
         <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" placeholder="XX:XX:XX:XX:XX:XX (optional)"></div>
         <div class="form-group"><label>ARP</label>
@@ -2143,6 +2142,7 @@ const App = {
         if (!data['mac-address']) delete data['mac-address'];
         if (!data['vrf-interface']) delete data['vrf-interface'];
         if (!data['arp-timeout']) delete data['arp-timeout'];
+        delete data['l2-mtu'];
         try {
           await api.createVlan(this.selectedRouterId, data);
           this.closeModal(); this.toast('VLAN created', 'success'); this.loadInterfacesTab();
@@ -2165,7 +2165,7 @@ const App = {
         <div class="form-group"><label>Type</label><input type="text" value="VLAN" readonly class="form-control"></div>
         <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="${this.escapeHtml(vlan.mtu || '1500')}"></div>
         <div class="form-group"><label>Actual MTU</label><input type="text" value="${this.escapeHtml(vlan['actual-mtu'] || '-')}" readonly class="form-control"></div>
-        <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="${this.escapeHtml(vlan['l2-mtu'] || '1500')}"></div>
+        <div class="form-group"><label>L2 MTU</label><input type="text" value="${this.escapeHtml(vlan['l2-mtu'] || '-')}" readonly class="form-control"></div>
         <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="${this.escapeHtml(vlan['vrf-interface'] || '')}" placeholder="main (optional)"></div>
         <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" value="${this.escapeHtml(vlan['mac-address'] || '')}" placeholder="XX:XX:XX:XX:XX:XX (optional)"></div>
         <div class="form-group"><label>ARP</label>
@@ -2202,6 +2202,8 @@ const App = {
         data['mvrp'] = form.querySelector('[name="mvrp"]').checked ? 'yes' : 'no';
         if (!data['mac-address']) delete data['mac-address'];
         if (!data['vrf-interface']) delete data['vrf-interface'];
+        if (!data['arp-timeout']) delete data['arp-timeout'];
+        delete data['l2-mtu'];
         try {
           await api.updateVlan(this.selectedRouterId, vlanId, data);
           this.closeModal(); this.toast('VLAN updated', 'success'); this.loadInterfacesTab();

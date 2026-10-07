@@ -598,7 +598,7 @@ class MikroTikService {
     const results: any = {};
     const skipIfExists = (err: any) => {
       const msg = String(err.message || err).toLowerCase();
-      return msg.includes('already have such') || msg.includes('already exists') || msg.includes('duplicate');
+      return msg.includes('already have such') || msg.includes('already exists') || msg.includes('duplicate') || msg.includes('such name exists') || msg.includes('with such');
     };
 
     try {

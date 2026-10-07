@@ -422,6 +422,9 @@ const App = {
                       </span>
                     </td>
                     <td>
+                      <button class="btn btn-sm btn-outline" onclick="App.showEditRouterModal(${r.id})">
+                        Edit
+                      </button>
                       <button class="btn btn-sm ${r.connected ? 'btn-outline' : 'btn-success'}"
                         onclick="App.toggleRouter(${r.id}, ${!r.connected})">
                         ${r.connected ? 'Disconnect' : 'Connect'}
@@ -507,6 +510,88 @@ const App = {
       await api.createRouter(data);
       this.closeModal();
       this.toast('Router added successfully', 'success');
+      this.renderRouters();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async showEditRouterModal(routerId) {
+    try {
+      const router = await api.getRouter(routerId);
+      this.openModal('Edit Router', `
+        <form id="edit-router-form">
+          <div class="form-group">
+            <label>Router Name</label>
+            <input type="text" name="name" required value="${this.escapeHtml(router.name)}">
+          </div>
+          <div class="form-group">
+            <label>Host / IP Address</label>
+            <input type="text" name="host" required value="${this.escapeHtml(router.host)}">
+          </div>
+          <div class="form-group">
+            <label>Port</label>
+            <input type="number" name="port" value="${router.port}">
+            <small style="color:var(--text-secondary);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
+          </div>
+          <div class="form-group">
+            <label>Username</label>
+            <input type="text" name="username" required value="${this.escapeHtml(router.username)}">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" name="password" placeholder="Leave blank to keep current">
+          </div>
+          <div class="form-group">
+            <label>Description (optional)</label>
+            <textarea name="description" rows="2">${this.escapeHtml(router.description || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+              <input type="checkbox" name="use_rest_api" style="width:auto;margin:0" ${router.use_rest_api ? 'checked' : ''}>
+              Use REST API (port 80/443, RouterOS v7+)
+            </label>
+          </div>
+        </form>
+      `, [
+        { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+        { label: 'Save Changes', class: 'btn btn-primary', action: () => this.submitEditRouter(routerId) },
+      ]);
+
+      const checkbox = document.querySelector('#edit-router-form [name="use_rest_api"]');
+      const portInput = document.querySelector('#edit-router-form [name="port"]');
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked && portInput.value === '8728') portInput.value = '80';
+        if (!checkbox.checked && portInput.value === '80') portInput.value = '8728';
+      });
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async submitEditRouter(routerId) {
+    const form = document.getElementById('edit-router-form');
+    const data = {
+      name: form.name.value,
+      host: form.host.value,
+      port: parseInt(form.port.value),
+      username: form.username.value,
+      description: form.description.value,
+      use_rest_api: form.use_rest_api.checked,
+    };
+
+    if (form.password.value) {
+      data.password = form.password.value;
+    }
+
+    if (data.use_rest_api && data.port === 8728) {
+      data.port = 80;
+    }
+
+    try {
+      await api.updateRouter(routerId, data);
+      this.closeModal();
+      this.toast('Router updated successfully', 'success');
       this.renderRouters();
     } catch (err) {
       this.toast(err.message, 'error');

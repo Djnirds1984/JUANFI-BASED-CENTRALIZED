@@ -799,8 +799,21 @@ const App = {
           ${profileError ? `<small style="color: var(--danger); display: block; margin-top: 0.25rem;">Warning: Could not fetch profiles (${profileError}). Using default.</small>` : ''}
         </div>
         <div class="form-group">
-          <label>Duration (days, optional)</label>
-          <input type="number" name="durationMinutes" placeholder="e.g. 30 for 30 days">
+          <label>Duration (optional)</label>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <div style="flex:1">
+              <input type="number" name="durationDays" placeholder="Days" min="0" class="form-control">
+              <small style="color:var(--text-muted)">Days</small>
+            </div>
+            <div style="flex:1">
+              <input type="number" name="durationHours" placeholder="Hours" min="0" max="23" class="form-control">
+              <small style="color:var(--text-muted)">Hours</small>
+            </div>
+            <div style="flex:1">
+              <input type="number" name="durationMins" placeholder="Minutes" min="0" max="59" class="form-control">
+              <small style="color:var(--text-muted)">Minutes</small>
+            </div>
+          </div>
         </div>
         <div class="form-group">
           <label>Data Limit (MB, optional)</label>
@@ -820,10 +833,15 @@ const App = {
   async submitGenerateVouchers() {
     const form = document.getElementById('generate-vouchers-form');
     try {
+      const days = parseInt(form.durationDays.value) || 0;
+      const hours = parseInt(form.durationHours.value) || 0;
+      const mins = parseInt(form.durationMins.value) || 0;
+      const totalMinutes = days * 24 * 60 + hours * 60 + mins;
+
       await api.generateVouchers(this.selectedRouterId, {
         count: parseInt(form.count.value),
         profile: form.profile.value,
-        durationMinutes: form.durationMinutes.value ? parseInt(form.durationMinutes.value) * 24 * 60 : null,
+        durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         dataLimitMb: form.dataLimitMb.value ? parseInt(form.dataLimitMb.value) : null,
         prefix: form.prefix.value || undefined,
       });

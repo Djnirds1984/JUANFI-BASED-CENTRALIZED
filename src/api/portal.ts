@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { getDb, getPortalDefaultContent, listHotspotFiles, EDITABLE_EXTENSIONS } from '../database';
+import { getPortalDefaultContent, listHotspotFiles, EDITABLE_EXTENSIONS } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 
@@ -27,28 +27,22 @@ function isEditable(filePath: string): boolean {
   return EDITABLE_EXTENSIONS.has(ext);
 }
 
-function upsertPortalFile(filePath: string, content: string): any {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO portal_files (path, content, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
-  ).run(filePath, content);
-  return db.prepare('SELECT path, content, updated_at FROM portal_files WHERE path = ?').get(filePath);
-}
-
 router.get('/', (req: Request, res: Response) => {
   try {
     const files = listHotspotFiles();
-    const db = getDb();
-    const dbRows = db.prepare('SELECT path, updated_at FROM portal_files').all() as any[];
-    const dbMap = new Map(dbRows.map((r: any) => [r.path, r.updated_at]));
-
-    const result = files.map((f) => ({
-      path: f.path,
-      editable: f.editable,
-      size: f.size,
-      modified: dbMap.get(f.path) || null,
-    }));
+    const result = files.map((f) => {
+      const diskPath = resolveDiskPath(f.path);
+      let mtime: string | null = null;
+      try {
+        mtime = fs.statSync(diskPath).mtime.toISOString();
+      } catch {}
+      return {
+        path: f.path,
+        editable: f.editable,
+        size: f.size,
+        modified: mtime,
+      };
+    });
 
     res.json({ files: result });
   } catch (error) {
@@ -70,34 +64,23 @@ router.get('/file/*', (req: Request, res: Response) => {
     }
 
     const diskPath = resolveDiskPath(filePath);
-    const db = getDb();
-    const row = db.prepare('SELECT path, content, updated_at FROM portal_files WHERE path = ?').get(filePath) as any;
+    let content: string | null = null;
+    let mtime: string | null = null;
 
-    let diskMtime: number | null = null;
     try {
-      diskMtime = fs.statSync(diskPath).mtimeMs;
+      content = fs.readFileSync(diskPath, 'utf8');
+      mtime = fs.statSync(diskPath).mtime.toISOString();
     } catch {}
 
-    if (row && diskMtime != null && row.updated_at) {
-      const dbTime = new Date(row.updated_at + 'Z').getTime();
-      if (diskMtime > dbTime) {
-        const diskContent = fs.readFileSync(diskPath, 'utf8');
-        db.prepare('UPDATE portal_files SET content = ?, updated_at = datetime(\'now\') WHERE path = ?').run(diskContent, filePath);
-        res.json({ path: filePath, content: diskContent, updated_at: new Date().toISOString() });
-        return;
-      }
-    }
-
-    if (!row) {
-      const content = getPortalDefaultContent(filePath);
+    if (content === null) {
+      content = getPortalDefaultContent(filePath);
       if (content === null) {
         res.status(404).json({ error: 'File not found' });
         return;
       }
-      res.json({ path: filePath, content, updated_at: null });
-      return;
     }
-    res.json(row);
+
+    res.json({ path: filePath, content, updated_at: mtime });
   } catch (error) {
     console.error('Get portal file error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -122,17 +105,11 @@ router.put('/file/*', (req: Request, res: Response) => {
       return;
     }
 
-    const row = upsertPortalFile(filePath, content);
+    const diskPath = resolveDiskPath(filePath);
+    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+    fs.writeFileSync(diskPath, content, 'utf8');
 
-    try {
-      const diskPath = resolveDiskPath(filePath);
-      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-      fs.writeFileSync(diskPath, content, 'utf8');
-    } catch (diskErr: any) {
-      console.warn(`Could not write ${filePath} to disk: ${diskErr.message}`);
-    }
-
-    res.json({ message: 'File saved', file: row });
+    res.json({ message: 'File saved' });
   } catch (error: any) {
     console.error('Save portal file error:', error);
     res.status(500).json({ error: error.message });
@@ -157,17 +134,11 @@ router.post('/reset/*', (req: Request, res: Response) => {
       return;
     }
 
-    const row = upsertPortalFile(filePath, content);
+    const diskPath = resolveDiskPath(filePath);
+    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+    fs.writeFileSync(diskPath, content, 'utf8');
 
-    try {
-      const diskPath = resolveDiskPath(filePath);
-      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-      fs.writeFileSync(diskPath, content, 'utf8');
-    } catch (diskErr: any) {
-      console.warn(`Could not write ${filePath} to disk: ${diskErr.message}`);
-    }
-
-    res.json({ message: 'File reset to default', file: row });
+    res.json({ message: 'File reset to default' });
   } catch (error: any) {
     console.error('Reset portal file error:', error);
     res.status(500).json({ error: error.message });
@@ -202,9 +173,18 @@ router.post('/push-file/:routerId', async (req: Request, res: Response) => {
     const editable = isEditable(filePath);
 
     if (editable) {
-      const db = getDb();
-      const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(filePath) as any;
-      const content: string = row ? row.content : getPortalDefaultContent(filePath)!;
+      const diskPath = resolveDiskPath(filePath);
+      let content: string;
+      try {
+        content = fs.readFileSync(diskPath, 'utf8');
+      } catch {
+        const def = getPortalDefaultContent(filePath);
+        if (!def) {
+          res.status(404).json({ error: 'File not found' });
+          return;
+        }
+        content = def;
+      }
       await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
     } else {
       const fullPath = path.join(HOTSPOT_ROOT, filePath);
@@ -233,15 +213,24 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
     }
 
     const allFiles = listHotspotFiles();
-    const db = getDb();
     const results: { file: string; ok: boolean; error?: string }[] = [];
 
     for (const f of allFiles) {
       try {
         const routerPath = `hotspot/${f.path}`;
         if (f.editable) {
-          const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(f.path) as any;
-          const content: string = row ? row.content : getPortalDefaultContent(f.path)!;
+          const diskPath = resolveDiskPath(f.path);
+          let content: string;
+          try {
+            content = fs.readFileSync(diskPath, 'utf8');
+          } catch {
+            const def = getPortalDefaultContent(f.path);
+            if (!def) {
+              results.push({ file: f.path, ok: false, error: 'File not found' });
+              continue;
+            }
+            content = def;
+          }
           await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
         } else {
           const fullPath = path.join(HOTSPOT_ROOT, f.path);

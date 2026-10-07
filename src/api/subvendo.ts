@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getDb, getPortalDefaultContent } from '../database';
+import { getPortalDefaultContent } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 
@@ -175,23 +175,22 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
 
 router.get('/config', (req: Request, res: Response) => {
   try {
-    const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
+    const diskPath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
     let content: string | null = null;
+
     try {
-      content = fs.readFileSync(filePath, 'utf8');
+      content = fs.readFileSync(diskPath, 'utf8');
     } catch {}
 
     if (!content) {
       content = getPortalDefaultContent(CONFIG_PATH);
+      if (!content) {
+        res.status(404).json({ error: 'Config file not found' });
+        return;
+      }
     }
 
-    if (!content) {
-      res.status(404).json({ error: 'Config file not found' });
-      return;
-    }
-
-    const config = parseConfigJs(content);
-    res.json(config);
+    res.json(parseConfigJs(content));
   } catch (error) {
     console.error('Get SubVendo config error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -209,18 +208,9 @@ router.put('/config', (req: Request, res: Response) => {
 
     const content = generateConfigJs(config);
 
-    const db = getDb();
-    db.prepare(
-      `INSERT INTO portal_files (path, content, updated_at) VALUES (?, ?, datetime('now'))
-       ON CONFLICT(path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
-    ).run(CONFIG_PATH, content);
-
     const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
-    try {
-      fs.writeFileSync(filePath, content, 'utf8');
-    } catch (err: any) {
-      console.warn(`Could not write config file to disk: ${err.message}`);
-    }
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
 
     res.json({ message: 'Config saved', content });
   } catch (error: any) {
@@ -243,11 +233,11 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
     }
 
     const filePath = path.join(__dirname, '..', '..', ROUTER_CONFIG_PATH);
-    let content: string | Buffer;
+    let content: string;
     try {
       content = fs.readFileSync(filePath, 'utf8');
     } catch {
-      res.status(404).json({ error: 'Config file not found on disk' });
+      res.status(404).json({ error: 'Config file not found' });
       return;
     }
 

@@ -256,10 +256,6 @@ class ApiClient {
     return this.get('/monitoring/system');
   }
 
-  async getRouterInterfaces(routerId) {
-    return this.get(`/monitoring/router/${routerId}/interfaces`);
-  }
-
   async getRouterTraffic(routerId) {
     return this.get(`/monitoring/router/${routerId}/traffic`);
   }
@@ -379,6 +375,138 @@ class ApiClient {
 
   async nodemcuPing(id) {
     return this.get(`/nodemcu/devices/${id}/ping`);
+  }
+
+  // --- Interfaces ---
+  async getInterfaces(routerId) {
+    return this.get(`/interfaces/router/${routerId}/interfaces`);
+  }
+  async updateInterface(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/interface/${id}`, data);
+  }
+
+  async getInterfaceLists(routerId) {
+    return this.get(`/interfaces/router/${routerId}/interface-lists`);
+  }
+  async createInterfaceList(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/interface-list`, data);
+  }
+  async updateInterfaceList(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/interface-list/${id}`, data);
+  }
+  async deleteInterfaceList(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/interface-list/${id}`);
+  }
+
+  async getEthernets(routerId) {
+    return this.get(`/interfaces/router/${routerId}/ethernet`);
+  }
+  async updateEthernet(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/ethernet/${id}`, data);
+  }
+
+  async getVlans(routerId) {
+    return this.get(`/interfaces/router/${routerId}/vlans`);
+  }
+  async createVlan(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/vlan`, data);
+  }
+  async updateVlan(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/vlan/${id}`, data);
+  }
+  async deleteVlan(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/vlan/${id}`);
+  }
+
+  async getBridges(routerId) {
+    return this.get(`/interfaces/router/${routerId}/bridges`);
+  }
+  async createBridge(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/bridge`, data);
+  }
+  async updateBridge(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/bridge/${id}`, data);
+  }
+  async deleteBridge(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/bridge/${id}`);
+  }
+
+  async getEoIPs(routerId) {
+    return this.get(`/interfaces/router/${routerId}/eoip`);
+  }
+  async createEoIP(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/eoip`, data);
+  }
+  async updateEoIP(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/eoip/${id}`, data);
+  }
+  async deleteEoIP(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/eoip/${id}`);
+  }
+
+  async getIpTunnels(routerId) {
+    return this.get(`/interfaces/router/${routerId}/ip-tunnels`);
+  }
+  async createIpTunnel(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/ip-tunnel`, data);
+  }
+  async updateIpTunnel(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/ip-tunnel/${id}`, data);
+  }
+  async deleteIpTunnel(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/ip-tunnel/${id}`);
+  }
+
+  async getGREs(routerId) {
+    return this.get(`/interfaces/router/${routerId}/gre`);
+  }
+  async createGRE(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/gre`, data);
+  }
+  async updateGRE(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/gre/${id}`, data);
+  }
+  async deleteGRE(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/gre/${id}`);
+  }
+
+  async getVRRPs(routerId) {
+    return this.get(`/interfaces/router/${routerId}/vrrp`);
+  }
+  async createVRRP(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/vrrp`, data);
+  }
+  async updateVRRP(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/vrrp/${id}`, data);
+  }
+  async deleteVRRP(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/vrrp/${id}`);
+  }
+
+  async getBondings(routerId) {
+    return this.get(`/interfaces/router/${routerId}/bonding`);
+  }
+  async createBonding(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/bonding`, data);
+  }
+  async updateBonding(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/bonding/${id}`, data);
+  }
+  async deleteBonding(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/bonding/${id}`);
+  }
+
+  async getMACsecs(routerId) {
+    return this.get(`/interfaces/router/${routerId}/macsec`);
+  }
+  async createMACsec(routerId, data) {
+    return this.post(`/interfaces/router/${routerId}/macsec`, data);
+  }
+  async updateMACsec(routerId, id, data) {
+    return this.put(`/interfaces/router/${routerId}/macsec/${id}`, data);
+  }
+  async deleteMACsec(routerId, id) {
+    return this.delete(`/interfaces/router/${routerId}/macsec/${id}`);
   }
 }
 

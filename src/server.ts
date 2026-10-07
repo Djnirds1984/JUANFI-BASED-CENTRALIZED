@@ -19,6 +19,7 @@ import monitoringRoutes from './api/monitoring';
 import portalRoutes from './api/portal';
 import subvendoRoutes from './api/subvendo';
 import nodemcuRoutes from './api/nodemcu';
+import interfaceRoutes from './api/interfaces';
 
 const app = express();
 const server = http.createServer(app);
@@ -46,6 +47,7 @@ app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/portal', portalRoutes);
 app.use('/api/subvendo', subvendoRoutes);
 app.use('/api/nodemcu', nodemcuRoutes);
+app.use('/api/interfaces', interfaceRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

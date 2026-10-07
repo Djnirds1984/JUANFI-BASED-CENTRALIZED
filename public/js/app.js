@@ -86,6 +86,7 @@ const App = {
       routers: 'Routers',
       hotspot: 'Hotspot Users',
       'hotspot-settings': 'Hotspot Settings',
+      interfaces: 'Interfaces',
       vouchers: 'Vouchers',
       monitoring: 'Monitoring',
       portal: 'Portal',
@@ -106,6 +107,7 @@ const App = {
         case 'routers': await this.renderRouters(); break;
         case 'hotspot': await this.renderHotspot(); break;
         case 'hotspot-settings': await this.renderHotspotSettings(); break;
+        case 'interfaces': await this.renderInterfaces(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
@@ -863,16 +865,21 @@ const App = {
                 <th>Address Pool</th>
                 <th>Profile</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${servers.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No servers configured</td></tr>' : servers.map((s) => `
+              ${servers.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No servers configured</td></tr>' : servers.map((s) => `
                 <tr>
                   <td>${this.escapeHtml(s.name || '-')}</td>
                   <td>${this.escapeHtml(s.interface || '-')}</td>
                   <td>${this.escapeHtml(s['address-pool'] || '-')}</td>
                   <td>${this.escapeHtml(s.profile || '-')}</td>
                   <td>${s.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  <td>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditServerModal('${s['.id']}')">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteHotspotServer('${s['.id']}')">Delete</button>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -889,6 +896,7 @@ const App = {
       <div class="settings-section">
         <div class="settings-section-header">
           <h4>Server Profiles</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateServerProfileModal()">Add Profile</button>
         </div>
         <div class="table-wrapper">
           <table>
@@ -899,16 +907,21 @@ const App = {
                 <th>Rate Limit</th>
                 <th>Shared Users</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${profiles.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No profiles found</td></tr>' : profiles.map((p) => `
+              ${profiles.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No profiles found</td></tr>' : profiles.map((p) => `
                 <tr>
                   <td>${this.escapeHtml(p.name || '-')}</td>
                   <td>${this.escapeHtml(p['address-pool'] || '-')}</td>
                   <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
                   <td>${this.escapeHtml(p['shared-users'] || '1')}</td>
                   <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  <td>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditServerProfileModal('${p['.id']}')">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteServerProfile('${p['.id']}')">Delete</button>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -925,6 +938,7 @@ const App = {
       <div class="settings-section">
         <div class="settings-section-header">
           <h4>User Profiles</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateUserProfileModal()">Add Profile</button>
         </div>
         <div class="table-wrapper">
           <table>
@@ -936,10 +950,11 @@ const App = {
                 <th>Session Timeout</th>
                 <th>Idle Timeout</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${profiles.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No user profiles found</td></tr>' : profiles.map((p) => `
+              ${profiles.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No user profiles found</td></tr>' : profiles.map((p) => `
                 <tr>
                   <td>${this.escapeHtml(p.name || '-')}</td>
                   <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
@@ -947,6 +962,10 @@ const App = {
                   <td>${this.escapeHtml(p['session-timeout'] || '-')}</td>
                   <td>${this.escapeHtml(p['idle-timeout'] || '-')}</td>
                   <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  <td>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditUserProfileModal('${p['.id']}')">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteUserProfile('${p['.id']}')">Delete</button>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -988,6 +1007,7 @@ const App = {
                   <td>${this.escapeHtml(b.comment || '-')}</td>
                   <td>${b.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
                   <td>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditIpBindingModal('${b['.id']}')">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="App.deleteIpBinding('${b['.id']}')">Delete</button>
                   </td>
                 </tr>
@@ -1025,6 +1045,7 @@ const App = {
                   <td>${this.escapeHtml(w.action || '-')}</td>
                   <td>${this.escapeHtml(w.comment || '-')}</td>
                   <td>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditWalledGardenModal('${w['.id']}')">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="App.deleteWalledGarden('${w['.id']}')">Delete</button>
                   </td>
                 </tr>
@@ -1083,6 +1104,414 @@ const App = {
     } catch (err) {
       this.toast(err.message, 'error');
     }
+  },
+
+  async deleteHotspotServer(serverId) {
+    if (!confirm('Delete this hotspot server?')) return;
+    try {
+      await api.deleteHotspotServer(this.selectedRouterId, serverId);
+      this.toast('Hotspot server deleted', 'success');
+      this.loadHotspotSettingsTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async showEditServerModal(serverId) {
+    const servers = await api.getHotspotServers(this.selectedRouterId);
+    const server = servers.find((s) => s['.id'] === serverId);
+    if (!server) { this.toast('Server not found', 'error'); return; }
+
+    let interfaces = [];
+    try { interfaces = await api.getRouterInterfaces(this.selectedRouterId); } catch (err) {}
+
+    this.openModal('Edit Hotspot Server', `
+      <form id="edit-server-form">
+        <div class="form-group">
+          <label>Server Name</label>
+          <input type="text" name="name" required value="${this.escapeHtml(server.name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Interface</label>
+          <select name="interface" class="form-control" required>
+            <option value="">Select interface...</option>
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}" ${i.name === server.interface ? 'selected' : ''}>${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <input type="text" name="address-pool" value="${this.escapeHtml(server['address-pool'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Profile</label>
+          <input type="text" name="profile" value="${this.escapeHtml(server.profile || 'default')}">
+        </div>
+        <div class="form-group">
+          <label>Addresses</label>
+          <input type="text" name="addresses" value="${this.escapeHtml(server.addresses || '')}">
+        </div>
+        <div class="form-group">
+          <label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${server.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${server.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('edit-server-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { data[key] = value; });
+          try {
+            await api.updateHotspotServer(this.selectedRouterId, serverId, data);
+            this.closeModal();
+            this.toast('Hotspot server updated', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showCreateServerProfileModal() {
+    this.openModal('Create Server Profile', `
+      <form id="create-server-profile-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required placeholder="e.g. hs-profile-1">
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <input type="text" name="address-pool" placeholder="e.g. dhcp-pool1">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit</label>
+          <input type="text" name="rate-limit" placeholder="e.g. 10M/20M">
+        </div>
+        <div class="form-group">
+          <label>Shared Users</label>
+          <input type="number" name="shared-users" value="1" min="1">
+        </div>
+        <div class="form-group">
+          <label>Session Timeout</label>
+          <input type="text" name="session-timeout" placeholder="e.g. 1d or 00:00:00">
+        </div>
+        <div class="form-group">
+          <label>Idle Timeout</label>
+          <input type="text" name="idle-timeout" placeholder="e.g. 30m or 00:30:00">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Create',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('create-server-profile-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { if (value) data[key] = value; });
+          try {
+            await api.createHotspotProfile(this.selectedRouterId, data);
+            this.closeModal();
+            this.toast('Server profile created', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showEditServerProfileModal(profileId) {
+    const profiles = await api.getHotspotProfiles(this.selectedRouterId);
+    const profile = profiles.find((p) => p['.id'] === profileId);
+    if (!profile) { this.toast('Profile not found', 'error'); return; }
+
+    this.openModal('Edit Server Profile', `
+      <form id="edit-server-profile-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required value="${this.escapeHtml(profile.name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Address Pool</label>
+          <input type="text" name="address-pool" value="${this.escapeHtml(profile['address-pool'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit</label>
+          <input type="text" name="rate-limit" value="${this.escapeHtml(profile['rate-limit'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Shared Users</label>
+          <input type="number" name="shared-users" value="${profile['shared-users'] || 1}" min="1">
+        </div>
+        <div class="form-group">
+          <label>Session Timeout</label>
+          <input type="text" name="session-timeout" value="${this.escapeHtml(profile['session-timeout'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Idle Timeout</label>
+          <input type="text" name="idle-timeout" value="${this.escapeHtml(profile['idle-timeout'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${profile.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${profile.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('edit-server-profile-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { data[key] = value; });
+          try {
+            await api.updateHotspotProfile(this.selectedRouterId, profileId, data);
+            this.closeModal();
+            this.toast('Server profile updated', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async deleteServerProfile(profileId) {
+    if (!confirm('Delete this server profile?')) return;
+    try {
+      await api.deleteHotspotProfile(this.selectedRouterId, profileId);
+      this.toast('Server profile deleted', 'success');
+      this.loadHotspotSettingsTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async showCreateUserProfileModal() {
+    this.openModal('Create User Profile', `
+      <form id="create-user-profile-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required placeholder="e.g. 1hour-10M">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit</label>
+          <input type="text" name="rate-limit" placeholder="e.g. 10M/20M">
+        </div>
+        <div class="form-group">
+          <label>Shared Users</label>
+          <input type="number" name="shared-users" value="1" min="1">
+        </div>
+        <div class="form-group">
+          <label>Session Timeout</label>
+          <input type="text" name="session-timeout" placeholder="e.g. 1h or 01:00:00">
+        </div>
+        <div class="form-group">
+          <label>Idle Timeout</label>
+          <input type="text" name="idle-timeout" placeholder="e.g. 30m or 00:30:00">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Create',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('create-user-profile-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { if (value) data[key] = value; });
+          try {
+            await api.createUserProfile(this.selectedRouterId, data);
+            this.closeModal();
+            this.toast('User profile created', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showEditUserProfileModal(profileId) {
+    const profiles = await api.getUserProfiles(this.selectedRouterId);
+    const profile = profiles.find((p) => p['.id'] === profileId);
+    if (!profile) { this.toast('Profile not found', 'error'); return; }
+
+    this.openModal('Edit User Profile', `
+      <form id="edit-user-profile-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required value="${this.escapeHtml(profile.name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Rate Limit</label>
+          <input type="text" name="rate-limit" value="${this.escapeHtml(profile['rate-limit'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Shared Users</label>
+          <input type="number" name="shared-users" value="${profile['shared-users'] || 1}" min="1">
+        </div>
+        <div class="form-group">
+          <label>Session Timeout</label>
+          <input type="text" name="session-timeout" value="${this.escapeHtml(profile['session-timeout'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Idle Timeout</label>
+          <input type="text" name="idle-timeout" value="${this.escapeHtml(profile['idle-timeout'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${profile.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${profile.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('edit-user-profile-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { data[key] = value; });
+          try {
+            await api.updateUserProfile(this.selectedRouterId, profileId, data);
+            this.closeModal();
+            this.toast('User profile updated', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showEditIpBindingModal(bindingId) {
+    const bindings = await api.getIpBindings(this.selectedRouterId);
+    const binding = bindings.find((b) => b['.id'] === bindingId);
+    if (!binding) { this.toast('IP binding not found', 'error'); return; }
+
+    this.openModal('Edit IP Binding', `
+      <form id="edit-ip-binding-form">
+        <div class="form-group">
+          <label>MAC Address</label>
+          <input type="text" name="mac-address" value="${this.escapeHtml(binding['mac-address'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Address</label>
+          <input type="text" name="address" value="${this.escapeHtml(binding.address || '')}">
+        </div>
+        <div class="form-group">
+          <label>To Address</label>
+          <input type="text" name="to-address" value="${this.escapeHtml(binding['to-address'] || '')}">
+        </div>
+        <div class="form-group">
+          <label>Server</label>
+          <input type="text" name="server" value="${this.escapeHtml(binding.server || 'all')}">
+        </div>
+        <div class="form-group">
+          <label>Comment</label>
+          <input type="text" name="comment" value="${this.escapeHtml(binding.comment || '')}">
+        </div>
+        <div class="form-group">
+          <label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${binding.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${binding.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('edit-ip-binding-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { data[key] = value; });
+          try {
+            await api.updateIpBinding(this.selectedRouterId, bindingId, data);
+            this.closeModal();
+            this.toast('IP binding updated', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async showEditWalledGardenModal(entryId) {
+    const entries = await api.getWalledGarden(this.selectedRouterId);
+    const entry = entries.find((w) => w['.id'] === entryId);
+    if (!entry) { this.toast('Walled garden entry not found', 'error'); return; }
+
+    this.openModal('Edit Walled Garden Entry', `
+      <form id="edit-walled-garden-form">
+        <div class="form-group">
+          <label>Host</label>
+          <input type="text" name="host" required value="${this.escapeHtml(entry.host || '')}">
+        </div>
+        <div class="form-group">
+          <label>Action</label>
+          <select name="action" class="form-control" required>
+            <option value="accept" ${entry.action === 'accept' ? 'selected' : ''}>Accept</option>
+            <option value="reject" ${entry.action === 'reject' ? 'selected' : ''}>Reject</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comment</label>
+          <input type="text" name="comment" value="${this.escapeHtml(entry.comment || '')}">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('edit-walled-garden-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => { if (value) data[key] = value; });
+          try {
+            await api.updateWalledGarden(this.selectedRouterId, entryId, data);
+            this.closeModal();
+            this.toast('Walled garden entry updated', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
   },
 
   async showCreateServerModal() {
@@ -1257,6 +1686,1098 @@ const App = {
     } catch (err) {
       this.toast(err.message, 'error');
     }
+  },
+
+  // ==================== INTERFACES PAGE ====================
+
+  async renderInterfaces() {
+    const content = document.getElementById('page-content');
+    const routers = await api.getRouters();
+    const connected = routers.filter((r) => r.status === 'connected');
+
+    if (!this.selectedRouterId || !connected.find((r) => r.id === this.selectedRouterId)) {
+      this.selectedRouterId = connected.length > 0 ? connected[0].id : (routers.length > 0 ? routers[0].id : null);
+    }
+
+    if (!this.interfacesTab) {
+      this.interfacesTab = 'interfaces';
+    }
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <select id="interfaces-router-select" class="form-control" style="width:auto;min-width:200px">
+            ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)} (${this.escapeHtml(r.host)})${r.status === 'connected' ? '' : ' - offline'}</option>`).join('')}
+          </select>
+        </div>
+        <div class="tabs" style="margin-top:1rem">
+          <button class="tab ${this.interfacesTab === 'interfaces' ? 'active' : ''}" data-tab="interfaces">Interfaces</button>
+          <button class="tab ${this.interfacesTab === 'interface-lists' ? 'active' : ''}" data-tab="interface-lists">Interface List</button>
+          <button class="tab ${this.interfacesTab === 'ethernet' ? 'active' : ''}" data-tab="ethernet">Ethernet</button>
+          <button class="tab ${this.interfacesTab === 'bridge' ? 'active' : ''}" data-tab="bridge">Bridge</button>
+          <button class="tab ${this.interfacesTab === 'vlan' ? 'active' : ''}" data-tab="vlan">VLAN</button>
+          <button class="tab ${this.interfacesTab === 'eoip' ? 'active' : ''}" data-tab="eoip">EoIP Tunnel</button>
+          <button class="tab ${this.interfacesTab === 'ip-tunnel' ? 'active' : ''}" data-tab="ip-tunnel">IP Tunnel</button>
+          <button class="tab ${this.interfacesTab === 'gre' ? 'active' : ''}" data-tab="gre">GRE Tunnel</button>
+          <button class="tab ${this.interfacesTab === 'vrrp' ? 'active' : ''}" data-tab="vrrp">VRRP</button>
+          <button class="tab ${this.interfacesTab === 'bonding' ? 'active' : ''}" data-tab="bonding">Bonding</button>
+          <button class="tab ${this.interfacesTab === 'macsec' ? 'active' : ''}" data-tab="macsec">MACsec</button>
+        </div>
+        <div id="interfaces-content" style="padding:1rem 0"></div>
+      </div>
+    `;
+
+    const routerSelect = document.getElementById('interfaces-router-select');
+    routerSelect.addEventListener('change', (e) => {
+      this.selectedRouterId = parseInt(e.target.value);
+      this.loadInterfacesTab();
+    });
+
+    content.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        content.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.interfacesTab = tab.dataset.tab;
+        this.loadInterfacesTab();
+      });
+    });
+
+    this.loadInterfacesTab();
+  },
+
+  loadInterfacesTab() {
+    const container = document.getElementById('interfaces-content');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+
+    switch (this.interfacesTab) {
+      case 'interfaces': this.loadAllInterfaces(container); break;
+      case 'interface-lists': this.loadInterfaceLists(container); break;
+      case 'ethernet': this.loadEthernetList(container); break;
+      case 'bridge': this.loadBridgeList(container); break;
+      case 'vlan': this.loadVlanList(container); break;
+      case 'eoip': this.loadEoIPList(container); break;
+      case 'ip-tunnel': this.loadIpTunnelList(container); break;
+      case 'gre': this.loadGREList(container); break;
+      case 'vrrp': this.loadVRRPList(container); break;
+      case 'bonding': this.loadBondingList(container); break;
+      case 'macsec': this.loadMACsecList(container); break;
+    }
+  },
+
+  async loadAllInterfaces(container) {
+    const interfaces = await api.getInterfaces(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header"><h4>All Interfaces</h4></div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Type</th><th>MTU</th><th>MAC Address</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${interfaces.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No interfaces found</td></tr>' : interfaces.map((i) => `
+              <tr>
+                <td>${this.escapeHtml(i.name || '-')}</td>
+                <td><span class="status-badge ${i.running === 'true' ? 'connected' : 'disconnected'}">${this.escapeHtml(i.type || i['type'] || '-')}</span></td>
+                <td>${this.escapeHtml(i.mtu || i['actual-mtu'] || '-')}</td>
+                <td>${this.escapeHtml(i['mac-address'] || '-')}</td>
+                <td>${i.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditInterfaceModal('${i['.id']}')">Edit</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showEditInterfaceModal(ifId) {
+    const interfaces = await api.getInterfaces(this.selectedRouterId);
+    const iface = interfaces.find((i) => i['.id'] === ifId);
+    if (!iface) { this.toast('Interface not found', 'error'); return; }
+
+    this.openModal('Edit Interface', `
+      <form id="edit-interface-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(iface.name || '')}"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" value="${this.escapeHtml(iface.comment || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(iface.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${iface.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${iface.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const form = document.getElementById('edit-interface-form');
+        const data = {};
+        new FormData(form).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateInterface(this.selectedRouterId, ifId, data);
+          this.closeModal(); this.toast('Interface updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async loadInterfaceLists(container) {
+    const lists = await api.getInterfaceLists(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Interface Lists</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateInterfaceListModal()">Add List</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Comment</th><th>Built-in</th><th>Dynamic</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${lists.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No interface lists</td></tr>' : lists.map((l) => `
+              <tr>
+                <td>${this.escapeHtml(l.name || '-')}</td>
+                <td>${this.escapeHtml(l.comment || '-')}</td>
+                <td>${l.builtin === 'true' ? 'Yes' : 'No'}</td>
+                <td>${l.dynamic === 'true' ? 'Yes' : 'No'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditInterfaceListModal('${l['.id']}')">Edit</button>
+                  ${l.builtin !== 'true' ? `<button class="btn btn-sm btn-danger" onclick="App.deleteInterfaceList('${l['.id']}')">Delete</button>` : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateInterfaceListModal() {
+    this.openModal('Create Interface List', `
+      <form id="create-iface-list-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. my-list"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" placeholder="Optional"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-iface-list-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createInterfaceList(this.selectedRouterId, data);
+          this.closeModal(); this.toast('Interface list created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditInterfaceListModal(listId) {
+    const lists = await api.getInterfaceLists(this.selectedRouterId);
+    const list = lists.find((l) => l['.id'] === listId);
+    if (!list) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit Interface List', `
+      <form id="edit-iface-list-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required value="${this.escapeHtml(list.name || '')}"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" value="${this.escapeHtml(list.comment || '')}"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-iface-list-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateInterfaceList(this.selectedRouterId, listId, data);
+          this.closeModal(); this.toast('Interface list updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteInterfaceList(id) {
+    if (!confirm('Delete this interface list?')) return;
+    try { await api.deleteInterfaceList(this.selectedRouterId, id); this.toast('Deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadEthernetList(container) {
+    const eths = await api.getEthernets(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header"><h4>Ethernet</h4></div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Speed</th><th>Duplex</th><th>Auto-Negotiate</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${eths.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No ethernet interfaces</td></tr>' : eths.map((e) => `
+              <tr>
+                <td>${this.escapeHtml(e.name || '-')}</td>
+                <td>${this.escapeHtml(e.speed || '-')}</td>
+                <td>${this.escapeHtml(e.duplex || '-')}</td>
+                <td>${e['auto-negotiation'] === 'true' ? 'Yes' : 'No'}</td>
+                <td>${e.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td><button class="btn btn-sm btn-outline" onclick="App.showEditEthernetModal('${e['.id']}')">Edit</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showEditEthernetModal(ethId) {
+    const eths = await api.getEthernets(this.selectedRouterId);
+    const eth = eths.find((e) => e['.id'] === ethId);
+    if (!eth) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit Ethernet', `
+      <form id="edit-eth-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(eth.name || '')}"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" value="${this.escapeHtml(eth.comment || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(eth.mtu || '')}"></div>
+        <div class="form-group"><label>Auto-Negotiation</label>
+          <select name="auto-negotiation" class="form-control">
+            <option value="yes" ${eth['auto-negotiation'] !== 'false' ? 'selected' : ''}>Yes</option>
+            <option value="no" ${eth['auto-negotiation'] === 'false' ? 'selected' : ''}>No</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Speed</label>
+          <select name="speed" class="form-control">
+            <option value="">Auto</option>
+            <option value="10Mbps" ${eth.speed === '10Mbps' ? 'selected' : ''}>10 Mbps</option>
+            <option value="100Mbps" ${eth.speed === '100Mbps' ? 'selected' : ''}>100 Mbps</option>
+            <option value="1Gbps" ${eth.speed === '1Gbps' ? 'selected' : ''}>1 Gbps</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${eth.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${eth.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-eth-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateEthernet(this.selectedRouterId, ethId, data);
+          this.closeModal(); this.toast('Ethernet updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async loadBridgeList(container) {
+    const bridges = await api.getBridges(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Bridge</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateBridgeModal()">Add Bridge</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>MAC Address</th><th>Protocol Mode</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${bridges.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No bridges</td></tr>' : bridges.map((b) => `
+              <tr>
+                <td>${this.escapeHtml(b.name || '-')}</td>
+                <td>${this.escapeHtml(b['admin-mac'] || '-')}</td>
+                <td>${this.escapeHtml(b['protocol-mode'] || '-')}</td>
+                <td>${this.escapeHtml(b.priority || '-')}</td>
+                <td>${b.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditBridgeModal('${b['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteBridge('${b['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateBridgeModal() {
+    this.openModal('Create Bridge', `
+      <form id="create-bridge-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. bridge1"></div>
+        <div class="form-group"><label>Protocol Mode</label>
+          <select name="protocol-mode" class="form-control">
+            <option value="rstp">RSTP</option>
+            <option value="stp">STP</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Priority</label><input type="number" name="priority" value="0x8000"></div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-bridge-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createBridge(this.selectedRouterId, data);
+          this.closeModal(); this.toast('Bridge created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditBridgeModal(bridgeId) {
+    const bridges = await api.getBridges(this.selectedRouterId);
+    const bridge = bridges.find((b) => b['.id'] === bridgeId);
+    if (!bridge) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit Bridge', `
+      <form id="edit-bridge-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(bridge.name || '')}"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" value="${this.escapeHtml(bridge.comment || '')}"></div>
+        <div class="form-group"><label>Protocol Mode</label>
+          <select name="protocol-mode" class="form-control">
+            <option value="rstp" ${bridge['protocol-mode'] === 'rstp' ? 'selected' : ''}>RSTP</option>
+            <option value="stp" ${bridge['protocol-mode'] === 'stp' ? 'selected' : ''}>STP</option>
+            <option value="none" ${bridge['protocol-mode'] === 'none' ? 'selected' : ''}>None</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Priority</label><input type="text" name="priority" value="${this.escapeHtml(bridge.priority || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(bridge.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${bridge.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${bridge.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-bridge-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateBridge(this.selectedRouterId, bridgeId, data);
+          this.closeModal(); this.toast('Bridge updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteBridge(id) {
+    if (!confirm('Delete this bridge?')) return;
+    try { await api.deleteBridge(this.selectedRouterId, id); this.toast('Bridge deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadVlanList(container) {
+    const vlans = await api.getVlans(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>VLAN</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateVlanModal()">Add VLAN</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Type</th><th>MTU</th><th>Actual MTU</th><th>L2 MTU</th><th>VLAN ID</th><th>Interface</th><th>ARP</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${vlans.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No VLANs</td></tr>' : vlans.map((v) => `
+              <tr>
+                <td>${this.escapeHtml(v.name || '-')}</td>
+                <td>VLAN</td>
+                <td>${this.escapeHtml(v.mtu || '-')}</td>
+                <td>${this.escapeHtml(v['actual-mtu'] || '-')}</td>
+                <td>${this.escapeHtml(v['l2-mtu'] || '-')}</td>
+                <td>${this.escapeHtml(v['vlan-id'] || '-')}</td>
+                <td>${this.escapeHtml(v.interface || '-')}</td>
+                <td>${this.escapeHtml(v.arp || '-')}</td>
+                <td>${v.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditVlanModal('${v['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteVlan('${v['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateVlanModal() {
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    this.openModal('New VLAN Interface', `
+      <form id="create-vlan-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. vlan100"></div>
+        <div class="form-group"><label>Type</label><input type="text" value="VLAN" readonly class="form-control"></div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
+        <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="1500"></div>
+        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="main" placeholder="main"></div>
+        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" placeholder="XX:XX:XX:XX:XX:XX"></div>
+        <div class="form-group"><label>ARP</label>
+          <select name="arp" class="form-control">
+            <option value="enabled" selected>enabled</option>
+            <option value="disabled">disabled</option>
+            <option value="request-reply-only">request-reply-only</option>
+            <option value="reply-only">reply-only</option>
+          </select>
+        </div>
+        <div class="form-group"><label>ARP Timeout</label><input type="text" name="arp-timeout" value="30s" placeholder="e.g. 30s"></div>
+        <div class="form-group"><label>VLAN ID</label><input type="number" name="vlan-id" required min="1" max="4094" placeholder="e.g. 100"></div>
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control" required>
+            <option value="">Select...</option>
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}">${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label class="checkbox-label"><input type="checkbox" name="use-service-tag" value="yes"> Use Service Tag</label></div>
+        <div class="form-group"><label class="checkbox-label"><input type="checkbox" name="mvrp" value="yes"> MVRP</label></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'OK', class: 'btn btn-primary', action: async () => {
+        const form = document.getElementById('create-vlan-form');
+        const fd = new FormData(form);
+        const data = {};
+        fd.forEach((v, k) => { if (v) data[k] = v; });
+        if (!form.querySelector('[name="use-service-tag"]').checked) data['use-service-tag'] = 'no';
+        if (!form.querySelector('[name="mvrp"]').checked) data['mvrp'] = 'no';
+        try {
+          await api.createVlan(this.selectedRouterId, data);
+          this.closeModal(); this.toast('VLAN created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditVlanModal(vlanId) {
+    const vlans = await api.getVlans(this.selectedRouterId);
+    const vlan = vlans.find((v) => v['.id'] === vlanId);
+    if (!vlan) { this.toast('Not found', 'error'); return; }
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    const arpOptions = ['enabled', 'disabled', 'request-reply-only', 'reply-only'];
+    const currentArp = vlan.arp || 'enabled';
+    this.openModal('Edit VLAN Interface', `
+      <form id="edit-vlan-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(vlan.name || '')}"></div>
+        <div class="form-group"><label>Type</label><input type="text" value="VLAN" readonly class="form-control"></div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="${this.escapeHtml(vlan.mtu || '1500')}"></div>
+        <div class="form-group"><label>Actual MTU</label><input type="text" value="${this.escapeHtml(vlan['actual-mtu'] || '-')}" readonly class="form-control"></div>
+        <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="${this.escapeHtml(vlan['l2-mtu'] || '1500')}"></div>
+        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="${this.escapeHtml(vlan['vrf-interface'] || 'main')}"></div>
+        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" value="${this.escapeHtml(vlan['mac-address'] || '')}" placeholder="XX:XX:XX:XX:XX:XX"></div>
+        <div class="form-group"><label>ARP</label>
+          <select name="arp" class="form-control">
+            ${arpOptions.map((a) => `<option value="${a}" ${a === currentArp ? 'selected' : ''}>${a}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>ARP Timeout</label><input type="text" name="arp-timeout" value="${this.escapeHtml(vlan['arp-timeout'] || '30s')}"></div>
+        <div class="form-group"><label>VLAN ID</label><input type="number" name="vlan-id" value="${this.escapeHtml(vlan['vlan-id'] || '')}" min="1" max="4094"></div>
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control">
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}" ${i.name === vlan.interface ? 'selected' : ''}>${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label class="checkbox-label"><input type="checkbox" name="use-service-tag" value="yes" ${vlan['use-service-tag'] === 'true' ? 'checked' : ''}> Use Service Tag</label></div>
+        <div class="form-group"><label class="checkbox-label"><input type="checkbox" name="mvrp" value="yes" ${vlan.mvrp === 'true' ? 'checked' : ''}> MVRP</label></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${vlan.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${vlan.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'OK', class: 'btn btn-primary', action: async () => {
+        const form = document.getElementById('edit-vlan-form');
+        const fd = new FormData(form);
+        const data = {};
+        fd.forEach((v, k) => { data[k] = v; });
+        if (!form.querySelector('[name="use-service-tag"]').checked) data['use-service-tag'] = 'no';
+        if (!form.querySelector('[name="mvrp"]').checked) data['mvrp'] = 'no';
+        try {
+          await api.updateVlan(this.selectedRouterId, vlanId, data);
+          this.closeModal(); this.toast('VLAN updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteVlan(id) {
+    if (!confirm('Delete this VLAN?')) return;
+    try { await api.deleteVlan(this.selectedRouterId, id); this.toast('VLAN deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadEoIPList(container) {
+    const eoips = await api.getEoIPs(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>EoIP Tunnels</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateEoIPModal()">Add EoIP</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Remote Peer</th><th>Tunnel ID</th><th>Local Address</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${eoips.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No EoIP tunnels</td></tr>' : eoips.map((e) => `
+              <tr>
+                <td>${this.escapeHtml(e.name || '-')}</td>
+                <td>${this.escapeHtml(e['remote-address'] || '-')}</td>
+                <td>${this.escapeHtml(e['tunnel-id'] || '-')}</td>
+                <td>${this.escapeHtml(e['local-address'] || '-')}</td>
+                <td>${e.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditEoIPModal('${e['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteEoIP('${e['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateEoIPModal() {
+    this.openModal('Create EoIP Tunnel', `
+      <form id="create-eoip-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. eoip-tunnel1"></div>
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" required placeholder="e.g. 10.0.0.1"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" placeholder="0.0.0.0 for any"></div>
+        <div class="form-group"><label>Tunnel ID</label><input type="number" name="tunnel-id" required min="0" max="65535" placeholder="e.g. 1"></div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-eoip-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createEoIP(this.selectedRouterId, data);
+          this.closeModal(); this.toast('EoIP tunnel created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditEoIPModal(eoipId) {
+    const eoips = await api.getEoIPs(this.selectedRouterId);
+    const eoip = eoips.find((e) => e['.id'] === eoipId);
+    if (!eoip) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit EoIP Tunnel', `
+      <form id="edit-eoip-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(eoip.name || '')}"></div>
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" value="${this.escapeHtml(eoip['remote-address'] || '')}"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" value="${this.escapeHtml(eoip['local-address'] || '')}"></div>
+        <div class="form-group"><label>Tunnel ID</label><input type="number" name="tunnel-id" value="${this.escapeHtml(eoip['tunnel-id'] || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(eoip.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${eoip.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${eoip.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-eoip-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateEoIP(this.selectedRouterId, eoipId, data);
+          this.closeModal(); this.toast('EoIP updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteEoIP(id) {
+    if (!confirm('Delete this EoIP tunnel?')) return;
+    try { await api.deleteEoIP(this.selectedRouterId, id); this.toast('EoIP deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadIpTunnelList(container) {
+    const tunnels = await api.getIpTunnels(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>IP Tunnels</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateIpTunnelModal()">Add IP Tunnel</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Remote Address</th><th>Local Address</th><th>MTU</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${tunnels.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No IP tunnels</td></tr>' : tunnels.map((t) => `
+              <tr>
+                <td>${this.escapeHtml(t.name || '-')}</td>
+                <td>${this.escapeHtml(t['remote-address'] || '-')}</td>
+                <td>${this.escapeHtml(t['local-address'] || '-')}</td>
+                <td>${this.escapeHtml(t.mtu || '-')}</td>
+                <td>${t.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditIpTunnelModal('${t['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteIpTunnel('${t['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateIpTunnelModal() {
+    this.openModal('Create IP Tunnel', `
+      <form id="create-ipip-form">
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" required placeholder="e.g. 10.0.0.1"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" placeholder="0.0.0.0 for any"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" placeholder="Optional"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-ipip-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createIpTunnel(this.selectedRouterId, data);
+          this.closeModal(); this.toast('IP tunnel created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditIpTunnelModal(tunnelId) {
+    const tunnels = await api.getIpTunnels(this.selectedRouterId);
+    const tunnel = tunnels.find((t) => t['.id'] === tunnelId);
+    if (!tunnel) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit IP Tunnel', `
+      <form id="edit-ipip-form">
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" value="${this.escapeHtml(tunnel['remote-address'] || '')}"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" value="${this.escapeHtml(tunnel['local-address'] || '')}"></div>
+        <div class="form-group"><label>Comment</label><input type="text" name="comment" value="${this.escapeHtml(tunnel.comment || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(tunnel.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${tunnel.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${tunnel.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-ipip-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateIpTunnel(this.selectedRouterId, tunnelId, data);
+          this.closeModal(); this.toast('IP tunnel updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteIpTunnel(id) {
+    if (!confirm('Delete this IP tunnel?')) return;
+    try { await api.deleteIpTunnel(this.selectedRouterId, id); this.toast('IP tunnel deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadGREList(container) {
+    const gres = await api.getGREs(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>GRE Tunnels</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateGREModal()">Add GRE</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Remote Address</th><th>Local Address</th><th>MTU</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${gres.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No GRE tunnels</td></tr>' : gres.map((g) => `
+              <tr>
+                <td>${this.escapeHtml(g.name || '-')}</td>
+                <td>${this.escapeHtml(g['remote-address'] || '-')}</td>
+                <td>${this.escapeHtml(g['local-address'] || '-')}</td>
+                <td>${this.escapeHtml(g.mtu || '-')}</td>
+                <td>${g.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditGREModal('${g['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteGRE('${g['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateGREModal() {
+    this.openModal('Create GRE Tunnel', `
+      <form id="create-gre-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. gre-tunnel1"></div>
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" required placeholder="e.g. 10.0.0.1"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" placeholder="0.0.0.0 for any"></div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-gre-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createGRE(this.selectedRouterId, data);
+          this.closeModal(); this.toast('GRE tunnel created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditGREModal(greId) {
+    const gres = await api.getGREs(this.selectedRouterId);
+    const gre = gres.find((g) => g['.id'] === greId);
+    if (!gre) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit GRE Tunnel', `
+      <form id="edit-gre-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(gre.name || '')}"></div>
+        <div class="form-group"><label>Remote Address</label><input type="text" name="remote-address" value="${this.escapeHtml(gre['remote-address'] || '')}"></div>
+        <div class="form-group"><label>Local Address</label><input type="text" name="local-address" value="${this.escapeHtml(gre['local-address'] || '')}"></div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(gre.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${gre.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${gre.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-gre-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateGRE(this.selectedRouterId, greId, data);
+          this.closeModal(); this.toast('GRE updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteGRE(id) {
+    if (!confirm('Delete this GRE tunnel?')) return;
+    try { await api.deleteGRE(this.selectedRouterId, id); this.toast('GRE deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadVRRPList(container) {
+    const vrrps = await api.getVRRPs(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>VRRP</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateVRRPModal()">Add VRRP</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Interface</th><th>VRID</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${vrrps.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No VRRP entries</td></tr>' : vrrps.map((v) => `
+              <tr>
+                <td>${this.escapeHtml(v.name || '-')}</td>
+                <td>${this.escapeHtml(v.interface || '-')}</td>
+                <td>${this.escapeHtml(v['vrid'] || '-')}</td>
+                <td>${this.escapeHtml(v.priority || '-')}</td>
+                <td>${v.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditVRRPModal('${v['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteVRRP('${v['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateVRRPModal() {
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    this.openModal('Create VRRP', `
+      <form id="create-vrrp-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. vrrp1"></div>
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control" required>
+            <option value="">Select...</option>
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}">${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>VRID</label><input type="number" name="vrid" required min="1" max="255" placeholder="e.g. 1"></div>
+        <div class="form-group"><label>Priority</label><input type="number" name="priority" value="100" min="1" max="255"></div>
+        <div class="form-group"><label>Password</label><input type="text" name="password" placeholder="Optional"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-vrrp-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createVRRP(this.selectedRouterId, data);
+          this.closeModal(); this.toast('VRRP created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditVRRPModal(vrrpId) {
+    const vrrps = await api.getVRRPs(this.selectedRouterId);
+    const vrrp = vrrps.find((v) => v['.id'] === vrrpId);
+    if (!vrrp) { this.toast('Not found', 'error'); return; }
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    this.openModal('Edit VRRP', `
+      <form id="edit-vrrp-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(vrrp.name || '')}"></div>
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control">
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}" ${i.name === vrrp.interface ? 'selected' : ''}>${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>VRID</label><input type="number" name="vrid" value="${this.escapeHtml(vrrp['vrid'] || '')}" min="1" max="255"></div>
+        <div class="form-group"><label>Priority</label><input type="number" name="priority" value="${this.escapeHtml(vrrp.priority || '100')}" min="1" max="255"></div>
+        <div class="form-group"><label>Password</label><input type="text" name="password" value="${this.escapeHtml(vrrp.password || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${vrrp.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${vrrp.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-vrrp-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateVRRP(this.selectedRouterId, vrrpId, data);
+          this.closeModal(); this.toast('VRRP updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteVRRP(id) {
+    if (!confirm('Delete this VRRP entry?')) return;
+    try { await api.deleteVRRP(this.selectedRouterId, id); this.toast('VRRP deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadBondingList(container) {
+    const bondings = await api.getBondings(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Bonding</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateBondingModal()">Add Bonding</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Mode</th><th>Slaves</th><th>MTU</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${bondings.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No bonding interfaces</td></tr>' : bondings.map((b) => `
+              <tr>
+                <td>${this.escapeHtml(b.name || '-')}</td>
+                <td>${this.escapeHtml(b.mode || '-')}</td>
+                <td>${this.escapeHtml(b.slaves || '-')}</td>
+                <td>${this.escapeHtml(b.mtu || '-')}</td>
+                <td>${b.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditBondingModal('${b['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteBonding('${b['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateBondingModal() {
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    const ethInterfaces = interfaces.filter((i) => i.type === 'ether' || i['type'] === 'ether');
+    this.openModal('Create Bonding', `
+      <form id="create-bonding-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. bond1"></div>
+        <div class="form-group"><label>Slaves</label><input type="text" name="slaves" required placeholder="e.g. ether1,ether2"></div>
+        <div class="form-group"><label>Mode</label>
+          <select name="mode" class="form-control">
+            <option value="balance-rr">Balance RR</option>
+            <option value="active-backup">Active Backup</option>
+            <option value="balance-xor">Balance XOR</option>
+            <option value="broadcast">Broadcast</option>
+            <option value="802.3ad">802.3ad</option>
+            <option value="balance-tlb">Balance TLB</option>
+            <option value="balance-alb">Balance ALB</option>
+          </select>
+        </div>
+        <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-bonding-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createBonding(this.selectedRouterId, data);
+          this.closeModal(); this.toast('Bonding created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditBondingModal(bondId) {
+    const bondings = await api.getBondings(this.selectedRouterId);
+    const bonding = bondings.find((b) => b['.id'] === bondId);
+    if (!bonding) { this.toast('Not found', 'error'); return; }
+    this.openModal('Edit Bonding', `
+      <form id="edit-bonding-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" value="${this.escapeHtml(bonding.name || '')}"></div>
+        <div class="form-group"><label>Slaves</label><input type="text" name="slaves" value="${this.escapeHtml(bonding.slaves || '')}"></div>
+        <div class="form-group"><label>Mode</label>
+          <select name="mode" class="form-control">
+            ${['balance-rr','active-backup','balance-xor','broadcast','802.3ad','balance-tlb','balance-alb'].map((m) => `<option value="${m}" ${bonding.mode === m ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>MTU</label><input type="text" name="mtu" value="${this.escapeHtml(bonding.mtu || '')}"></div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${bonding.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${bonding.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-bonding-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateBonding(this.selectedRouterId, bondId, data);
+          this.closeModal(); this.toast('Bonding updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteBonding(id) {
+    if (!confirm('Delete this bonding interface?')) return;
+    try { await api.deleteBonding(this.selectedRouterId, id); this.toast('Bonding deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async loadMACsecList(container) {
+    const macsecs = await api.getMACsecs(this.selectedRouterId);
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>MACsec</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateMACsecModal()">Add MACsec</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Name</th><th>Interface</th><th>Encrypt</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${macsecs.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No MACsec interfaces</td></tr>' : macsecs.map((m) => `
+              <tr>
+                <td>${this.escapeHtml(m.name || '-')}</td>
+                <td>${this.escapeHtml(m.interface || '-')}</td>
+                <td>${m.encrypt === 'true' ? 'Yes' : 'No'}</td>
+                <td>${m.running === 'true' ? '<span class="status-badge connected">Running</span>' : '<span class="status-badge disconnected">Not running</span>'}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditMACsecModal('${m['.id']}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteMACsec('${m['.id']}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  },
+
+  async showCreateMACsecModal() {
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    this.openModal('Create MACsec', `
+      <form id="create-macsec-form">
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control" required>
+            <option value="">Select...</option>
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}">${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>Encrypt</label>
+          <select name="encrypt" class="form-control">
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('create-macsec-form')).forEach((v, k) => { if (v) data[k] = v; });
+        try {
+          await api.createMACsec(this.selectedRouterId, data);
+          this.closeModal(); this.toast('MACsec created', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async showEditMACsecModal(macsecId) {
+    const macsecs = await api.getMACsecs(this.selectedRouterId);
+    const macsec = macsecs.find((m) => m['.id'] === macsecId);
+    if (!macsec) { this.toast('Not found', 'error'); return; }
+    let interfaces = [];
+    try { interfaces = await api.getInterfaces(this.selectedRouterId); } catch (err) {}
+    this.openModal('Edit MACsec', `
+      <form id="edit-macsec-form">
+        <div class="form-group"><label>Interface</label>
+          <select name="interface" class="form-control">
+            ${interfaces.map((i) => `<option value="${this.escapeHtml(i.name)}" ${i.name === macsec.interface ? 'selected' : ''}>${this.escapeHtml(i.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>Encrypt</label>
+          <select name="encrypt" class="form-control">
+            <option value="yes" ${macsec.encrypt === 'true' ? 'selected' : ''}>Yes</option>
+            <option value="no" ${macsec.encrypt !== 'true' ? 'selected' : ''}>No</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Disabled</label>
+          <select name="disabled" class="form-control">
+            <option value="no" ${macsec.disabled !== 'true' ? 'selected' : ''}>No</option>
+            <option value="yes" ${macsec.disabled === 'true' ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save', class: 'btn btn-primary', action: async () => {
+        const data = {};
+        new FormData(document.getElementById('edit-macsec-form')).forEach((v, k) => { data[k] = v; });
+        try {
+          await api.updateMACsec(this.selectedRouterId, macsecId, data);
+          this.closeModal(); this.toast('MACsec updated', 'success'); this.loadInterfacesTab();
+        } catch (err) { this.toast(err.message, 'error'); }
+      }},
+    ]);
+  },
+
+  async deleteMACsec(id) {
+    if (!confirm('Delete this MACsec interface?')) return;
+    try { await api.deleteMACsec(this.selectedRouterId, id); this.toast('MACsec deleted', 'success'); this.loadInterfacesTab(); }
+    catch (err) { this.toast(err.message, 'error'); }
   },
 
   async renderVouchers() {

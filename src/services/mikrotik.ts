@@ -939,6 +939,202 @@ class MikroTikService {
     }
   }
 
+  private async genericList(routerId: number, restPath: string, apiPath: string): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      const result = await this.restApiCall(config, 'GET', restPath);
+      return Array.isArray(result) ? result : [];
+    }
+    const client = this.getClient(routerId);
+    try {
+      return await client.write(apiPath);
+    } catch (err) {
+      console.error(`genericList ${apiPath} failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  private async genericCreate(routerId: number, restPath: string, apiPath: string, data: Record<string, any>): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', restPath, data);
+    }
+    const client = this.getClient(routerId);
+    try {
+      const params: string[] = [];
+      for (const [key, value] of Object.entries(data)) {
+        params.push(`=${key}=${value}`);
+      }
+      const result = await client.write(apiPath, params);
+      return result[0] || {};
+    } catch (err) {
+      console.error(`genericCreate ${apiPath} failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  private async genericUpdate(routerId: number, restPath: string, apiPath: string, id: string, data: Record<string, any>): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `${restPath}/${id}`, data);
+    }
+    const client = this.getClient(routerId);
+    try {
+      const params: string[] = [`=.id=${id}`];
+      for (const [key, value] of Object.entries(data)) {
+        params.push(`=${key}=${value}`);
+      }
+      const result = await client.write(apiPath, params);
+      return result[0] || {};
+    } catch (err) {
+      console.error(`genericUpdate ${apiPath} failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  private async genericDelete(routerId: number, restPath: string, apiPath: string, id: string): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'DELETE', `${restPath}/${id}`);
+    }
+    const client = this.getClient(routerId);
+    try {
+      const result = await client.write(apiPath, [`=.id=${id}`]);
+      return result[0] || {};
+    } catch (err) {
+      console.error(`genericDelete ${apiPath} failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getInterfaceList(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/list', '/interface/list/print');
+  }
+  async createInterfaceList(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/list/add', '/interface/list/add', data);
+  }
+  async updateInterfaceList(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/list', '/interface/list/set', id, data);
+  }
+  async deleteInterfaceList(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/list', '/interface/list/remove', id);
+  }
+
+  async getEthernet(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/ethernet', '/interface/ethernet/print');
+  }
+  async updateEthernet(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/ethernet', '/interface/ethernet/set', id, data);
+  }
+
+  async getVlans(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/vlan', '/interface/vlan/print');
+  }
+  async createVlan(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/vlan/add', '/interface/vlan/add', data);
+  }
+  async updateVlan(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/vlan', '/interface/vlan/set', id, data);
+  }
+  async deleteVlan(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/vlan', '/interface/vlan/remove', id);
+  }
+
+  async getBridges(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/bridge', '/interface/bridge/print');
+  }
+  async createBridge(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/bridge/add', '/interface/bridge/add', data);
+  }
+  async updateBridge(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/bridge', '/interface/bridge/set', id, data);
+  }
+  async deleteBridge(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/bridge', '/interface/bridge/remove', id);
+  }
+
+  async getEoIP(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/eoip', '/interface/eoip/print');
+  }
+  async createEoIP(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/eoip/add', '/interface/eoip/add', data);
+  }
+  async updateEoIP(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/eoip', '/interface/eoip/set', id, data);
+  }
+  async deleteEoIP(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/eoip', '/interface/eoip/remove', id);
+  }
+
+  async getIpTunnels(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/ipip', '/interface/ipip/print');
+  }
+  async createIpTunnel(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/ipip/add', '/interface/ipip/add', data);
+  }
+  async updateIpTunnel(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/ipip', '/interface/ipip/set', id, data);
+  }
+  async deleteIpTunnel(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/ipip', '/interface/ipip/remove', id);
+  }
+
+  async getGRE(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/gre', '/interface/gre/print');
+  }
+  async createGRE(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/gre/add', '/interface/gre/add', data);
+  }
+  async updateGRE(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/gre', '/interface/gre/set', id, data);
+  }
+  async deleteGRE(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/gre', '/interface/gre/remove', id);
+  }
+
+  async getVRRP(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/vrrp', '/interface/vrrp/print');
+  }
+  async createVRRP(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/vrrp/add', '/interface/vrrp/add', data);
+  }
+  async updateVRRP(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/vrrp', '/interface/vrrp/set', id, data);
+  }
+  async deleteVRRP(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/vrrp', '/interface/vrrp/remove', id);
+  }
+
+  async getBonding(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/bonding', '/interface/bonding/print');
+  }
+  async createBonding(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/bonding/add', '/interface/bonding/add', data);
+  }
+  async updateBonding(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/bonding', '/interface/bonding/set', id, data);
+  }
+  async deleteBonding(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/bonding', '/interface/bonding/remove', id);
+  }
+
+  async getMACsec(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/macsec', '/interface/macsec/print');
+  }
+  async createMACsec(routerId: number, data: Record<string, any>): Promise<any> {
+    return this.genericCreate(routerId, '/interface/macsec/add', '/interface/macsec/add', data);
+  }
+  async updateMACsec(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface/macsec', '/interface/macsec/set', id, data);
+  }
+  async deleteMACsec(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/macsec', '/interface/macsec/remove', id);
+  }
+
+  async updateInterface(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    return this.genericUpdate(routerId, '/interface', '/interface/set', id, data);
+  }
+
   private async hasFlashDirectory(routerId: number): Promise<boolean> {
     if (this.hasFlashCache.has(routerId)) {
       return this.hasFlashCache.get(routerId)!;

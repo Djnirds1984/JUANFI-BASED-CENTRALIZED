@@ -981,6 +981,7 @@ const App = {
               <div class="portal-actions">
                 <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
                 <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
+                <button class="btn btn-sm btn-outline" id="portal-upload-btn" onclick="App.uploadPortalFile()">Upload to Router</button>
                 <button class="btn btn-sm btn-outline" id="portal-reset-btn" onclick="App.resetPortalFile()">Reset to Default</button>
                 <button class="btn btn-sm btn-primary" id="portal-save-btn" onclick="App.savePortalFile()">Save</button>
               </div>
@@ -1005,6 +1006,8 @@ const App = {
       }
       document.getElementById('portal-router-select').addEventListener('change', (e) => {
         this.selectedRouterId = parseInt(e.target.value);
+        const uploadBtn = document.getElementById('portal-upload-btn');
+        if (uploadBtn) uploadBtn.style.display = '';
       });
     }
 
@@ -1046,15 +1049,18 @@ const App = {
     const saveBtn = document.getElementById('portal-save-btn');
     const resetBtn = document.getElementById('portal-reset-btn');
     const toggleBtn = document.getElementById('portal-toggle-preview');
+    const uploadBtn = document.getElementById('portal-upload-btn');
     if (!editor) return;
 
     const isEditable = !document.querySelector(`.portal-file-item[data-path="${filePath}"]`)?.classList.contains('binary');
     const isHtml = filePath.endsWith('.html');
+    const hasRouter = !!this.selectedRouterId;
 
     editor.disabled = !isEditable;
     saveBtn.style.display = isEditable ? '' : 'none';
     resetBtn.style.display = isEditable ? '' : 'none';
     toggleBtn.style.display = isHtml ? '' : 'none';
+    uploadBtn.style.display = hasRouter ? '' : 'none';
 
     if (!isEditable) {
       editor.value = '';
@@ -1112,6 +1118,21 @@ const App = {
       this.portalDirty = false;
       document.getElementById('portal-dirty').style.visibility = 'hidden';
       this.toast(`${this.portalCurrentFile} saved`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async uploadPortalFile() {
+    const routerId = this.selectedRouterId;
+    if (!routerId) {
+      this.toast('Select a router first', 'error');
+      return;
+    }
+    if (this.portalDirty && !confirm('You have unsaved changes. Upload will use the last saved version. Continue?')) return;
+    try {
+      const res = await api.pushPortalFile(routerId, this.portalCurrentFile);
+      this.toast(res.message || `${this.portalCurrentFile} uploaded to router`, 'success');
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -1268,7 +1289,7 @@ const App = {
       this.toast('Failed to load config: ' + err.message, 'error');
     }
 
-    this.updateSubVendoPreview();
+    await this.updateSubVendoPreview();
   },
 
   populateSubVendoForm(config) {
@@ -1368,71 +1389,15 @@ const App = {
     };
   },
 
-  generateConfigJsPreview(config) {
-    const vendoEntries = config.multiVendoAddresses.map((v) => {
-      let entry = `\t{
-\t\tvendoName: "${v.vendoName}",
-\t\tvendoIp: "${v.vendoIp}",
-\t\tchargingEnable: ${v.chargingEnable},
-\t\teloadEnable: ${v.eloadEnable}`;
-      if (v.hotspotAddress) {
-        entry += `,
-\t\thotspotAddress: "${v.hotspotAddress}"`;
-      }
-      if (v.interfaceName) {
-        entry += `,
-\t\tinterfaceName: "${v.interfaceName}"`;
-      }
-      entry += '\n\t}';
-      return entry;
-    });
-
-    return `//this is to enable multi vendo setup, set to true when multi vendo is supported
-var isMultiVendo = ${config.isMultiVendo};
-// 0 = traditional (client choose a vendo) , 1 = auto select vendo base on hotspot address, 2 = interface name ( this will preserve one hotspot server ip only)
-var multiVendoOption = ${config.multiVendoOption};
-
-//list here all node mcu address for multi vendo setup
-var multiVendoAddresses = [
-${vendoEntries.join(',\n')}
-];
-
-
-//0 means its login by username only, 1 = means if login by username + password
-var loginOption = ${config.loginOption}; //replace 1 if you want login voucher by username + password
-
-var dataRateOption = ${config.dataRateOption}; //replace true if you enable data rates
-//put here the default selected address
-var vendorIpAddress = "${config.vendorIpAddress}";
-
-var chargingEnable = ${config.chargingEnable}; //replace true if you enable charging, this can be override if multivendo setup
-
-var eloadEnable = ${config.eloadEnable}; //replace true if you enable eload, this can be override if multivendo setup
-
-//hide pause time / logout true = you want to show pause / logout button
-var showPauseTime = ${config.showPauseTime};
-
-//enable member login, true = if you want to enable member login
-var showMemberLogin = ${config.showMemberLogin};
-
-//enable extend time button for customers
-var showExtendTimeButton = ${config.showExtendTimeButton};
-
-//disable voucher input
-var disableVoucherInput = ${config.disableVoucherInput};
-
-//enable mac address as voucher code
-var macAsVoucherCode = ${config.macAsVoucherCode};
-
-var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
-`;
-  },
-
-  updateSubVendoPreview() {
-    const config = this.collectSubVendoData();
+  async updateSubVendoPreview() {
     const preview = document.getElementById('subvendo-preview');
-    if (preview) {
-      preview.value = this.generateConfigJsPreview(config);
+    if (!preview) return;
+    try {
+      const res = await fetch('/hotspot-assets/assets/js/config.js?t=' + Date.now());
+      if (!res.ok) throw new Error('File not found');
+      preview.value = await res.text();
+    } catch (err) {
+      preview.value = '// Could not load config.js from working folder: ' + err.message;
     }
   },
 
@@ -1440,6 +1405,7 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
     try {
       const config = this.collectSubVendoData();
       await api.saveSubVendoConfig(config);
+      await this.updateSubVendoPreview();
       this.toast('SubVendo config saved', 'success');
     } catch (err) {
       this.toast('Failed to save: ' + err.message, 'error');
@@ -1457,6 +1423,7 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
       const config = this.collectSubVendoData();
       await api.saveSubVendoConfig(config);
       await api.pushSubVendoConfig(routerId);
+      await this.updateSubVendoPreview();
       this.toast('Config saved and pushed to router', 'success');
     } catch (err) {
       this.toast('Failed: ' + err.message, 'error');

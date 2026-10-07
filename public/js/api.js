@@ -184,6 +184,10 @@ class ApiClient {
     return this.post(`/portal/reset/${encodeURIComponent(name)}`);
   }
 
+  async pushPortalFile(routerId, filePath) {
+    return this.post(`/portal/push-file/${routerId}`, { file: filePath });
+  }
+
   async pushPortalFiles(routerId) {
     return this.post(`/portal/push/${routerId}`, {});
   }

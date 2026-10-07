@@ -166,6 +166,51 @@ router.post('/reset/*', (req: Request, res: Response) => {
   }
 });
 
+router.post('/push-file/:routerId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    if (isNaN(routerId)) {
+      res.status(400).json({ error: 'Invalid router id' });
+      return;
+    }
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const { file: filePath } = req.body;
+    if (!filePath || typeof filePath !== 'string') {
+      res.status(400).json({ error: 'file is required' });
+      return;
+    }
+
+    if (!validatePortalPath(filePath)) {
+      res.status(400).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    const routerPath = `hotspot/${filePath}`;
+    const editable = isEditable(filePath);
+
+    if (editable) {
+      const db = getDb();
+      const row = db.prepare('SELECT content FROM portal_files WHERE path = ?').get(filePath) as any;
+      const content: string = row ? row.content : getPortalDefaultContent(filePath)!;
+      await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
+    } else {
+      const fullPath = path.join(HOTSPOT_ROOT, filePath);
+      const data = fs.readFileSync(fullPath);
+      await mikroTikService.uploadFileSFTP(routerId, routerPath, data);
+    }
+
+    res.json({ message: `${filePath} pushed to router` });
+  } catch (error: any) {
+    console.error('Push single portal file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/push/:routerId', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

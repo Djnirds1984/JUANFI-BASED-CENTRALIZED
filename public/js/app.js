@@ -1289,7 +1289,14 @@ const App = {
       this.toast('Failed to load config: ' + err.message, 'error');
     }
 
-    await this.updateSubVendoPreview();
+    this.updateSubVendoPreview();
+
+    document.querySelector('.subvendo-form').addEventListener('change', () => {
+      this.updateSubVendoPreview();
+    });
+    document.querySelector('.subvendo-form').addEventListener('input', () => {
+      this.updateSubVendoPreview();
+    });
   },
 
   populateSubVendoForm(config) {
@@ -1317,7 +1324,7 @@ const App = {
     const entry = document.createElement('div');
     entry.className = 'vendo-entry';
     entry.innerHTML = `
-      <button class="vendo-remove" onclick="this.parentElement.remove()">&times;</button>
+      <button class="vendo-remove" onclick="this.parentElement.remove(); document.querySelector('.subvendo-form').dispatchEvent(new Event('change'))">&times;</button>
       <div class="vendo-entry-grid">
         <div class="form-row">
           <label>Vendo Name:</label>
@@ -1389,15 +1396,71 @@ const App = {
     };
   },
 
-  async updateSubVendoPreview() {
+  generateConfigJsPreview(config) {
+    const vendoEntries = config.multiVendoAddresses.map((v) => {
+      let entry = `\t{
+\t\tvendoName: "${v.vendoName}",
+\t\tvendoIp: "${v.vendoIp}",
+\t\tchargingEnable: ${v.chargingEnable},
+\t\teloadEnable: ${v.eloadEnable}`;
+      if (v.hotspotAddress) {
+        entry += `,
+\t\thotspotAddress: "${v.hotspotAddress}"`;
+      }
+      if (v.interfaceName) {
+        entry += `,
+\t\tinterfaceName: "${v.interfaceName}"`;
+      }
+      entry += '\n\t}';
+      return entry;
+    });
+
+    return `//this is to enable multi vendo setup, set to true when multi vendo is supported
+var isMultiVendo = ${config.isMultiVendo};
+// 0 = traditional (client choose a vendo) , 1 = auto select vendo base on hotspot address, 2 = interface name ( this will preserve one hotspot server ip only)
+var multiVendoOption = ${config.multiVendoOption};
+
+//list here all node mcu address for multi vendo setup
+var multiVendoAddresses = [
+${vendoEntries.join(',\n')}
+];
+
+
+//0 means its login by username only, 1 = means if login by username + password
+var loginOption = ${config.loginOption}; //replace 1 if you want login voucher by username + password
+
+var dataRateOption = ${config.dataRateOption}; //replace true if you enable data rates
+//put here the default selected address
+var vendorIpAddress = "${config.vendorIpAddress}";
+
+var chargingEnable = ${config.chargingEnable}; //replace true if you enable charging, this can be override if multivendo setup
+
+var eloadEnable = ${config.eloadEnable}; //replace true if you enable eload, this can be override if multivendo setup
+
+//hide pause time / logout true = you want to show pause / logout button
+var showPauseTime = ${config.showPauseTime};
+
+//enable member login, true = if you want to enable member login
+var showMemberLogin = ${config.showMemberLogin};
+
+//enable extend time button for customers
+var showExtendTimeButton = ${config.showExtendTimeButton};
+
+//disable voucher input
+var disableVoucherInput = ${config.disableVoucherInput};
+
+//enable mac address as voucher code
+var macAsVoucherCode = ${config.macAsVoucherCode};
+
+var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
+`;
+  },
+
+  updateSubVendoPreview() {
+    const config = this.collectSubVendoData();
     const preview = document.getElementById('subvendo-preview');
-    if (!preview) return;
-    try {
-      const res = await fetch('/hotspot-assets/assets/js/config.js?t=' + Date.now());
-      if (!res.ok) throw new Error('File not found');
-      preview.value = await res.text();
-    } catch (err) {
-      preview.value = '// Could not load config.js from working folder: ' + err.message;
+    if (preview) {
+      preview.value = this.generateConfigJsPreview(config);
     }
   },
 
@@ -1405,7 +1468,7 @@ const App = {
     try {
       const config = this.collectSubVendoData();
       await api.saveSubVendoConfig(config);
-      await this.updateSubVendoPreview();
+      this.updateSubVendoPreview();
       this.toast('SubVendo config saved', 'success');
     } catch (err) {
       this.toast('Failed to save: ' + err.message, 'error');
@@ -1423,7 +1486,7 @@ const App = {
       const config = this.collectSubVendoData();
       await api.saveSubVendoConfig(config);
       await api.pushSubVendoConfig(routerId);
-      await this.updateSubVendoPreview();
+      this.updateSubVendoPreview();
       this.toast('Config saved and pushed to router', 'success');
     } catch (err) {
       this.toast('Failed: ' + err.message, 'error');

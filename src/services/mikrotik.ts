@@ -537,6 +537,62 @@ class MikroTikService {
     }
   }
 
+  async getIpBindings(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const bindings = await this.restApiCall(config, 'GET', '/ip/hotspot/ip-binding');
+      return Array.isArray(bindings) ? bindings : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/hotspot/ip-binding/print');
+    } catch (err) {
+      console.error(`getIpBindings failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createIpBinding(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/ip-binding', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/ip-binding/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createIpBinding failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async deleteIpBinding(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/ip-binding/${id}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/ip-binding/remove', `=.id=${id}`]);
+    } catch (err) {
+      console.error(`deleteIpBinding failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getHotspotCookie(routerId: number): Promise<any> {
     const config = this.routerConfigs.get(routerId);
 
@@ -552,6 +608,58 @@ class MikroTikService {
     } catch (err) {
       console.log(`Cookie query failed for router ${routerId}, returning null`);
       return null;
+    }
+  }
+
+  async getHotspotCookies(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const cookies = await this.restApiCall(config, 'GET', '/ip/hotspot/cookie');
+      return Array.isArray(cookies) ? cookies : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const result = await client.write('/ip/hotspot/cookie/print');
+      return Array.isArray(result) ? result : [];
+    } catch (err) {
+      console.log(`Cookies query failed for router ${routerId}, returning empty array`);
+      return [];
+    }
+  }
+
+  async deleteHotspotCookie(routerId: number, cookieId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/cookie/${cookieId}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/cookie/remove', `=.id=${cookieId}`]);
+    } catch (err) {
+      console.error(`deleteHotspotCookie failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getUserProfiles(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const profiles = await this.restApiCall(config, 'GET', '/ip/hotspot/user/profile');
+      return Array.isArray(profiles) ? profiles : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/hotspot/user/profile/print');
+    } catch (err) {
+      console.error(`getUserProfiles failed for router ${routerId}:`, (err as Error).message);
+      throw err;
     }
   }
 

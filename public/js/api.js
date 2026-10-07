@@ -155,6 +155,30 @@ class ApiClient {
     return this.put(`/hotspot/router/${routerId}/cookie`, data);
   }
 
+  async getHotspotCookies(routerId) {
+    return this.get(`/hotspot/router/${routerId}/cookies`);
+  }
+
+  async deleteHotspotCookie(routerId, cookieId) {
+    return this.delete(`/hotspot/router/${routerId}/cookie/${cookieId}`);
+  }
+
+  async getUserProfiles(routerId) {
+    return this.get(`/hotspot/router/${routerId}/user-profiles`);
+  }
+
+  async getIpBindings(routerId) {
+    return this.get(`/hotspot/router/${routerId}/ip-bindings`);
+  }
+
+  async createIpBinding(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/ip-bindings`, data);
+  }
+
+  async deleteIpBinding(routerId, bindingId) {
+    return this.delete(`/hotspot/router/${routerId}/ip-binding/${bindingId}`);
+  }
+
   async getVouchers(routerId, params = {}) {
     const query = new URLSearchParams(params).toString();
     return this.get(`/vouchers/router/${routerId}${query ? '?' + query : ''}`);

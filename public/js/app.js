@@ -786,6 +786,10 @@ const App = {
       this.selectedRouterId = routers[0].id;
     }
 
+    if (!this.hotspotSettingsTab) {
+      this.hotspotSettingsTab = 'servers';
+    }
+
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
@@ -794,166 +798,290 @@ const App = {
             ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
           </select>
         </div>
+        <div class="tabs">
+          <button class="tab ${this.hotspotSettingsTab === 'servers' ? 'active' : ''}" data-tab="servers">Hotspot Servers</button>
+          <button class="tab ${this.hotspotSettingsTab === 'server-profiles' ? 'active' : ''}" data-tab="server-profiles">Server Profiles</button>
+          <button class="tab ${this.hotspotSettingsTab === 'user-profiles' ? 'active' : ''}" data-tab="user-profiles">User Profiles</button>
+          <button class="tab ${this.hotspotSettingsTab === 'ip-bindings' ? 'active' : ''}" data-tab="ip-bindings">IP Bindings</button>
+          <button class="tab ${this.hotspotSettingsTab === 'walled-garden' ? 'active' : ''}" data-tab="walled-garden">Walled Garden</button>
+          <button class="tab ${this.hotspotSettingsTab === 'cookies' ? 'active' : ''}" data-tab="cookies">Cookies</button>
+        </div>
         <div id="hotspot-settings-content">Loading...</div>
       </div>
     `;
 
     document.getElementById('hotspot-settings-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
-      this.loadHotspotSettings();
+      this.loadHotspotSettingsTab();
     });
 
-    this.loadHotspotSettings();
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.hotspotSettingsTab = tab.dataset.tab;
+        document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadHotspotSettingsTab();
+      });
+    });
+
+    this.loadHotspotSettingsTab();
   },
 
-  async loadHotspotSettings() {
+  async loadHotspotSettingsTab() {
     const container = document.getElementById('hotspot-settings-content');
     container.innerHTML = 'Loading...';
 
     try {
-      const [servers, profiles] = await Promise.all([
-        api.getHotspotServers(this.selectedRouterId),
-        api.getHotspotProfiles(this.selectedRouterId),
-      ]);
-
-      let walledGarden = [];
-      let cookie = {};
-      
-      try {
-        walledGarden = await api.getWalledGarden(this.selectedRouterId);
-      } catch (err) {
-        console.log('Walled garden fetch failed, using empty array');
+      switch (this.hotspotSettingsTab) {
+        case 'servers': await this.loadHotspotServers(container); break;
+        case 'server-profiles': await this.loadServerProfiles(container); break;
+        case 'user-profiles': await this.loadUserProfiles(container); break;
+        case 'ip-bindings': await this.loadIpBindings(container); break;
+        case 'walled-garden': await this.loadWalledGarden(container); break;
+        case 'cookies': await this.loadCookies(container); break;
       }
-      
-      try {
-        cookie = await api.getHotspotCookie(this.selectedRouterId);
-      } catch (err) {
-        console.log('Cookie fetch failed, using empty object');
-      }
-
-      container.innerHTML = `
-        <div class="settings-section">
-          <div class="settings-section-header">
-            <h4>Hotspot Servers</h4>
-            <button class="btn btn-primary btn-sm" onclick="App.showCreateServerModal()">Add Server</button>
-          </div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Interface</th>
-                  <th>Address Pool</th>
-                  <th>Profile</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${servers.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No servers configured</td></tr>' : servers.map((s) => `
-                  <tr>
-                    <td>${this.escapeHtml(s.name || '-')}</td>
-                    <td>${this.escapeHtml(s.interface || '-')}</td>
-                    <td>${this.escapeHtml(s['address-pool'] || '-')}</td>
-                    <td>${this.escapeHtml(s.profile || '-')}</td>
-                    <td>${s.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-header">
-            <h4>Server Profiles</h4>
-          </div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Address Pool</th>
-                  <th>Rate Limit</th>
-                  <th>Shared Users</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${profiles.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No profiles found</td></tr>' : profiles.map((p) => `
-                  <tr>
-                    <td>${this.escapeHtml(p.name || '-')}</td>
-                    <td>${this.escapeHtml(p['address-pool'] || '-')}</td>
-                    <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
-                    <td>${this.escapeHtml(p['shared-users'] || '1')}</td>
-                    <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-header">
-            <h4>Walled Garden</h4>
-            <button class="btn btn-primary btn-sm" onclick="App.showCreateWalledGardenModal()">Add Entry</button>
-          </div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Host</th>
-                  <th>Action</th>
-                  <th>Comment</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${walledGarden.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No walled garden entries</td></tr>' : walledGarden.map((w) => `
-                  <tr>
-                    <td>${this.escapeHtml(w.host || '-')}</td>
-                    <td>${this.escapeHtml(w.action || '-')}</td>
-                    <td>${this.escapeHtml(w.comment || '-')}</td>
-                    <td>
-                      <button class="btn btn-sm btn-danger" onclick="App.deleteWalledGarden('${w['.id']}')">Delete</button>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-header">
-            <h4>Cookie Settings</h4>
-          </div>
-          <form id="cookie-settings-form" class="settings-form">
-            <div class="form-group">
-              <label>Cookie Lifetime</label>
-              <input type="text" name="lifetime" value="${this.escapeHtml(cookie.lifetime || '3d')}" placeholder="e.g. 3d, 1h, 30m">
-              <small style="color:var(--text-muted)">Format: number + unit (d=days, h=hours, m=minutes)</small>
-            </div>
-            <button type="submit" class="btn btn-primary">Save Cookie Settings</button>
-          </form>
-        </div>
-      `;
-
-      document.getElementById('cookie-settings-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const data = {
-          lifetime: formData.get('lifetime'),
-        };
-        try {
-          await api.setHotspotCookie(this.selectedRouterId, data);
-          this.toast('Cookie settings updated', 'success');
-        } catch (err) {
-          this.toast(err.message, 'error');
-        }
-      });
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadHotspotServers(container) {
+    const servers = await api.getHotspotServers(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Hotspot Servers</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateServerModal()">Add Server</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Interface</th>
+                <th>Address Pool</th>
+                <th>Profile</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${servers.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No servers configured</td></tr>' : servers.map((s) => `
+                <tr>
+                  <td>${this.escapeHtml(s.name || '-')}</td>
+                  <td>${this.escapeHtml(s.interface || '-')}</td>
+                  <td>${this.escapeHtml(s['address-pool'] || '-')}</td>
+                  <td>${this.escapeHtml(s.profile || '-')}</td>
+                  <td>${s.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async loadServerProfiles(container) {
+    const profiles = await api.getHotspotProfiles(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Server Profiles</h4>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Address Pool</th>
+                <th>Rate Limit</th>
+                <th>Shared Users</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${profiles.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No profiles found</td></tr>' : profiles.map((p) => `
+                <tr>
+                  <td>${this.escapeHtml(p.name || '-')}</td>
+                  <td>${this.escapeHtml(p['address-pool'] || '-')}</td>
+                  <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
+                  <td>${this.escapeHtml(p['shared-users'] || '1')}</td>
+                  <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async loadUserProfiles(container) {
+    const profiles = await api.getUserProfiles(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>User Profiles</h4>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Rate Limit</th>
+                <th>Shared Users</th>
+                <th>Session Timeout</th>
+                <th>Idle Timeout</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${profiles.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No user profiles found</td></tr>' : profiles.map((p) => `
+                <tr>
+                  <td>${this.escapeHtml(p.name || '-')}</td>
+                  <td>${this.escapeHtml(p['rate-limit'] || '-')}</td>
+                  <td>${this.escapeHtml(p['shared-users'] || '1')}</td>
+                  <td>${this.escapeHtml(p['session-timeout'] || '-')}</td>
+                  <td>${this.escapeHtml(p['idle-timeout'] || '-')}</td>
+                  <td>${p.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async loadIpBindings(container) {
+    const bindings = await api.getIpBindings(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>IP Bindings</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateIpBindingModal()">Add Binding</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>MAC Address</th>
+                <th>Address</th>
+                <th>To Address</th>
+                <th>Server</th>
+                <th>Comment</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${bindings.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No IP bindings found</td></tr>' : bindings.map((b) => `
+                <tr>
+                  <td>${this.escapeHtml(b['mac-address'] || '-')}</td>
+                  <td>${this.escapeHtml(b.address || '-')}</td>
+                  <td>${this.escapeHtml(b['to-address'] || '-')}</td>
+                  <td>${this.escapeHtml(b.server || 'all')}</td>
+                  <td>${this.escapeHtml(b.comment || '-')}</td>
+                  <td>${b.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Enabled</span>'}</td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteIpBinding('${b['.id']}')">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async loadWalledGarden(container) {
+    const entries = await api.getWalledGarden(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Walled Garden</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showCreateWalledGardenModal()">Add Entry</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Host</th>
+                <th>Action</th>
+                <th>Comment</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No walled garden entries</td></tr>' : entries.map((w) => `
+                <tr>
+                  <td>${this.escapeHtml(w.host || '-')}</td>
+                  <td>${this.escapeHtml(w.action || '-')}</td>
+                  <td>${this.escapeHtml(w.comment || '-')}</td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteWalledGarden('${w['.id']}')">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async loadCookies(container) {
+    const cookies = await api.getHotspotCookies(this.selectedRouterId);
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Cookies</h4>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Domain</th>
+                <th>MAC Address</th>
+                <th>Expires In</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${cookies.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No cookies found</td></tr>' : cookies.map((c) => `
+                <tr>
+                  <td>${this.escapeHtml(c.user || '-')}</td>
+                  <td>${this.escapeHtml(c.domain || '-')}</td>
+                  <td>${this.escapeHtml(c['mac-address'] || '-')}</td>
+                  <td>${this.escapeHtml(c['expires-in'] || '-')}</td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteHotspotCookie('${c['.id']}')">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async deleteHotspotCookie(cookieId) {
+    if (!confirm('Delete this cookie?')) return;
+    try {
+      await api.deleteHotspotCookie(this.selectedRouterId, cookieId);
+      this.toast('Cookie deleted', 'success');
+      this.loadHotspotSettingsTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
     }
   },
 
@@ -1007,13 +1135,73 @@ const App = {
             await api.createHotspotServer(this.selectedRouterId, data);
             this.closeModal();
             this.toast('Hotspot server created', 'success');
-            this.loadHotspotSettings();
+            this.loadHotspotSettingsTab();
           } catch (err) {
             this.toast(err.message, 'error');
           }
         },
       },
     ]);
+  },
+
+  async showCreateIpBindingModal() {
+    this.openModal('Add IP Binding', `
+      <form id="create-ip-binding-form">
+        <div class="form-group">
+          <label>MAC Address</label>
+          <input type="text" name="mac-address" placeholder="e.g. 00:11:22:33:44:55">
+        </div>
+        <div class="form-group">
+          <label>Address</label>
+          <input type="text" name="address" placeholder="e.g. 192.168.1.100">
+        </div>
+        <div class="form-group">
+          <label>To Address</label>
+          <input type="text" name="to-address" placeholder="e.g. 192.168.1.200">
+        </div>
+        <div class="form-group">
+          <label>Server</label>
+          <input type="text" name="server" value="all" placeholder="e.g. all or hotspot1">
+        </div>
+        <div class="form-group">
+          <label>Comment (optional)</label>
+          <input type="text" name="comment" placeholder="e.g. Office PC">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Add',
+        class: 'btn btn-primary',
+        action: async () => {
+          const form = document.getElementById('create-ip-binding-form');
+          const formData = new FormData(form);
+          const data = {};
+          formData.forEach((value, key) => {
+            if (value) data[key] = value;
+          });
+          try {
+            await api.createIpBinding(this.selectedRouterId, data);
+            this.closeModal();
+            this.toast('IP binding added', 'success');
+            this.loadHotspotSettingsTab();
+          } catch (err) {
+            this.toast(err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  async deleteIpBinding(bindingId) {
+    if (!confirm('Delete this IP binding?')) return;
+    try {
+      await api.deleteIpBinding(this.selectedRouterId, bindingId);
+      this.toast('IP binding deleted', 'success');
+      this.loadHotspotSettingsTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async showCreateWalledGardenModal() {
@@ -1051,7 +1239,7 @@ const App = {
             await api.createWalledGarden(this.selectedRouterId, data);
             this.closeModal();
             this.toast('Walled garden entry added', 'success');
-            this.loadHotspotSettings();
+            this.loadHotspotSettingsTab();
           } catch (err) {
             this.toast(err.message, 'error');
           }
@@ -1065,7 +1253,7 @@ const App = {
     try {
       await api.deleteWalledGarden(this.selectedRouterId, entryId);
       this.toast('Walled garden entry deleted', 'success');
-      this.loadHotspotSettings();
+      this.loadHotspotSettingsTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }

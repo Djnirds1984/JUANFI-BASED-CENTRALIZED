@@ -490,10 +490,11 @@ class MikroTikService {
 
     const client = this.getClient(routerId);
     try {
-      return await client.write('/ip/hotspot/walled-garden/print');
+      const result = await client.write('/ip/hotspot/walled-garden/print');
+      return Array.isArray(result) ? result : [];
     } catch (err) {
-      console.error(`getWalledGarden failed for router ${routerId}:`, (err as Error).message);
-      throw err;
+      console.log(`Walled garden query failed for router ${routerId}, returning empty array`);
+      return [];
     }
   }
 
@@ -549,8 +550,8 @@ class MikroTikService {
       const result = await client.write('/ip/hotspot/cookie/print');
       return Array.isArray(result) && result.length > 0 ? result[0] : null;
     } catch (err) {
-      console.error(`getHotspotCookie failed for router ${routerId}:`, (err as Error).message);
-      throw err;
+      console.log(`Cookie query failed for router ${routerId}, returning null`);
+      return null;
     }
   }
 

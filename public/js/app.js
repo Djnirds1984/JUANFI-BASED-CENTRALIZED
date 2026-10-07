@@ -726,12 +726,25 @@ const App = {
     container.innerHTML = 'Loading...';
 
     try {
-      const [servers, profiles, walledGarden, cookie] = await Promise.all([
+      const [servers, profiles] = await Promise.all([
         api.getHotspotServers(this.selectedRouterId),
         api.getHotspotProfiles(this.selectedRouterId),
-        api.getWalledGarden(this.selectedRouterId),
-        api.getHotspotCookie(this.selectedRouterId),
       ]);
+
+      let walledGarden = [];
+      let cookie = {};
+      
+      try {
+        walledGarden = await api.getWalledGarden(this.selectedRouterId);
+      } catch (err) {
+        console.log('Walled garden fetch failed, using empty array');
+      }
+      
+      try {
+        cookie = await api.getHotspotCookie(this.selectedRouterId);
+      } catch (err) {
+        console.log('Cookie fetch failed, using empty object');
+      }
 
       container.innerHTML = `
         <div class="settings-section">

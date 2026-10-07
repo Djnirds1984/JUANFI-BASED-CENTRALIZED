@@ -838,15 +838,29 @@ const App = {
       const mins = parseInt(form.durationMins.value) || 0;
       const totalMinutes = days * 24 * 60 + hours * 60 + mins;
 
-      await api.generateVouchers(this.selectedRouterId, {
+      const result = await api.generateVouchers(this.selectedRouterId, {
         count: parseInt(form.count.value),
         profile: form.profile.value,
         durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         dataLimitMb: form.dataLimitMb.value ? parseInt(form.dataLimitMb.value) : null,
         prefix: form.prefix.value || undefined,
       });
+
       this.closeModal();
-      this.toast('Vouchers generated', 'success');
+
+      let message = `Generated ${result.vouchers?.length || 0} voucher(s)`;
+      if (result.mikrotik) {
+        if (result.mikrotik.connected) {
+          message += ` | MikroTik: ${result.mikrotik.success} added`;
+          if (result.mikrotik.failed > 0) {
+            message += `, ${result.mikrotik.failed} failed`;
+          }
+        } else {
+          message += ' | MikroTik: Not connected';
+        }
+      }
+
+      this.toast(message, 'success');
       this.loadVouchers();
     } catch (err) {
       this.toast(err.message, 'error');

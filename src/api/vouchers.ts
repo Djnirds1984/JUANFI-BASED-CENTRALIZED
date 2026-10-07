@@ -76,6 +76,9 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
+    let mikrotikSuccess = 0;
+    let mikrotikFailed = 0;
+
     const insertMany = db.transaction(() => {
       for (let i = 0; i < quantity; i++) {
         const code = prefix ? `${prefix}-${generateCode()}` : generateCode();
@@ -85,7 +88,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         let expiresAt: string | null = null;
         if (durationMinutes) {
           const expiry = new Date();
-          expiry.setMinutes(expiry.getMinutes() + durationMinutes * 24 * 60);
+          expiry.setMinutes(expiry.getMinutes() + durationMinutes);
           expiresAt = expiry.toISOString();
         }
 
@@ -101,13 +104,20 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         );
 
         if (mikroTikService.isConnected(routerId)) {
+          const hours = Math.floor(durationMinutes / 60);
+          const mins = durationMinutes % 60;
           mikroTikService.createHotspotUser(routerId, {
             username,
             password,
             profile: profile || 'default',
-            uptimeLimit: durationMinutes ? `${durationMinutes * 24 * 60}:00:00` : undefined,
+            uptimeLimit: durationMinutes ? `${hours}:${String(mins).padStart(2, '0')}:00` : undefined,
             comment: `Voucher: ${code}`,
-          }).catch((err) => console.error('Failed to create hotspot user:', err));
+          })
+            .then(() => { mikrotikSuccess++; })
+            .catch((err) => {
+              mikrotikFailed++;
+              console.error('Failed to create hotspot user:', err);
+            });
         }
 
         vouchers.push({
@@ -123,9 +133,17 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
 
     insertMany();
 
+    // Wait for MikroTik operations to complete
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
     res.status(201).json({
       message: `Generated ${quantity} voucher(s)`,
       vouchers,
+      mikrotik: {
+        connected: mikroTikService.isConnected(routerId),
+        success: mikrotikSuccess,
+        failed: mikrotikFailed,
+      },
     });
   } catch (error: any) {
     console.error('Generate vouchers error:', error);

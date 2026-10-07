@@ -2027,7 +2027,7 @@ const App = {
   async renderInterfaces() {
     const content = document.getElementById('page-content');
     const routers = await api.getRouters();
-    const connected = routers.filter((r) => r.status === 'connected');
+    const connected = routers.filter((r) => r.connected);
 
     if (!this.selectedRouterId || !connected.find((r) => r.id === this.selectedRouterId)) {
       this.selectedRouterId = connected.length > 0 ? connected[0].id : (routers.length > 0 ? routers[0].id : null);
@@ -2041,7 +2041,7 @@ const App = {
       <div class="card">
         <div class="card-header">
           <select id="interfaces-router-select" class="form-control" style="width:auto;min-width:200px">
-            ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)} (${this.escapeHtml(r.host)})${r.status === 'connected' ? '' : ' - offline'}</option>`).join('')}
+            ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)} (${this.escapeHtml(r.host)})${r.connected ? '' : ' - offline'}</option>`).join('')}
           </select>
         </div>
         <div class="tabs" style="margin-top:1rem">

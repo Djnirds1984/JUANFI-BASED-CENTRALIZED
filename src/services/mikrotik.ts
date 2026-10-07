@@ -727,6 +727,15 @@ class MikroTikService {
       // Step 6: Create admin user
       try {
         if (isRestApi) {
+          const profiles = await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot/user/profile');
+          const profileList = Array.isArray(profiles) ? profiles : [];
+          const profileExists = profileList.some((p: any) => p.name === userProfileName);
+          if (!profileExists) {
+            await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {
+              name: userProfileName,
+              'rate-limit': '1M/1M',
+            });
+          }
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/add', {
             name: config.adminUsername,
             password: config.adminPassword,
@@ -735,6 +744,15 @@ class MikroTikService {
           });
         } else {
           const client = this.getClient(routerId);
+          const profiles = await client.write('/ip/hotspot/user/profile/print');
+          const profileExists = profiles.some((p: any) => p.name === userProfileName);
+          if (!profileExists) {
+            await client.write('/ip/hotspot/user/profile/add', [
+              `=name=${userProfileName}`,
+              `=address-pool=${poolName}`,
+              `=rate-limit=1M/1M`,
+            ]);
+          }
           await client.write('/ip/hotspot/user/add', [
             `=name=${config.adminUsername}`,
             `=password=${config.adminPassword}`,

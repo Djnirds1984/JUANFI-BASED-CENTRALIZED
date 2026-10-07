@@ -2108,8 +2108,8 @@ const App = {
         <div class="form-group"><label>Type</label><input type="text" value="VLAN" readonly class="form-control"></div>
         <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="1500"></div>
         <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="1500"></div>
-        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="main" placeholder="main"></div>
-        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" placeholder="XX:XX:XX:XX:XX:XX"></div>
+        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" placeholder="main (optional)"></div>
+        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" placeholder="XX:XX:XX:XX:XX:XX (optional)"></div>
         <div class="form-group"><label>ARP</label>
           <select name="arp" class="form-control">
             <option value="enabled" selected>enabled</option>
@@ -2135,9 +2135,13 @@ const App = {
         const form = document.getElementById('create-vlan-form');
         const fd = new FormData(form);
         const data = {};
-        fd.forEach((v, k) => { if (v) data[k] = v; });
-        if (!form.querySelector('[name="use-service-tag"]').checked) data['use-service-tag'] = 'no';
-        if (!form.querySelector('[name="mvrp"]').checked) data['mvrp'] = 'no';
+        fd.forEach((v, k) => {
+          if (v && v.trim()) data[k] = v;
+        });
+        data['use-service-tag'] = form.querySelector('[name="use-service-tag"]').checked ? 'yes' : 'no';
+        data['mvrp'] = form.querySelector('[name="mvrp"]').checked ? 'yes' : 'no';
+        if (!data['mac-address']) delete data['mac-address'];
+        if (!data['vrf-interface']) delete data['vrf-interface'];
         try {
           await api.createVlan(this.selectedRouterId, data);
           this.closeModal(); this.toast('VLAN created', 'success'); this.loadInterfacesTab();
@@ -2161,8 +2165,8 @@ const App = {
         <div class="form-group"><label>MTU</label><input type="number" name="mtu" value="${this.escapeHtml(vlan.mtu || '1500')}"></div>
         <div class="form-group"><label>Actual MTU</label><input type="text" value="${this.escapeHtml(vlan['actual-mtu'] || '-')}" readonly class="form-control"></div>
         <div class="form-group"><label>L2 MTU</label><input type="number" name="l2-mtu" value="${this.escapeHtml(vlan['l2-mtu'] || '1500')}"></div>
-        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="${this.escapeHtml(vlan['vrf-interface'] || 'main')}"></div>
-        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" value="${this.escapeHtml(vlan['mac-address'] || '')}" placeholder="XX:XX:XX:XX:XX:XX"></div>
+        <div class="form-group"><label>VRF</label><input type="text" name="vrf-interface" value="${this.escapeHtml(vlan['vrf-interface'] || '')}" placeholder="main (optional)"></div>
+        <div class="form-group"><label>MAC Address</label><input type="text" name="mac-address" value="${this.escapeHtml(vlan['mac-address'] || '')}" placeholder="XX:XX:XX:XX:XX:XX (optional)"></div>
         <div class="form-group"><label>ARP</label>
           <select name="arp" class="form-control">
             ${arpOptions.map((a) => `<option value="${a}" ${a === currentArp ? 'selected' : ''}>${a}</option>`).join('')}
@@ -2190,9 +2194,13 @@ const App = {
         const form = document.getElementById('edit-vlan-form');
         const fd = new FormData(form);
         const data = {};
-        fd.forEach((v, k) => { data[k] = v; });
-        if (!form.querySelector('[name="use-service-tag"]').checked) data['use-service-tag'] = 'no';
-        if (!form.querySelector('[name="mvrp"]').checked) data['mvrp'] = 'no';
+        fd.forEach((v, k) => {
+          if (v && v.trim()) data[k] = v;
+        });
+        data['use-service-tag'] = form.querySelector('[name="use-service-tag"]').checked ? 'yes' : 'no';
+        data['mvrp'] = form.querySelector('[name="mvrp"]').checked ? 'yes' : 'no';
+        if (!data['mac-address']) delete data['mac-address'];
+        if (!data['vrf-interface']) delete data['vrf-interface'];
         try {
           await api.updateVlan(this.selectedRouterId, vlanId, data);
           this.closeModal(); this.toast('VLAN updated', 'success'); this.loadInterfacesTab();

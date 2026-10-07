@@ -171,6 +171,22 @@ router.get('/router/:routerId/profiles', async (req: Request, res: Response) => 
   }
 });
 
+router.get('/router/:routerId/pools', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const pools = await mikroTikService.getAddressPools(routerId);
+    res.json(pools);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/router/:routerId/profiles', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

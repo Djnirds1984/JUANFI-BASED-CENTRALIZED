@@ -1126,7 +1126,12 @@ const App = {
     if (!server) { this.toast('Server not found', 'error'); return; }
 
     let interfaces = [];
+    let pools = [];
+    let profiles = [];
+
     try { interfaces = await api.getRouterInterfaces(this.selectedRouterId); } catch (err) {}
+    try { pools = await api.getAddressPools(this.selectedRouterId); } catch (err) {}
+    try { profiles = await api.getHotspotProfiles(this.selectedRouterId); } catch (err) {}
 
     this.openModal('Edit Hotspot Server', `
       <form id="edit-server-form">
@@ -1143,11 +1148,17 @@ const App = {
         </div>
         <div class="form-group">
           <label>Address Pool</label>
-          <input type="text" name="address-pool" value="${this.escapeHtml(server['address-pool'] || '')}">
+          <select name="address-pool" class="form-control">
+            <option value="">Select pool...</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}" ${p.name === server['address-pool'] ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Profile</label>
-          <input type="text" name="profile" value="${this.escapeHtml(server.profile || 'default')}">
+          <select name="profile" class="form-control">
+            <option value="">Select profile...</option>
+            ${profiles.map((p) => `<option value="${this.escapeHtml(p.name)}" ${p.name === server.profile ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Addresses</label>
@@ -1185,6 +1196,13 @@ const App = {
   },
 
   async showCreateServerProfileModal() {
+    let pools = [];
+    try {
+      pools = await api.getAddressPools(this.selectedRouterId);
+    } catch (err) {
+      // ignore
+    }
+
     this.openModal('Create Server Profile', `
       <form id="create-server-profile-form">
         <div class="form-group">
@@ -1193,7 +1211,10 @@ const App = {
         </div>
         <div class="form-group">
           <label>Address Pool</label>
-          <input type="text" name="address-pool" placeholder="e.g. dhcp-pool1">
+          <select name="address-pool" class="form-control">
+            <option value="">Select pool...</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Rate Limit</label>
@@ -1240,6 +1261,13 @@ const App = {
     const profile = profiles.find((p) => p['.id'] === profileId);
     if (!profile) { this.toast('Profile not found', 'error'); return; }
 
+    let pools = [];
+    try {
+      pools = await api.getAddressPools(this.selectedRouterId);
+    } catch (err) {
+      // ignore
+    }
+
     this.openModal('Edit Server Profile', `
       <form id="edit-server-profile-form">
         <div class="form-group">
@@ -1248,7 +1276,10 @@ const App = {
         </div>
         <div class="form-group">
           <label>Address Pool</label>
-          <input type="text" name="address-pool" value="${this.escapeHtml(profile['address-pool'] || '')}">
+          <select name="address-pool" class="form-control">
+            <option value="">Select pool...</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}" ${p.name === profile['address-pool'] ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Rate Limit</label>
@@ -1519,10 +1550,25 @@ const App = {
 
   async showCreateServerModal() {
     let interfaces = [];
+    let pools = [];
+    let profiles = [];
+
     try {
       interfaces = await api.getRouterInterfaces(this.selectedRouterId);
     } catch (err) {
       this.toast('Could not fetch interfaces', 'error');
+    }
+
+    try {
+      pools = await api.getAddressPools(this.selectedRouterId);
+    } catch (err) {
+      // ignore
+    }
+
+    try {
+      profiles = await api.getHotspotProfiles(this.selectedRouterId);
+    } catch (err) {
+      // ignore
     }
 
     this.openModal('Create Hotspot Server', `
@@ -1540,11 +1586,17 @@ const App = {
         </div>
         <div class="form-group">
           <label>Address Pool</label>
-          <input type="text" name="address-pool" placeholder="e.g. dhcp-pool1">
+          <select name="address-pool" class="form-control">
+            <option value="">Select pool...</option>
+            ${pools.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Profile</label>
-          <input type="text" name="profile" value="default" placeholder="e.g. default">
+          <select name="profile" class="form-control">
+            <option value="">Select profile...</option>
+            ${profiles.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Addresses</label>

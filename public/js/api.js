@@ -123,6 +123,10 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/profiles`);
   }
 
+  async getAddressPools(routerId) {
+    return this.get(`/hotspot/router/${routerId}/pools`);
+  }
+
   async getHotspotHosts(routerId) {
     return this.get(`/hotspot/router/${routerId}/hosts`);
   }

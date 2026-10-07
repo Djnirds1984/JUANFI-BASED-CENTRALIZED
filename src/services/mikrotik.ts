@@ -409,6 +409,23 @@ class MikroTikService {
     }
   }
 
+  async getAddressPools(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const pools = await this.restApiCall(config, 'GET', '/ip/pool');
+      return Array.isArray(pools) ? pools : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/pool/print');
+    } catch (err) {
+      console.error(`getAddressPools failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async createHotspotProfile(routerId: number, data: any): Promise<any> {
     const config = this.routerConfigs.get(routerId);
 
@@ -727,14 +744,13 @@ class MikroTikService {
       // Step 6: Create admin user
       try {
         if (isRestApi) {
-          const profiles = await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot/user/profile');
-          const profileList = Array.isArray(profiles) ? profiles : [];
-          const profileExists = profileList.some((p: any) => p.name === userProfileName);
-          if (!profileExists) {
+          try {
             await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/profile/add', {
               name: userProfileName,
               'rate-limit': '1M/1M',
             });
+          } catch (err: any) {
+            if (!skipIfExists(err)) throw err;
           }
           await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/user/add', {
             name: config.adminUsername,
@@ -744,14 +760,14 @@ class MikroTikService {
           });
         } else {
           const client = this.getClient(routerId);
-          const profiles = await client.write('/ip/hotspot/user/profile/print');
-          const profileExists = profiles.some((p: any) => p.name === userProfileName);
-          if (!profileExists) {
+          try {
             await client.write('/ip/hotspot/user/profile/add', [
               `=name=${userProfileName}`,
               `=address-pool=${poolName}`,
               `=rate-limit=1M/1M`,
             ]);
+          } catch (err: any) {
+            if (!skipIfExists(err)) throw err;
           }
           await client.write('/ip/hotspot/user/add', [
             `=name=${config.adminUsername}`,

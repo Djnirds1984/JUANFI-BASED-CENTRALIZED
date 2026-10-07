@@ -1096,11 +1096,25 @@ const App = {
     }
   },
 
-  updatePortalPreview() {
+  async updatePortalPreview() {
     const preview = document.getElementById('portal-preview');
-    if (!preview) return;
-    preview.removeAttribute('srcdoc');
-    preview.src = '/hotspot-assets/' + this.portalCurrentFile + '?t=' + Date.now();
+    if (!preview || !this.portalCurrentFile) return;
+    try {
+      const res = await api.getPortalFile(this.portalCurrentFile);
+      let html = res.content;
+      html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
+      html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
+      if (html.includes('<head>')) {
+        html = html.replace('<head>', '<head><base href="/hotspot-assets/">');
+      } else if (html.includes('<html')) {
+        html = html.replace(/<html[^>]*>/i, (m) => m + '<head><base href="/hotspot-assets/"></head>');
+      } else {
+        html = '<base href="/hotspot-assets/">' + html;
+      }
+      preview.srcdoc = html;
+    } catch (err) {
+      preview.srcdoc = '<p style="color:#999;text-align:center;margin-top:2rem">Preview unavailable</p>';
+    }
   },
 
   togglePortalPreview() {

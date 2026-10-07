@@ -124,9 +124,13 @@ router.put('/file/*', (req: Request, res: Response) => {
 
     const row = upsertPortalFile(filePath, content);
 
-    const diskPath = resolveDiskPath(filePath);
-    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-    fs.writeFileSync(diskPath, content, 'utf8');
+    try {
+      const diskPath = resolveDiskPath(filePath);
+      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+      fs.writeFileSync(diskPath, content, 'utf8');
+    } catch (diskErr: any) {
+      console.warn(`Could not write ${filePath} to disk: ${diskErr.message}`);
+    }
 
     res.json({ message: 'File saved', file: row });
   } catch (error: any) {
@@ -155,9 +159,13 @@ router.post('/reset/*', (req: Request, res: Response) => {
 
     const row = upsertPortalFile(filePath, content);
 
-    const diskPath = resolveDiskPath(filePath);
-    fs.mkdirSync(path.dirname(diskPath), { recursive: true });
-    fs.writeFileSync(diskPath, content, 'utf8');
+    try {
+      const diskPath = resolveDiskPath(filePath);
+      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+      fs.writeFileSync(diskPath, content, 'utf8');
+    } catch (diskErr: any) {
+      console.warn(`Could not write ${filePath} to disk: ${diskErr.message}`);
+    }
 
     res.json({ message: 'File reset to default', file: row });
   } catch (error: any) {

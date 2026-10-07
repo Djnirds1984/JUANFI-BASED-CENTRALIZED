@@ -792,6 +792,10 @@ const App = {
           <input type="number" name="count" value="10" min="1" max="100">
         </div>
         <div class="form-group">
+          <label>Code Length</label>
+          <input type="number" name="codeLength" value="8" min="4" max="20">
+        </div>
+        <div class="form-group">
           <label>Profile</label>
           <select name="profile" class="form-control">
             ${profileOptions}
@@ -844,6 +848,7 @@ const App = {
         durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         dataLimitMb: form.dataLimitMb.value ? parseInt(form.dataLimitMb.value) : null,
         prefix: form.prefix.value || undefined,
+        codeLength: parseInt(form.codeLength.value) || 8,
       });
 
       this.closeModal();

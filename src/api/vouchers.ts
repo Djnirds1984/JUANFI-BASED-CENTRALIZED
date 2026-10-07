@@ -59,9 +59,10 @@ router.get('/router/:routerId', (req: Request, res: Response) => {
 router.post('/router/:routerId/generate', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { count, profile, durationMinutes, dataLimitMb, prefix } = req.body;
+    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength } = req.body;
 
     const quantity = Math.min(count || 1, 100);
+    const codeLen = Math.min(Math.max(parseInt(codeLength) || 8, 4), 20);
     const db = getDb();
 
     const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
@@ -78,7 +79,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
 
     const insertMany = db.transaction(() => {
       for (let i = 0; i < quantity; i++) {
-        const code = prefix ? `${prefix}-${generateCode()}` : generateCode();
+        const code = prefix ? `${prefix}-${generateCode(codeLen)}` : generateCode(codeLen);
         const username = code;
 
         let expiresAt: string | null = null;

@@ -171,6 +171,56 @@ router.get('/router/:routerId/profiles', async (req: Request, res: Response) => 
   }
 });
 
+router.post('/router/:routerId/profiles', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.createHotspotProfile(routerId, req.body);
+    res.status(201).json({ message: 'Server profile created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/profile/:profileId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileId = req.params.profileId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.updateHotspotProfile(routerId, profileId, req.body);
+    res.json({ message: 'Server profile updated successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/router/:routerId/profile/:profileId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileId = req.params.profileId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    await mikroTikService.deleteHotspotProfile(routerId, profileId);
+    res.json({ message: 'Server profile deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/hosts', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -235,6 +285,40 @@ router.post('/router/:routerId/servers', async (req: Request, res: Response) => 
   }
 });
 
+router.put('/router/:routerId/server/:serverId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const serverId = req.params.serverId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.updateHotspotServer(routerId, serverId, req.body);
+    res.json({ message: 'Hotspot server updated successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/router/:routerId/server/:serverId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const serverId = req.params.serverId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    await mikroTikService.deleteHotspotServer(routerId, serverId);
+    res.json({ message: 'Hotspot server deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/walled-garden', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -262,6 +346,23 @@ router.post('/router/:routerId/walled-garden', async (req: Request, res: Respons
 
     const result = await mikroTikService.createWalledGarden(routerId, req.body);
     res.status(201).json({ message: 'Walled garden entry created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/walled-garden/:entryId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const entryId = req.params.entryId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.updateWalledGarden(routerId, entryId, req.body);
+    res.json({ message: 'Walled garden entry updated successfully', data: result });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -365,6 +466,56 @@ router.get('/router/:routerId/user-profiles', async (req: Request, res: Response
   }
 });
 
+router.post('/router/:routerId/user-profiles', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.createUserProfile(routerId, req.body);
+    res.status(201).json({ message: 'User profile created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/user-profile/:profileId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileId = req.params.profileId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.updateUserProfile(routerId, profileId, req.body);
+    res.json({ message: 'User profile updated successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/router/:routerId/user-profile/:profileId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileId = req.params.profileId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    await mikroTikService.deleteUserProfile(routerId, profileId);
+    res.json({ message: 'User profile deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/ip-bindings', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -392,6 +543,23 @@ router.post('/router/:routerId/ip-bindings', async (req: Request, res: Response)
 
     const result = await mikroTikService.createIpBinding(routerId, req.body);
     res.status(201).json({ message: 'IP binding created successfully', data: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/ip-binding/:bindingId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const bindingId = req.params.bindingId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const result = await mikroTikService.updateIpBinding(routerId, bindingId, req.body);
+    res.json({ message: 'IP binding updated successfully', data: result });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

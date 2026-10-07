@@ -394,15 +394,76 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      const profiles = await this.restApiCall(config, 'GET', '/ip/hotspot/user/profile');
+      const profiles = await this.restApiCall(config, 'GET', '/ip/hotspot/profile');
       return Array.isArray(profiles) ? profiles : [];
     }
 
     const client = this.getClient(routerId);
     try {
-      return await client.write('/ip/hotspot/user/profile/print');
+      return await client.write('/ip/hotspot/profile/print');
     } catch (err) {
       console.error(`getHotspotProfiles failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createHotspotProfile(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/profile/add', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/profile/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createHotspotProfile failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async updateHotspotProfile(routerId: number, profileId: string, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/profile/${profileId}`, data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = [`/ip/hotspot/profile/set`, `.id=${profileId}`];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`updateHotspotProfile failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async deleteHotspotProfile(routerId: number, profileId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/profile/${profileId}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/profile/remove', `.id=${profileId}`]);
+    } catch (err) {
+      console.error(`deleteHotspotProfile failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }
@@ -462,7 +523,7 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'POST', '/ip/hotspot', data);
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/add', data);
     }
 
     const client = this.getClient(routerId);
@@ -476,6 +537,45 @@ class MikroTikService {
       return await client.write(command);
     } catch (err) {
       console.error(`createHotspotServer failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async updateHotspotServer(routerId: number, serverId: string, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/${serverId}`, data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = [`/ip/hotspot/set`, `.id=${serverId}`];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`updateHotspotServer failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async deleteHotspotServer(routerId: number, serverId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/${serverId}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/remove', `.id=${serverId}`]);
+    } catch (err) {
+      console.error(`deleteHotspotServer failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }
@@ -537,6 +637,28 @@ class MikroTikService {
     }
   }
 
+  async updateWalledGarden(routerId: number, id: string, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/walled-garden/${id}`, data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = [`/ip/hotspot/walled-garden/set`, `.id=${id}`];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`updateWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getIpBindings(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 
@@ -589,6 +711,28 @@ class MikroTikService {
       await client.write(['/ip/hotspot/ip-binding/remove', `=.id=${id}`]);
     } catch (err) {
       console.error(`deleteIpBinding failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async updateIpBinding(routerId: number, id: string, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/ip-binding/${id}`, data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = [`/ip/hotspot/ip-binding/set`, `.id=${id}`];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`updateIpBinding failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }
@@ -659,6 +803,67 @@ class MikroTikService {
       return await client.write('/ip/hotspot/user/profile/print');
     } catch (err) {
       console.error(`getUserProfiles failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createUserProfile(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/user/profile/add', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/user/profile/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createUserProfile failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async updateUserProfile(routerId: number, profileId: string, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', `/ip/hotspot/user/profile/${profileId}`, data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = [`/ip/hotspot/user/profile/set`, `.id=${profileId}`];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`updateUserProfile failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async deleteUserProfile(routerId: number, profileId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/user/profile/${profileId}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/user/profile/remove', `.id=${profileId}`]);
+    } catch (err) {
+      console.error(`deleteUserProfile failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }

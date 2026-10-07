@@ -135,12 +135,24 @@ class ApiClient {
     return this.post(`/hotspot/router/${routerId}/servers`, data);
   }
 
+  async updateHotspotServer(routerId, serverId, data) {
+    return this.put(`/hotspot/router/${routerId}/server/${serverId}`, data);
+  }
+
+  async deleteHotspotServer(routerId, serverId) {
+    return this.delete(`/hotspot/router/${routerId}/server/${serverId}`);
+  }
+
   async getWalledGarden(routerId) {
     return this.get(`/hotspot/router/${routerId}/walled-garden`);
   }
 
   async createWalledGarden(routerId, data) {
     return this.post(`/hotspot/router/${routerId}/walled-garden`, data);
+  }
+
+  async updateWalledGarden(routerId, entryId, data) {
+    return this.put(`/hotspot/router/${routerId}/walled-garden/${entryId}`, data);
   }
 
   async deleteWalledGarden(routerId, entryId) {
@@ -167,12 +179,44 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/user-profiles`);
   }
 
+  async createUserProfile(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/user-profiles`, data);
+  }
+
+  async updateUserProfile(routerId, profileId, data) {
+    return this.put(`/hotspot/router/${routerId}/user-profile/${profileId}`, data);
+  }
+
+  async deleteUserProfile(routerId, profileId) {
+    return this.delete(`/hotspot/router/${routerId}/user-profile/${profileId}`);
+  }
+
   async getIpBindings(routerId) {
     return this.get(`/hotspot/router/${routerId}/ip-bindings`);
   }
 
   async createIpBinding(routerId, data) {
     return this.post(`/hotspot/router/${routerId}/ip-bindings`, data);
+  }
+
+  async updateIpBinding(routerId, bindingId, data) {
+    return this.put(`/hotspot/router/${routerId}/ip-binding/${bindingId}`, data);
+  }
+
+  async deleteIpBinding(routerId, bindingId) {
+    return this.delete(`/hotspot/router/${routerId}/ip-binding/${bindingId}`);
+  }
+
+  async createHotspotProfile(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/profiles`, data);
+  }
+
+  async updateHotspotProfile(routerId, profileId, data) {
+    return this.put(`/hotspot/router/${routerId}/profile/${profileId}`, data);
+  }
+
+  async deleteHotspotProfile(routerId, profileId) {
+    return this.delete(`/hotspot/router/${routerId}/profile/${profileId}`);
   }
 
   async deleteIpBinding(routerId, bindingId) {

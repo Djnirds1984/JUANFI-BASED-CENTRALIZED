@@ -2,6 +2,7 @@ const App = {
   currentPage: 'overview',
   selectedRouterId: null,
   _overviewInterval: null,
+  _activeUsersInterval: null,
   portalCurrentFile: 'login.html',
   portalDirty: false,
   _portalPreviewTimer: null,
@@ -742,6 +743,12 @@ const App = {
 
   async loadActiveUsers(container) {
     if (!container) container = document.getElementById('hotspot-tab-content');
+    
+    if (this._activeUsersInterval) {
+      clearInterval(this._activeUsersInterval);
+      this._activeUsersInterval = null;
+    }
+    
     try {
       const connections = await api.getActiveConnections(this.selectedRouterId);
       if (connections.length === 0) {
@@ -758,34 +765,149 @@ const App = {
                 <th>IP Address</th>
                 <th>MAC Address</th>
                 <th>Uptime</th>
+                <th>Session Time Left</th>
+                <th>RX Rate</th>
+                <th>TX Rate</th>
                 <th>Bytes In</th>
                 <th>Bytes Out</th>
                 <th>Login By</th>
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody>
-              ${connections.map((c) => `
-                <tr>
-                  <td>${this.escapeHtml(c.user || '')}</td>
-                  <td>${this.escapeHtml(c.address || '')}</td>
-                  <td><code>${this.escapeHtml(c.mac || '')}</code></td>
-                  <td>${c.uptime || '0s'}</td>
-                  <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
-                  <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
-                  <td>${this.escapeHtml(c['login-by'] || '-')}</td>
-                  <td>
-                    <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${c['.id']}', '${this.escapeHtml(c.user || c.address)}')">Disconnect</button>
-                  </td>
-                </tr>
-              `).join('')}
+            <tbody id="active-users-tbody">
+              ${this.renderActiveUsersRows(connections)}
             </tbody>
           </table>
         </div>
       `;
+
+      this._activeUsersInterval = setInterval(async () => {
+        try {
+          const freshConnections = await api.getActiveConnections(this.selectedRouterId);
+          const tbody = document.getElementById('active-users-tbody');
+          if (tbody) {
+            tbody.innerHTML = this.renderActiveUsersRows(freshConnections);
+          }
+        } catch (err) {
+          console.error('Failed to refresh active users:', err);
+        }
+      }, 2000);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
+  },
+
+  renderActiveUsersRows(connections) {
+    return connections.map((c) => {
+      const sessionTimeLeft = c['session-time-left'] || '';
+      const totalSeconds = this.parseTimeToSeconds(sessionTimeLeft);
+      const rxRate = c['rx-rate'] || '0 bps';
+      const txRate = c['tx-rate'] || '0 bps';
+      
+      return `
+        <tr>
+          <td>${this.escapeHtml(c.user || '')}</td>
+          <td>${this.escapeHtml(c.address || '')}</td>
+          <td><code>${this.escapeHtml(c.mac || '')}</code></td>
+          <td>${c.uptime || '0s'}</td>
+          <td>
+            <div class="session-countdown" data-seconds="${totalSeconds}">
+              <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
+              <div class="countdown-bar">
+                <div class="countdown-bar-fill" style="width: 100%"></div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="rate-indicator">
+              <span class="rate-value">${this.escapeHtml(rxRate)}</span>
+              <div class="rate-bar">
+                <div class="rate-bar-fill rx-fill" style="width: ${this.calculateRateBarWidth(rxRate)}%"></div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="rate-indicator">
+              <span class="rate-value">${this.escapeHtml(txRate)}</span>
+              <div class="rate-bar">
+                <div class="rate-bar-fill tx-fill" style="width: ${this.calculateRateBarWidth(txRate)}%"></div>
+              </div>
+            </div>
+          </td>
+          <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
+          <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
+          <td>${this.escapeHtml(c['login-by'] || '-')}</td>
+          <td>
+            <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${c['.id']}', '${this.escapeHtml(c.user || c.address)}')">Disconnect</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  },
+
+  calculateRateBarWidth(rateStr) {
+    if (!rateStr || rateStr === '0 bps') return 0;
+    
+    let bps = 0;
+    const match = rateStr.match(/([\d.]+)\s*([kmg]?bps)/i);
+    if (match) {
+      const value = parseFloat(match[1]);
+      const unit = match[2].toLowerCase();
+      if (unit === 'kbps') bps = value * 1000;
+      else if (unit === 'mbps') bps = value * 1000000;
+      else if (unit === 'gbps') bps = value * 1000000000;
+      else bps = value;
+    }
+    
+    const maxRate = 100000000;
+    const percentage = Math.min((bps / maxRate) * 100, 100);
+    return percentage;
+  },
+
+  parseTimeToSeconds(timeStr) {
+    if (!timeStr || timeStr === 'infinity' || timeStr === '') return Infinity;
+    
+    let seconds = 0;
+    const parts = timeStr.match(/(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+    if (parts) {
+      const weeks = parseInt(parts[1] || 0);
+      const days = parseInt(parts[2] || 0);
+      const hours = parseInt(parts[3] || 0);
+      const minutes = parseInt(parts[4] || 0);
+      const secs = parseInt(parts[5] || 0);
+      seconds = (weeks * 7 * 24 * 3600) + (days * 24 * 3600) + (hours * 3600) + (minutes * 60) + secs;
+    }
+    
+    if (seconds === 0 && timeStr.includes(':')) {
+      const timeParts = timeStr.split(':');
+      if (timeParts.length === 3) {
+        seconds = parseInt(timeParts[0]) * 3600 + parseInt(timeParts[1]) * 60 + parseInt(timeParts[2]);
+      } else if (timeParts.length === 2) {
+        seconds = parseInt(timeParts[0]) * 60 + parseInt(timeParts[1]);
+      }
+    }
+    
+    return seconds;
+  },
+
+  formatCountdown(seconds) {
+    if (seconds === Infinity || seconds < 0) return 'Unlimited';
+    if (seconds === 0) return 'Expired';
+    
+    const weeks = Math.floor(seconds / (7 * 24 * 3600));
+    const days = Math.floor((seconds % (7 * 24 * 3600)) / (24 * 3600));
+    const hours = Math.floor((seconds % (24 * 3600)) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    let result = '';
+    if (weeks > 0) result += weeks + 'w ';
+    if (days > 0) result += days + 'd ';
+    if (hours > 0 || result.length > 0) result += hours.toString().padStart(2, '0') + ':';
+    result += minutes.toString().padStart(2, '0') + ':';
+    result += secs.toString().padStart(2, '0');
+    
+    return result.trim();
   },
 
   async disconnectActiveUser(activeId, userName) {

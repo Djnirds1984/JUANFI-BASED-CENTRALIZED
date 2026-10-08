@@ -1289,3 +1289,142 @@ tr:hover td {
     grid-template-columns: 1fr;
   }
 }
+
+.session-countdown {
+  min-width: 140px;
+}
+
+.countdown-value {
+  font-weight: 600;
+  font-size: 0.875rem;
+  margin-bottom: 4px;
+  font-family: 'Courier New', monospace;
+  color: var(--text);
+}
+
+.countdown-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.countdown-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+  transition: width 1s linear, background 0.3s ease;
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.countdown-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.session-countdown.countdown-warning .countdown-value {
+  color: #f59e0b;
+}
+
+.session-countdown.countdown-critical .countdown-value {
+  color: #ef4444;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.session-countdown.countdown-critical .countdown-bar-fill {
+  animation: pulse-bar 1s infinite;
+}
+
+@keyframes pulse-bar {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.rate-indicator {
+  min-width: 120px;
+}
+
+.rate-value {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-family: 'Courier New', monospace;
+}
+
+.rate-bar {
+  width: 100%;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.rate-bar-fill {
+  height: 100%;
+  transition: width 0.5s ease-out;
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.rx-fill {
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+}
+
+.tx-fill {
+  background: linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%);
+}
+
+.rate-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+  animation: rate-shimmer 1.5s infinite;
+}
+
+@keyframes rate-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}

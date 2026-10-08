@@ -43,6 +43,11 @@ export interface ActiveConnection {
   uptime: string;
   'bytes-in': number;
   'bytes-out': number;
+  'session-time-left'?: string;
+  'idle-time'?: string;
+  'login-by'?: string;
+  'rx-rate'?: string;
+  'tx-rate'?: string;
 }
 
 class MikroTikService {

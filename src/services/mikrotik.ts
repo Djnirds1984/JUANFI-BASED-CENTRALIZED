@@ -392,6 +392,23 @@ class MikroTikService {
     }
   }
 
+  async removeActiveConnection(routerId: number, activeId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/active/${activeId}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write('/ip/hotspot/active/remove', ['=.id=' + activeId]);
+    } catch (err) {
+      console.error(`removeActiveConnection failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getHotspotProfiles(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 

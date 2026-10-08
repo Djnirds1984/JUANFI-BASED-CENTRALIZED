@@ -155,6 +155,23 @@ router.get('/router/:routerId/active', async (req: Request, res: Response) => {
   }
 });
 
+router.delete('/router/:routerId/active/:activeId', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const activeId = req.params.activeId;
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    await mikroTikService.removeActiveConnection(routerId, activeId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/profiles', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

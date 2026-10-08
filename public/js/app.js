@@ -761,6 +761,7 @@ const App = {
                 <th>Bytes In</th>
                 <th>Bytes Out</th>
                 <th>Login By</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -773,6 +774,9 @@ const App = {
                   <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
                   <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
                   <td>${this.escapeHtml(c['login-by'] || '-')}</td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${c['.id']}', '${this.escapeHtml(c.user || c.address)}')">Disconnect</button>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -781,6 +785,18 @@ const App = {
       `;
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async disconnectActiveUser(activeId, userName) {
+    if (!confirm(`Disconnect user "${userName}"?`)) return;
+
+    try {
+      await api.removeActiveConnection(this.selectedRouterId, activeId);
+      this.toast('User disconnected', 'success');
+      this.loadActiveUsers();
+    } catch (err) {
+      this.toast(err.message, 'error');
     }
   },
 

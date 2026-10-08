@@ -5,14 +5,43 @@ const PortalThemes = {
     }
     if (!theme.css) return html;
     const styleTag = `\n<style>\n${theme.css}\n</style>\n`;
-    let out = html.replace(
-      /<link[^>]*href=["']assets\/css\/JuanFi\.css["'][^>]*>/i,
-      styleTag
-    );
-    if (out === html) {
-      out = html.replace(/<\/head>/i, styleTag + '</head>');
+    const themeMarkers = ['neonPulse', 'sunriseShift', 'snowfall'];
+    let out = html;
+    let replaced = false;
+    let searchFrom = 0;
+    while (true) {
+      const styleStart = out.indexOf('<style', searchFrom);
+      if (styleStart === -1) break;
+      const styleEnd = out.indexOf('</style>', styleStart);
+      if (styleEnd === -1) break;
+      const block = out.substring(styleStart, styleEnd + 8);
+      if (themeMarkers.some(marker => block.includes(marker))) {
+        if (!replaced) {
+          out = out.substring(0, styleStart) + styleTag.trim() + out.substring(styleEnd + 8);
+          replaced = true;
+          searchFrom = styleStart + styleTag.length;
+        } else {
+          let cleanStart = styleStart;
+          while (cleanStart > 0 && (out[cleanStart - 1] === ' ' || out[cleanStart - 1] === '\t' || out[cleanStart - 1] === '\n')) {
+            cleanStart--;
+          }
+          let cleanEnd = styleEnd + 8;
+          while (cleanEnd < out.length && (out[cleanEnd] === '\n' || out[cleanEnd] === '\r')) {
+            cleanEnd++;
+          }
+          out = out.substring(0, cleanStart) + out.substring(cleanEnd);
+          searchFrom = cleanStart;
+        }
+      } else {
+        searchFrom = styleEnd + 8;
+      }
     }
-    return out;
+    if (replaced) return out;
+    const juanFiLink = /<link[^>]*href=["']assets\/css\/JuanFi\.css["'][^>]*>/i;
+    if (juanFiLink.test(out)) {
+      return out.replace(juanFiLink, styleTag);
+    }
+    return out.replace(/<\/head>/i, styleTag + '</head>');
   },
 
   applyDefault(html) {
@@ -128,6 +157,22 @@ body::before {
 .modal-title { color: #ffff00 !important; text-shadow: 0 0 8px #ffff00; }
 .modal-body { color: #00ffff !important; }
 .close span { color: #ff00ff !important; text-shadow: 0 0 5px #ff00ff; }
+.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 2px solid #ff00ff !important; }
+.modal-header, .modal-footer { flex-shrink: 0; }
+.modal-header { background: #1a0b2e !important; }
+.modal-content .modal-header .close span { color: #ff00ff !important; text-shadow: 0 0 5px #ff00ff; }
+.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
+.modal-body .vcCodeHolder { height: 90px !important; }
+.modal-body .convertVoucherBlock { height: 142px !important; }
+.inscoinholder { background: rgba(0, 0, 0, 0.5) !important; }
+.vcCodeHolder { background: rgba(255, 0, 255, 0.08) !important; }
+.convertVoucherBlock { background: rgba(0, 255, 255, 0.08) !important; }
+.inscoinholder span { color: #00ffff !important; }
+.modal-footer.bg-light { background-color: #0a0118 !important; }
+.btn-outline-danger { background: transparent !important; color: #ff0066 !important; border-color: #ff0066 !important; }
+.btn-outline-danger:hover, .btn-outline-danger:focus, .btn-outline-danger:active { background: #ff0066 !important; color: #fff !important; }
+.progress { background-color: rgba(0, 255, 255, 0.15) !important; }
 .btn-primary { background: #ff00ff !important; border-color: #ff00ff !important; box-shadow: 0 0 10px rgba(255, 0, 255, 0.6); }
 .btn-success { background: #00ffff !important; color: #0a0118 !important; border: none !important; box-shadow: 0 0 10px rgba(0, 255, 255, 0.6); }
 .btn-danger { background: #ff0066 !important; border-color: #ff0066 !important; box-shadow: 0 0 10px rgba(255, 0, 102, 0.6); }
@@ -250,6 +295,22 @@ body {
 .modal-header, .modal-footer { border-color: #ff9f43 !important; }
 .modal-title { color: #ee5253 !important; }
 .close span { color: #ee5253 !important; }
+.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 2px solid #ff9f43 !important; }
+.modal-header, .modal-footer { flex-shrink: 0; }
+.modal-header { background: #fff5e6 !important; }
+.modal-content .modal-header .close span { color: #ee5253 !important; }
+.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
+.modal-body .vcCodeHolder { height: 90px !important; }
+.modal-body .convertVoucherBlock { height: 142px !important; }
+.inscoinholder { background: rgba(255, 245, 230, 0.6) !important; }
+.vcCodeHolder { background: rgba(255, 245, 230, 0.8) !important; }
+.convertVoucherBlock { background: rgba(255, 245, 230, 0.8) !important; }
+.inscoinholder span { color: #b9886b !important; }
+.modal-footer.bg-light { background-color: #fffaf0 !important; }
+.btn-outline-danger { background: transparent !important; color: #ee5253 !important; border-color: #ee5253 !important; }
+.btn-outline-danger:hover, .btn-outline-danger:focus, .btn-outline-danger:active { background: #ee5253 !important; color: #fff !important; }
+.progress { background-color: #ffedd5 !important; }
 .btn-primary { background: #ff6b6b !important; border-color: #ff6b6b !important; }
 .btn-success { background: #10ac84 !important; border-color: #10ac84 !important; color: #fff !important; }
 .btn-danger { background: #ee5253 !important; border-color: #ee5253 !important; }
@@ -378,6 +439,22 @@ body::before {
 .modal-header, .modal-footer { border-color: #c0392b !important; }
 .modal-title { color: #c0392b !important; }
 .close span { color: #c0392b !important; }
+.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 3px solid #c0392b !important; }
+.modal-header, .modal-footer { flex-shrink: 0; }
+.modal-header { background: #faf0ca !important; }
+.modal-content .modal-header .close span { color: #c0392b !important; }
+.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
+.modal-body .vcCodeHolder { height: 90px !important; }
+.modal-body .convertVoucherBlock { height: 142px !important; }
+.inscoinholder { background: rgba(255, 245, 230, 0.6) !important; }
+.vcCodeHolder { background: rgba(255, 245, 230, 0.8) !important; }
+.convertVoucherBlock { background: rgba(255, 245, 230, 0.8) !important; }
+.inscoinholder span { color: #a87070 !important; }
+.modal-footer.bg-light { background-color: #fffcf0 !important; }
+.btn-outline-danger { background: transparent !important; color: #c0392b !important; border-color: #c0392b !important; }
+.btn-outline-danger:hover, .btn-outline-danger:focus, .btn-outline-danger:active { background: #c0392b !important; color: #fff !important; }
+.progress { background-color: #faf0ca !important; }
 .btn-primary { background: #c0392b !important; border-color: #c0392b !important; }
 .btn-success { background: #27ae60 !important; border-color: #27ae60 !important; color: #fff !important; }
 .btn-danger { background: #c0392b !important; border-color: #c0392b !important; }

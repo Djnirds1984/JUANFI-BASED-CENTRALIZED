@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/mikrotik-controller/data
+ReadWritePaths=/opt/mikrotik-controller/data /opt/mikrotik-controller/hotspot
 
 [Install]
 WantedBy=multi-user.target

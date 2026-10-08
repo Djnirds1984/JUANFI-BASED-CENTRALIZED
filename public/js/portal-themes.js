@@ -157,11 +157,14 @@ body::before {
 .modal-title { color: #ffff00 !important; text-shadow: 0 0 8px #ffff00; }
 .modal-body { color: #00ffff !important; }
 .close span { color: #ff00ff !important; text-shadow: 0 0 5px #ff00ff; }
-.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 2px solid #ff00ff !important; }
-.modal-header, .modal-footer { flex-shrink: 0; }
+.modal { z-index: 1500 !important; }
+.modal-backdrop { pointer-events: none !important; opacity: 0.5 !important; }
+.modal-content { position: relative !important; z-index: 1502 !important; }
+.modal-content { display: flex !important; flex-direction: column !important; max-height: calc(100vh - 32px) !important; border: 2px solid #ff00ff !important; }
+.modal-header, .modal-footer { flex-shrink: 0 !important; }
 .modal-header { background: #1a0b2e !important; }
 .modal-content .modal-header .close span { color: #ff00ff !important; text-shadow: 0 0 5px #ff00ff; }
-.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body { overflow-y: auto !important; min-height: 0 !important; flex: 1 !important; }
 .modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
 .modal-body .vcCodeHolder { height: 90px !important; }
 .modal-body .convertVoucherBlock { height: 142px !important; }
@@ -295,11 +298,14 @@ body {
 .modal-header, .modal-footer { border-color: #ff9f43 !important; }
 .modal-title { color: #ee5253 !important; }
 .close span { color: #ee5253 !important; }
-.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 2px solid #ff9f43 !important; }
-.modal-header, .modal-footer { flex-shrink: 0; }
+.modal { z-index: 1500 !important; }
+.modal-backdrop { pointer-events: none !important; opacity: 0.5 !important; }
+.modal-content { position: relative !important; z-index: 1502 !important; }
+.modal-content { display: flex !important; flex-direction: column !important; max-height: calc(100vh - 32px) !important; border: 2px solid #ff9f43 !important; }
+.modal-header, .modal-footer { flex-shrink: 0 !important; }
 .modal-header { background: #fff5e6 !important; }
 .modal-content .modal-header .close span { color: #ee5253 !important; }
-.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body { overflow-y: auto !important; min-height: 0 !important; flex: 1 !important; }
 .modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
 .modal-body .vcCodeHolder { height: 90px !important; }
 .modal-body .convertVoucherBlock { height: 142px !important; }
@@ -439,11 +445,14 @@ body::before {
 .modal-header, .modal-footer { border-color: #c0392b !important; }
 .modal-title { color: #c0392b !important; }
 .close span { color: #c0392b !important; }
-.modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 32px); border: 3px solid #c0392b !important; }
-.modal-header, .modal-footer { flex-shrink: 0; }
+.modal { z-index: 1500 !important; }
+.modal-backdrop { pointer-events: none !important; opacity: 0.5 !important; }
+.modal-content { position: relative !important; z-index: 1502 !important; }
+.modal-content { display: flex !important; flex-direction: column !important; max-height: calc(100vh - 32px) !important; border: 3px solid #c0392b !important; }
+.modal-header, .modal-footer { flex-shrink: 0 !important; }
 .modal-header { background: #faf0ca !important; }
 .modal-content .modal-header .close span { color: #c0392b !important; }
-.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body { overflow-y: auto !important; min-height: 0 !important; flex: 1 !important; }
 .modal-body .inscoinholder { height: 50px !important; margin-top: 10px !important; }
 .modal-body .vcCodeHolder { height: 90px !important; }
 .modal-body .convertVoucherBlock { height: 142px !important; }

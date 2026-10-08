@@ -381,6 +381,10 @@ class MikroTikService {
     }
   }
 
+  private normalizeIp(raw: string): string {
+    return raw.replace(/:\d+$/, '').replace(/\/\d+$/, '');
+  }
+
   async getActiveConnections(routerId: number): Promise<ActiveConnection[]> {
     const config = this.routerConfigs.get(routerId);
     let connections: any[];
@@ -414,7 +418,7 @@ class MikroTikService {
     const hostByIp = new Map<string, any>();
     for (const host of hotspotHosts) {
       if (host.address) {
-        hostByIp.set(host.address, host);
+        hostByIp.set(this.normalizeIp(host.address), host);
       }
     }
 
@@ -449,7 +453,7 @@ class MikroTikService {
 
       this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
 
-      const ipKey = conn.address || '';
+      const ipKey = this.normalizeIp(conn.address || '');
       const host = ipKey ? hostByIp.get(ipKey) : undefined;
       if (host) {
         if (host['mac-address'] && !conn.mac) {

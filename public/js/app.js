@@ -712,12 +712,12 @@ const App = {
       const activeByIp = new Map();
       for (const conn of connections) {
         if (conn.address) {
-          activeByIp.set(conn.address, conn);
+          activeByIp.set(this.normalizeIp(conn.address), conn);
         }
       }
 
       const enrichedHosts = hosts.map(host => {
-        const ip = host.address || '';
+        const ip = this.normalizeIp(host.address || '');
         const active = activeByIp.get(ip);
         return {
           ...host,
@@ -768,12 +768,12 @@ const App = {
           const freshActiveByIp = new Map();
           for (const conn of freshConnections) {
             if (conn.address) {
-              freshActiveByIp.set(conn.address, conn);
+              freshActiveByIp.set(this.normalizeIp(conn.address), conn);
             }
           }
 
           const freshEnrichedHosts = freshHosts.map(host => {
-            const ip = host.address || '';
+            const ip = this.normalizeIp(host.address || '');
             const active = freshActiveByIp.get(ip);
             return {
               ...host,
@@ -857,6 +857,10 @@ const App = {
         </tr>
       `;
     }).join('');
+  },
+
+  normalizeIp(raw) {
+    return (raw || '').replace(/:\d+$/, '').replace(/\/\d+$/, '');
   },
 
   calculateRateBarWidth(rateStr) {

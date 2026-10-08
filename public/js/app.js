@@ -762,6 +762,7 @@ const App = {
             <thead>
               <tr>
                 <th>User</th>
+                <th>Hostname</th>
                 <th>IP Address</th>
                 <th>MAC Address</th>
                 <th>Uptime</th>
@@ -807,6 +808,7 @@ const App = {
       return `
         <tr>
           <td>${this.escapeHtml(c.user || '')}</td>
+          <td>${this.escapeHtml(c.hostname || '-')}</td>
           <td>${this.escapeHtml(c.address || '')}</td>
           <td><code>${this.escapeHtml(c.mac || '')}</code></td>
           <td>${c.uptime || '0s'}</td>

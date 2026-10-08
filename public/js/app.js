@@ -699,11 +699,39 @@ const App = {
     }
     
     try {
-      const hosts = await api.getHotspotHosts(this.selectedRouterId);
+      const [hosts, connections] = await Promise.all([
+        api.getHotspotHosts(this.selectedRouterId),
+        api.getActiveConnections(this.selectedRouterId)
+      ]);
+      
       if (hosts.length === 0) {
         container.innerHTML = '<div class="empty-state"><p>No hotspot hosts found.</p></div>';
         return;
       }
+
+      const activeByIp = new Map();
+      for (const conn of connections) {
+        if (conn.address) {
+          activeByIp.set(conn.address, conn);
+        }
+      }
+
+      const enrichedHosts = hosts.map(host => {
+        const ip = host.address || '';
+        const active = activeByIp.get(ip);
+        return {
+          ...host,
+          'is-active': !!active,
+          'active-id': active ? active['.id'] : null,
+          'user': active ? active.user || '' : '',
+          'session-time-left': active ? active['session-time-left'] || '' : '',
+          'bytes-in': active ? active['bytes-in'] || '0' : '0',
+          'bytes-out': active ? active['bytes-out'] || '0' : '0',
+          'rx-rate': active ? active['rx-rate'] || '0 bps' : '0 bps',
+          'tx-rate': active ? active['tx-rate'] || '0 bps' : '0 bps',
+          'login-by': active ? active['login-by'] || '' : ''
+        };
+      });
 
       container.innerHTML = `
         <div class="table-wrapper">
@@ -724,7 +752,7 @@ const App = {
               </tr>
             </thead>
             <tbody id="hosts-tbody">
-              ${this.renderHostsRows(hosts)}
+              ${this.renderHostsRows(enrichedHosts)}
             </tbody>
           </table>
         </div>
@@ -732,10 +760,38 @@ const App = {
 
       this._hostsInterval = setInterval(async () => {
         try {
-          const freshHosts = await api.getHotspotHosts(this.selectedRouterId);
+          const [freshHosts, freshConnections] = await Promise.all([
+            api.getHotspotHosts(this.selectedRouterId),
+            api.getActiveConnections(this.selectedRouterId)
+          ]);
+          
+          const freshActiveByIp = new Map();
+          for (const conn of freshConnections) {
+            if (conn.address) {
+              freshActiveByIp.set(conn.address, conn);
+            }
+          }
+
+          const freshEnrichedHosts = freshHosts.map(host => {
+            const ip = host.address || '';
+            const active = freshActiveByIp.get(ip);
+            return {
+              ...host,
+              'is-active': !!active,
+              'active-id': active ? active['.id'] : null,
+              'user': active ? active.user || '' : '',
+              'session-time-left': active ? active['session-time-left'] || '' : '',
+              'bytes-in': active ? active['bytes-in'] || '0' : '0',
+              'bytes-out': active ? active['bytes-out'] || '0' : '0',
+              'rx-rate': active ? active['rx-rate'] || '0 bps' : '0 bps',
+              'tx-rate': active ? active['tx-rate'] || '0 bps' : '0 bps',
+              'login-by': active ? active['login-by'] || '' : ''
+            };
+          });
+          
           const tbody = document.getElementById('hosts-tbody');
           if (tbody) {
-            tbody.innerHTML = this.renderHostsRows(freshHosts);
+            tbody.innerHTML = this.renderHostsRows(freshEnrichedHosts);
           }
         } catch (err) {
           console.error('Failed to refresh hosts:', err);

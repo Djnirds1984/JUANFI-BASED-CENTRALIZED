@@ -593,7 +593,9 @@ body {
   margin: 15px 0;
   box-shadow: 0 4px 12px rgba(156, 39, 176, 0.3) !important;
   text-align: center !important;
-  display: block !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
 }
 #insertBtn:hover {
   background: #7b1fa2 !important;

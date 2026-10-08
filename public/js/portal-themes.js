@@ -592,6 +592,8 @@ body {
   width: 100%;
   margin: 15px 0;
   box-shadow: 0 4px 12px rgba(156, 39, 176, 0.3) !important;
+  text-align: center !important;
+  display: block !important;
 }
 #insertBtn:hover {
   background: #7b1fa2 !important;

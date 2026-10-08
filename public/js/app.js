@@ -5,6 +5,7 @@ const App = {
   portalCurrentFile: 'login.html',
   portalDirty: false,
   _portalPreviewTimer: null,
+  _portalPreviewTheme: null,
 
   init() {
     if (api.getToken()) {
@@ -3527,6 +3528,7 @@ const App = {
               <div class="portal-file-info" id="portal-file-info"></div>
               <div class="portal-actions">
                 <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
+                <button class="btn btn-sm btn-outline" id="portal-themes-btn" onclick="App.openPortalThemes()">&#127912; Themes</button>
                 <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
                 <button class="btn btn-sm btn-outline" id="portal-upload-btn" onclick="App.uploadPortalFile()">Upload to Router</button>
                 <button class="btn btn-sm btn-outline" id="portal-reset-btn" onclick="App.resetPortalFile()">Reset to Default</button>
@@ -3649,6 +3651,9 @@ const App = {
     try {
       const res = await api.getPortalFile(this.portalCurrentFile);
       let html = res.content;
+      if (this._portalPreviewTheme) {
+        html = PortalThemes.applyTheme(html, PortalThemes.getTheme(this._portalPreviewTheme));
+      }
       html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
       html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
       if (html.includes('<head>')) {
@@ -3702,13 +3707,94 @@ const App = {
   async resetPortalFile() {
     if (!confirm(`Reset ${this.portalCurrentFile} to the default template? Unsaved changes will be lost.`)) return;
     try {
-      const res = await api.resetPortalFile(this.portalCurrentFile);
-      const editor = document.getElementById('portal-editor');
-      editor.value = res.file.content;
-      this.portalDirty = false;
-      document.getElementById('portal-dirty').style.visibility = 'hidden';
-      this.updatePortalPreview();
+      await api.resetPortalFile(this.portalCurrentFile);
+      await this.selectPortalFile(this.portalCurrentFile, true);
       this.toast(`${this.portalCurrentFile} reset to default`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  openPortalThemes() {
+    let modal = document.getElementById('portal-themes-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'portal-themes-modal';
+      document.body.appendChild(modal);
+    }
+    const themes = PortalThemes.getThemeList();
+    modal.innerHTML = `
+      <div class="ptm-backdrop" onclick="App.closePortalThemes()"></div>
+      <div class="ptm-dialog">
+        <div class="ptm-header">
+          <h3>Portal Themes</h3>
+          <button class="ptm-close" onclick="App.closePortalThemes()">&times;</button>
+        </div>
+        <div class="ptm-body">
+          <p class="ptm-hint">Preview how each theme looks, then apply. The default theme restores the original JuanFi UI. Applying a theme writes new content to login.html, status.html, and logout.html — use "Push All to Router" to upload them to your MikroTik.</p>
+          <div class="ptm-grid">
+            ${themes.map((t) => `
+              <div class="ptm-card" data-theme="${t.id}">
+                <div class="ptm-banner" style="background: ${t.banner}"></div>
+                <div class="ptm-card-body">
+                  <div class="ptm-name">${this.escapeHtml(t.name)}</div>
+                  <div class="ptm-desc">${this.escapeHtml(t.description)}</div>
+                  <div class="ptm-swatches">
+                    ${t.swatches.map((c) => `<span class="ptm-swatch" style="background:${c}" title="${c}"></span>`).join('')}
+                  </div>
+                  <div class="ptm-card-actions">
+                    <button class="btn btn-sm btn-outline" onclick="App.previewPortalTheme('${t.id}')">Preview</button>
+                    <button class="btn btn-sm btn-primary" onclick="App.applyPortalTheme('${t.id}')">Apply</button>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="ptm-footer">
+          <button class="btn btn-outline" onclick="App.closePortalThemes()">Close</button>
+        </div>
+      </div>
+    `;
+    requestAnimationFrame(() => modal.classList.add('ptm-open'));
+  },
+
+  closePortalThemes() {
+    const modal = document.getElementById('portal-themes-modal');
+    if (modal) {
+      modal.classList.remove('ptm-open');
+      setTimeout(() => modal.remove(), 180);
+    }
+    this._portalPreviewTheme = null;
+    this.updatePortalPreview();
+  },
+
+  async previewPortalTheme(themeId) {
+    const theme = PortalThemes.getTheme(themeId);
+    document.querySelectorAll('.ptm-card').forEach((c) => {
+      c.classList.toggle('ptm-previewing', c.dataset.theme === themeId);
+    });
+    this._portalPreviewTheme = themeId;
+    await this.updatePortalPreview();
+  },
+
+  async applyPortalTheme(themeId) {
+    const theme = PortalThemes.getTheme(themeId);
+    const label = theme.name;
+    if (!confirm(`Apply "${label}" theme? This will overwrite login.html, status.html, and logout.html with the themed versions. You can revert by applying the Default (JuanFi) theme.`)) return;
+
+    try {
+      const loginHtml = await api.getPortalFile('login.html');
+      const statusHtml = await api.getPortalFile('status.html');
+      const logoutHtml = await api.getPortalFile('logout.html');
+      await api.savePortalFile('login.html', PortalThemes.applyTheme(loginHtml.content, theme));
+      await api.savePortalFile('status.html', PortalThemes.applyTheme(statusHtml.content, theme));
+      await api.savePortalFile('logout.html', PortalThemes.applyTheme(logoutHtml.content, theme));
+      this.portalDirty = false;
+      this._portalPreviewTheme = null;
+      this.closePortalThemes();
+      await this.renderPortal();
+      this.toast(`"${label}" theme applied`, 'success');
     } catch (err) {
       this.toast(err.message, 'error');
     }

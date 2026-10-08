@@ -925,7 +925,7 @@ const App = {
   async showAddUserModal() {
     let profiles = [];
     try {
-      profiles = await api.getHotspotProfiles(this.selectedRouterId);
+      profiles = await api.getUserProfiles(this.selectedRouterId);
     } catch (err) {
       // ignore
     }
@@ -3537,7 +3537,7 @@ const App = {
     let profileError = null;
 
     try {
-      const profiles = await api.getHotspotProfiles(this.selectedRouterId);
+      const profiles = await api.getUserProfiles(this.selectedRouterId);
       if (profiles && profiles.length > 0) {
         profileOptions = profiles.map(p =>
           `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`

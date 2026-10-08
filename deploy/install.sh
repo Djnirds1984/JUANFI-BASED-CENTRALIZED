@@ -31,7 +31,7 @@ apt-get update -qq
 
 # Install dependencies
 echo "[2/9] Installing dependencies..."
-apt-get install -y -qq curl build-essential git sqlite3 > /dev/null 2>&1
+apt-get install -y -qq curl build-essential git sqlite3 acl > /dev/null 2>&1
 
 # Check Node.js installation
 echo "[3/9] Checking Node.js installation..."
@@ -169,6 +169,11 @@ mkdir -p "$APP_DIR/data"
 # Set permissions
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 chmod 600 "$APP_DIR/.env"
+
+# Set default ACLs on hotspot dir so files copied as root are still writable by service user
+mkdir -p "$APP_DIR/hotspot"
+setfacl -R -m u:"$APP_USER":rwx "$APP_DIR/hotspot"
+setfacl -R -d -m u:"$APP_USER":rwx "$APP_DIR/hotspot"
 
 # Install systemd service
 echo "[6/9] Installing systemd service..."

@@ -41,6 +41,12 @@ npm install --production
 
 echo "[5/5] Restarting service..."
 chown -R mikrotik-controller:mikrotik-controller "$APP_DIR"
+# Ensure default ACLs on hotspot dir so files copied as root are still writable by service user
+if command -v setfacl &>/dev/null; then
+    mkdir -p "$APP_DIR/hotspot"
+    setfacl -R -m mikrotik-controller:rwx "$APP_DIR/hotspot"
+    setfacl -R -d -m mikrotik-controller:rwx "$APP_DIR/hotspot"
+fi
 systemctl start "$APP_NAME"
 
 sleep 2

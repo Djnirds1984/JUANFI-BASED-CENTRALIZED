@@ -7,6 +7,7 @@ Type=simple
 User=mikrotik-controller
 Group=mikrotik-controller
 WorkingDirectory=/opt/mikrotik-controller
+ExecStartPre=/bin/chown -R mikrotik-controller:mikrotik-controller /opt/mikrotik-controller/hotspot
 ExecStart=/usr/bin/node /opt/mikrotik-controller/dist/server.js
 Restart=on-failure
 RestartSec=10

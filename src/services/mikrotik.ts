@@ -398,23 +398,23 @@ class MikroTikService {
       }
     }
 
-    let dhcpLeases: any[] = [];
+    let hotspotHosts: any[] = [];
     try {
       if (config?.useRestApi) {
-        const result = await this.restApiCall(config, 'GET', '/ip/dhcp-server/lease');
-        dhcpLeases = Array.isArray(result) ? result : [];
+        const result = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
+        hotspotHosts = Array.isArray(result) ? result : [];
       } else {
         const client = this.getClient(routerId);
-        dhcpLeases = await client.write('/ip/dhcp-server/lease/print') as any[];
+        hotspotHosts = await client.write('/ip/hotspot/host/print') as any[];
       }
     } catch (err) {
-      console.log(`DHCP lease query failed for router ${routerId}, continuing without lease data`);
+      console.log(`Hotspot host query failed for router ${routerId}, continuing without host data`);
     }
 
-    const leaseByIp = new Map<string, any>();
-    for (const lease of dhcpLeases) {
-      if (lease.address) {
-        leaseByIp.set(lease.address, lease);
+    const hostByMac = new Map<string, any>();
+    for (const host of hotspotHosts) {
+      if (host['mac-address']) {
+        hostByMac.set(host['mac-address'].toLowerCase(), host);
       }
     }
 
@@ -449,13 +449,14 @@ class MikroTikService {
 
       this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
 
-      const lease = leaseByIp.get(conn.address);
-      if (lease) {
-        if (lease.macAddress && !conn.mac) {
-          conn.mac = lease.macAddress;
+      const macKey = (conn.mac || '').toLowerCase();
+      const host = macKey ? hostByMac.get(macKey) : undefined;
+      if (host) {
+        if (host['mac-address'] && !conn.mac) {
+          conn.mac = host['mac-address'];
         }
-        if (lease.hostName) {
-          conn.hostname = lease.hostName;
+        if (host['host-name']) {
+          conn.hostname = host['host-name'];
         }
       }
     }

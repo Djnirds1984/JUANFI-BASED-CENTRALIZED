@@ -418,11 +418,6 @@ class MikroTikService {
       }
     }
 
-    console.log(`[ActiveConnections] Found ${hotspotHosts.length} hosts, ${hostByIp.size} with IP addresses`);
-    if (hotspotHosts.length > 0) {
-      console.log('[ActiveConnections] Sample host:', hotspotHosts[0]);
-    }
-
     const now = Date.now();
     const currentIds = new Set<string>();
 
@@ -456,14 +451,12 @@ class MikroTikService {
 
       const ipKey = conn.address || '';
       const host = ipKey ? hostByIp.get(ipKey) : undefined;
-      console.log(`[ActiveConnections] conn.address=${conn.address}, ipKey=${ipKey}, host found=${!!host}`);
       if (host) {
         if (host['mac-address'] && !conn.mac) {
           conn.mac = host['mac-address'];
         }
         if (host['host-name']) {
           conn.hostname = host['host-name'];
-          console.log(`[ActiveConnections] Set hostname=${host['host-name']} for ${conn.user || conn.address}`);
         }
       }
     }
@@ -627,19 +620,97 @@ class MikroTikService {
 
   async getHotspotHosts(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
+    let hosts: any[];
 
     if (config?.useRestApi) {
-      const hosts = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
-      return Array.isArray(hosts) ? hosts : [];
+      const result = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
+      hosts = Array.isArray(result) ? result : [];
+    } else {
+      const client = this.getClient(routerId);
+      try {
+        hosts = await client.write('/ip/hotspot/host/print') as any[];
+      } catch (err) {
+        console.error(`getHotspotHosts failed for router ${routerId}:`, (err as Error).message);
+        throw err;
+      }
     }
 
-    const client = this.getClient(routerId);
+    let activeConnections: any[] = [];
     try {
-      return await client.write('/ip/hotspot/host/print');
+      if (config?.useRestApi) {
+        const result = await this.restApiCall(config, 'GET', '/ip/hotspot/active');
+        activeConnections = Array.isArray(result) ? result : [];
+      } else {
+        const client = this.getClient(routerId);
+        activeConnections = await client.write('/ip/hotspot/active/print') as any[];
+      }
     } catch (err) {
-      console.error(`getHotspotHosts failed for router ${routerId}:`, (err as Error).message);
-      throw err;
+      console.log(`Active connections query failed for router ${routerId}, continuing without active data`);
     }
+
+    const activeByIp = new Map<string, any>();
+    for (const conn of activeConnections) {
+      if (conn.address) {
+        activeByIp.set(conn.address, conn);
+      }
+    }
+
+    const now = Date.now();
+    const currentIds = new Set<string>();
+
+    for (const conn of activeConnections) {
+      const id = conn['.id'];
+      if (id) currentIds.add(id);
+
+      const bytesIn = parseInt(conn['bytes-in'] || '0', 10);
+      const bytesOut = parseInt(conn['bytes-out'] || '0', 10);
+      const key = `${routerId}:${id}`;
+      const prev = this.rateHistory.get(key);
+
+      if (prev) {
+        const deltaSeconds = (now - prev.timestamp) / 1000;
+        if (deltaSeconds > 0) {
+          const rxBytesPerSec = (bytesIn - prev.bytesIn) / deltaSeconds;
+          const txBytesPerSec = (bytesOut - prev.bytesOut) / deltaSeconds;
+          conn['rx-rate'] = this.formatRate(rxBytesPerSec * 8);
+          conn['tx-rate'] = this.formatRate(txBytesPerSec * 8);
+        } else {
+          conn['rx-rate'] = '0 bps';
+          conn['tx-rate'] = '0 bps';
+        }
+      } else {
+        conn['rx-rate'] = '0 bps';
+        conn['tx-rate'] = '0 bps';
+      }
+
+      this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
+    }
+
+    for (const host of hosts) {
+      const ip = host.address || '';
+      const active = ip ? activeByIp.get(ip) : undefined;
+      if (active) {
+        host['active-id'] = active['.id'];
+        host['user'] = active.user || '';
+        host['session-time-left'] = active['session-time-left'] || '';
+        host['bytes-in'] = active['bytes-in'] || '0';
+        host['bytes-out'] = active['bytes-out'] || '0';
+        host['rx-rate'] = active['rx-rate'] || '0 bps';
+        host['tx-rate'] = active['tx-rate'] || '0 bps';
+        host['login-by'] = active['login-by'] || '';
+        host['is-active'] = true;
+      } else {
+        host['is-active'] = false;
+      }
+    }
+
+    for (const [key] of this.rateHistory) {
+      if (key.startsWith(`${routerId}:`) && !currentIds.has(key.split(':')[1])) {
+        this.rateHistory.delete(key);
+      }
+    }
+
+    return hosts;
   }
 
   async getDhcpLeases(routerId: number): Promise<any[]> {

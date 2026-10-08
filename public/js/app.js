@@ -656,8 +656,7 @@ const App = {
           </div>
         </div>
         <div class="tabs">
-          <button class="tab ${this.hotspotTab === 'hosts' ? 'active' : ''}" data-tab="hosts">Hosts</button>
-          <button class="tab ${this.hotspotTab === 'active' ? 'active' : ''}" data-tab="active">Active Users</button>
+          <button class="tab active" data-tab="hosts">Hosts</button>
         </div>
         <div id="hotspot-tab-content">Loading...</div>
       </div>
@@ -685,11 +684,7 @@ const App = {
     container.innerHTML = 'Loading...';
 
     try {
-      if (this.hotspotTab === 'hosts') {
-        await this.loadHotspotHosts(container);
-      } else if (this.hotspotTab === 'active') {
-        await this.loadActiveUsers(container);
-      }
+      await this.loadHotspotHosts(container);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
@@ -697,6 +692,12 @@ const App = {
 
   async loadHotspotHosts(container) {
     if (!container) container = document.getElementById('hotspot-tab-content');
+    
+    if (this._hostsInterval) {
+      clearInterval(this._hostsInterval);
+      this._hostsInterval = null;
+    }
+    
     try {
       const hosts = await api.getHotspotHosts(this.selectedRouterId);
       if (hosts.length === 0) {
@@ -712,85 +713,32 @@ const App = {
                 <th>MAC Address</th>
                 <th>IP Address</th>
                 <th>Hostname</th>
-                <th>Server</th>
-                <th>Uptime</th>
-                <th>Idle Time</th>
-                <th>Rx Rate</th>
-                <th>Tx Rate</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${hosts.map((h) => `
-                <tr>
-                  <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
-                  <td>${this.escapeHtml(h.address || '')}</td>
-                  <td>${this.escapeHtml(h['host-name'] || '-')}</td>
-                  <td>${this.escapeHtml(h.server || '')}</td>
-                  <td>${h.uptime || '0s'}</td>
-                  <td>${h['idle-time'] || '0s'}</td>
-                  <td>${h['rate-limit'] || h['rx-rate'] || '0 bps'}</td>
-                  <td>${h['tx-rate'] || '0 bps'}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
-    } catch (err) {
-      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
-    }
-  },
-
-  async loadActiveUsers(container) {
-    if (!container) container = document.getElementById('hotspot-tab-content');
-    
-    if (this._activeUsersInterval) {
-      clearInterval(this._activeUsersInterval);
-      this._activeUsersInterval = null;
-    }
-    
-    try {
-      const connections = await api.getActiveConnections(this.selectedRouterId);
-      if (connections.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No active hotspot users.</p></div>';
-        return;
-      }
-
-      container.innerHTML = `
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
                 <th>User</th>
-                <th>Hostname</th>
-                <th>IP Address</th>
-                <th>MAC Address</th>
-                <th>Uptime</th>
+                <th>Server</th>
                 <th>Session Time Left</th>
                 <th>RX Rate</th>
                 <th>TX Rate</th>
                 <th>Bytes In</th>
                 <th>Bytes Out</th>
-                <th>Login By</th>
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="active-users-tbody">
-              ${this.renderActiveUsersRows(connections)}
+            <tbody id="hosts-tbody">
+              ${this.renderHostsRows(hosts)}
             </tbody>
           </table>
         </div>
       `;
 
-      this._activeUsersInterval = setInterval(async () => {
+      this._hostsInterval = setInterval(async () => {
         try {
-          const freshConnections = await api.getActiveConnections(this.selectedRouterId);
-          const tbody = document.getElementById('active-users-tbody');
+          const freshHosts = await api.getHotspotHosts(this.selectedRouterId);
+          const tbody = document.getElementById('hosts-tbody');
           if (tbody) {
-            tbody.innerHTML = this.renderActiveUsersRows(freshConnections);
+            tbody.innerHTML = this.renderHostsRows(freshHosts);
           }
         } catch (err) {
-          console.error('Failed to refresh active users:', err);
+          console.error('Failed to refresh hosts:', err);
         }
       }, 1000);
     } catch (err) {
@@ -798,49 +746,57 @@ const App = {
     }
   },
 
-  renderActiveUsersRows(connections) {
-    return connections.map((c) => {
-      const sessionTimeLeft = c['session-time-left'] || '';
-      const totalSeconds = this.parseTimeToSeconds(sessionTimeLeft);
-      const rxRate = c['rx-rate'] || '0 bps';
-      const txRate = c['tx-rate'] || '0 bps';
+  renderHostsRows(hosts) {
+    return hosts.map((h) => {
+      const isActive = h['is-active'];
+      const sessionTimeLeft = h['session-time-left'] || '';
+      const totalSeconds = isActive ? this.parseTimeToSeconds(sessionTimeLeft) : 0;
+      const rxRate = h['rx-rate'] || '0 bps';
+      const txRate = h['tx-rate'] || '0 bps';
       
       return `
         <tr>
-          <td>${this.escapeHtml(c.user || '')}</td>
-          <td>${this.escapeHtml(c.hostname || '-')}</td>
-          <td>${this.escapeHtml(c.address || '')}</td>
-          <td><code>${this.escapeHtml(c.mac || '')}</code></td>
-          <td>${c.uptime || '0s'}</td>
+          <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
+          <td>${this.escapeHtml(h.address || '')}</td>
+          <td>${this.escapeHtml(h['host-name'] || '-')}</td>
+          <td>${isActive ? this.escapeHtml(h.user || '-') : '<span style="color:var(--text-muted)">-</span>'}</td>
+          <td>${this.escapeHtml(h.server || '')}</td>
           <td>
-            <div class="session-countdown" data-seconds="${totalSeconds}">
-              <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
-              <div class="countdown-bar">
-                <div class="countdown-bar-fill" style="width: 100%"></div>
+            ${isActive ? `
+              <div class="session-countdown" data-seconds="${totalSeconds}">
+                <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
+                <div class="countdown-bar">
+                  <div class="countdown-bar-fill" style="width: 100%"></div>
+                </div>
               </div>
-            </div>
+            ` : '<span style="color:var(--text-muted)">Inactive</span>'}
           </td>
           <td>
-            <div class="rate-indicator">
-              <span class="rate-value">${this.escapeHtml(rxRate)}</span>
-              <div class="rate-bar">
-                <div class="rate-bar-fill rx-fill" style="width: ${this.calculateRateBarWidth(rxRate)}%"></div>
+            ${isActive ? `
+              <div class="rate-indicator">
+                <span class="rate-value">${this.escapeHtml(rxRate)}</span>
+                <div class="rate-bar">
+                  <div class="rate-bar-fill rx-fill" style="width: ${this.calculateRateBarWidth(rxRate)}%"></div>
+                </div>
               </div>
-            </div>
+            ` : '<span style="color:var(--text-muted)">-</span>'}
           </td>
           <td>
-            <div class="rate-indicator">
-              <span class="rate-value">${this.escapeHtml(txRate)}</span>
-              <div class="rate-bar">
-                <div class="rate-bar-fill tx-fill" style="width: ${this.calculateRateBarWidth(txRate)}%"></div>
+            ${isActive ? `
+              <div class="rate-indicator">
+                <span class="rate-value">${this.escapeHtml(txRate)}</span>
+                <div class="rate-bar">
+                  <div class="rate-bar-fill tx-fill" style="width: ${this.calculateRateBarWidth(txRate)}%"></div>
+                </div>
               </div>
-            </div>
+            ` : '<span style="color:var(--text-muted)">-</span>'}
           </td>
-          <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
-          <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
-          <td>${this.escapeHtml(c['login-by'] || '-')}</td>
+          <td>${isActive ? this.formatBytes(parseInt(h['bytes-in'] || '0')) : '<span style="color:var(--text-muted)">-</span>'}</td>
+          <td>${isActive ? this.formatBytes(parseInt(h['bytes-out'] || '0')) : '<span style="color:var(--text-muted)">-</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${c['.id']}', '${this.escapeHtml(c.user || c.address)}')">Disconnect</button>
+            ${isActive && h['active-id'] ? `
+              <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${h['active-id']}', '${this.escapeHtml(h.user || h.address)}')">Disconnect</button>
+            ` : ''}
           </td>
         </tr>
       `;
@@ -918,7 +874,7 @@ const App = {
     try {
       await api.removeActiveConnection(this.selectedRouterId, activeId);
       this.toast('User disconnected', 'success');
-      this.loadActiveUsers();
+      this.loadHotspotHosts();
     } catch (err) {
       this.toast(err.message, 'error');
     }

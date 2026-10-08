@@ -3380,7 +3380,50 @@ const App = {
       const vouchers = data.vouchers || [];
       const routerUsers = data.routerUsers || [];
 
+      const availableCount = vouchers.filter(v => {
+        const routerUser = routerUsers.find(u => u.name === v.username);
+        return routerUser && routerUser.disabled !== 'true';
+      }).length;
+      
+      const usedCount = vouchers.filter(v => {
+        const routerUser = routerUsers.find(u => u.name === v.username);
+        return !routerUser;
+      }).length;
+      
+      const disabledCount = vouchers.filter(v => {
+        const routerUser = routerUsers.find(u => u.name === v.username);
+        return routerUser && routerUser.disabled === 'true';
+      }).length;
+
       let html = '';
+
+      html += `
+        <div class="voucher-summary" style="margin-bottom:1.5rem">
+          <div class="voucher-summary-grid">
+            <div class="voucher-summary-card voucher-summary-available">
+              <div class="voucher-summary-icon">○</div>
+              <div class="voucher-summary-content">
+                <div class="voucher-summary-value">${availableCount}</div>
+                <div class="voucher-summary-label">Available</div>
+              </div>
+            </div>
+            <div class="voucher-summary-card voucher-summary-used">
+              <div class="voucher-summary-icon">✓</div>
+              <div class="voucher-summary-content">
+                <div class="voucher-summary-value">${usedCount}</div>
+                <div class="voucher-summary-label">Used</div>
+              </div>
+            </div>
+            <div class="voucher-summary-card voucher-summary-disabled">
+              <div class="voucher-summary-icon">⊘</div>
+              <div class="voucher-summary-content">
+                <div class="voucher-summary-value">${disabledCount}</div>
+                <div class="voucher-summary-label">Disabled</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
 
       html += `
         <div style="margin-bottom:1.5rem">
@@ -3407,13 +3450,34 @@ const App = {
               <tbody>
                 ${vouchers.map((v) => {
                   const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
+                  
+                  const routerUser = routerUsers.find(u => u.name === v.username);
+                  let statusBadge = '';
+                  let statusIcon = '';
+                  
+                  if (!routerUser) {
+                    statusBadge = '<span class="status-badge voucher-used">Used</span>';
+                    statusIcon = '✓';
+                  } else if (routerUser.disabled === 'true') {
+                    statusBadge = '<span class="status-badge voucher-disabled">Disabled</span>';
+                    statusIcon = '⊘';
+                  } else {
+                    statusBadge = '<span class="status-badge voucher-available">Available</span>';
+                    statusIcon = '○';
+                  }
+                  
                   return `
                   <tr>
                     <td><strong>${this.escapeHtml(v.code)}</strong></td>
                     <td>${this.escapeHtml(v.username)}</td>
                     <td>${this.escapeHtml(v.profile)}</td>
                     <td>${dur}</td>
-                    <td>${v.is_used ? '<span class="status-badge disconnected">Used</span>' : '<span class="status-badge connected">Available</span>'}</td>
+                    <td>
+                      <div class="voucher-status">
+                        <span class="voucher-status-icon">${statusIcon}</span>
+                        ${statusBadge}
+                      </div>
+                    </td>
                     <td>${new Date(v.created_at).toLocaleDateString()}</td>
                     <td>
                       <button class="btn btn-sm btn-danger" onclick="App.deleteVoucher(${v.id})">Delete</button>

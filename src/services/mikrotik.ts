@@ -56,6 +56,7 @@ class MikroTikService {
   private reconnectTimers: Map<number, NodeJS.Timeout> = new Map();
   private reconnectAttempts: Map<number, number> = new Map();
   private hasFlashCache: Map<number, boolean> = new Map();
+  private rateHistory: Map<string, { bytesIn: number; bytesOut: number; timestamp: number }> = new Map();
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY = 5000;
 
@@ -381,23 +382,68 @@ class MikroTikService {
 
   async getActiveConnections(routerId: number): Promise<ActiveConnection[]> {
     const config = this.routerConfigs.get(routerId);
+    let connections: any[];
 
     if (config?.useRestApi) {
-      const connections = await this.restApiCall(config, 'GET', '/ip/hotspot/active');
-      return Array.isArray(connections) ? connections : [];
+      const result = await this.restApiCall(config, 'GET', '/ip/hotspot/active');
+      connections = Array.isArray(result) ? result : [];
+    } else {
+      const client = this.getClient(routerId);
+      try {
+        connections = await client.write('/ip/hotspot/active/print') as any[];
+      } catch (err) {
+        console.error(`getActiveConnections failed for router ${routerId}:`, (err as Error).message);
+        throw err;
+      }
     }
 
-    const client = this.getClient(routerId);
-    try {
-      const connections = await client.write('/ip/hotspot/active/print');
-      if (connections.length > 0) {
-        console.log('Active connection fields:', Object.keys(connections[0]));
+    const now = Date.now();
+    const currentIds = new Set<string>();
+
+    for (const conn of connections) {
+      const id = conn['.id'];
+      if (!id) continue;
+      currentIds.add(id);
+
+      const bytesIn = parseInt(conn['bytes-in'] || '0', 10);
+      const bytesOut = parseInt(conn['bytes-out'] || '0', 10);
+      const key = `${routerId}:${id}`;
+      const prev = this.rateHistory.get(key);
+
+      if (prev) {
+        const deltaSeconds = (now - prev.timestamp) / 1000;
+        if (deltaSeconds > 0) {
+          const rxBytesPerSec = (bytesIn - prev.bytesIn) / deltaSeconds;
+          const txBytesPerSec = (bytesOut - prev.bytesOut) / deltaSeconds;
+          conn['rx-rate'] = this.formatRate(rxBytesPerSec * 8);
+          conn['tx-rate'] = this.formatRate(txBytesPerSec * 8);
+        } else {
+          conn['rx-rate'] = '0 bps';
+          conn['tx-rate'] = '0 bps';
+        }
+      } else {
+        conn['rx-rate'] = '0 bps';
+        conn['tx-rate'] = '0 bps';
       }
-      return connections as ActiveConnection[];
-    } catch (err) {
-      console.error(`getActiveConnections failed for router ${routerId}:`, (err as Error).message);
-      throw err;
+
+      this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
     }
+
+    for (const [key] of this.rateHistory) {
+      if (key.startsWith(`${routerId}:`) && !currentIds.has(key.split(':')[1])) {
+        this.rateHistory.delete(key);
+      }
+    }
+
+    return connections as ActiveConnection[];
+  }
+
+  private formatRate(bitsPerSecond: number): string {
+    if (bitsPerSecond <= 0) return '0 bps';
+    if (bitsPerSecond < 1000) return `${Math.round(bitsPerSecond)} bps`;
+    if (bitsPerSecond < 1_000_000) return `${(bitsPerSecond / 1000).toFixed(1)} kbps`;
+    if (bitsPerSecond < 1_000_000_000) return `${(bitsPerSecond / 1_000_000).toFixed(1)} Mbps`;
+    return `${(bitsPerSecond / 1_000_000_000).toFixed(1)} Gbps`;
   }
 
   async removeActiveConnection(routerId: number, activeId: string): Promise<void> {

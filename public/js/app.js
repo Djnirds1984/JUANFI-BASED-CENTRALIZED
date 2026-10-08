@@ -791,7 +791,7 @@ const App = {
         } catch (err) {
           console.error('Failed to refresh active users:', err);
         }
-      }, 2000);
+      }, 1000);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }

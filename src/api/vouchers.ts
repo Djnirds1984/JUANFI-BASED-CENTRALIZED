@@ -58,6 +58,21 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
       }
     }
 
+    const activeUsernames = new Set(
+      routerUsers
+        .filter((u: any) => u.disabled !== 'true')
+        .map((u: any) => u.name)
+    );
+
+    if (activeUsernames.size > 0) {
+      const placeholders = Array.from(activeUsernames).map(() => '?').join(',');
+      const syncStmt = db.prepare(
+        `UPDATE vouchers SET is_used = 1, used_at = datetime('now')
+         WHERE router_id = ? AND username IN (${placeholders}) AND is_used = 0`
+      );
+      syncStmt.run(routerId, ...Array.from(activeUsernames));
+    }
+
     res.json({ vouchers, total, routerUsers });
   } catch (error) {
     console.error('Get vouchers error:', error);

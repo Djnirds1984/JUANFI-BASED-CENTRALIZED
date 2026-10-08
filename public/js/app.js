@@ -3380,20 +3380,14 @@ const App = {
       const vouchers = data.vouchers || [];
       const routerUsers = data.routerUsers || [];
 
-      const availableCount = vouchers.filter(v => {
-        const routerUser = routerUsers.find(u => u.name === v.username);
-        return !routerUser;
-      }).length;
-      
-      const inUseCount = vouchers.filter(v => {
-        const routerUser = routerUsers.find(u => u.name === v.username);
-        return routerUser && routerUser.disabled !== 'true';
-      }).length;
-      
-      const usedCount = vouchers.filter(v => {
-        const routerUser = routerUsers.find(u => u.name === v.username);
-        return routerUser && routerUser.disabled === 'true';
-      }).length;
+      const availableCount = vouchers.filter(v => !v.is_used).length;
+
+      const activeUsernames = new Set(
+        routerUsers.filter(u => u.disabled !== 'true').map(u => u.name)
+      );
+
+      const inUseCount = vouchers.filter(v => v.is_used && activeUsernames.has(v.username)).length;
+      const usedCount = vouchers.filter(v => v.is_used && !activeUsernames.has(v.username)).length;
 
       let html = '';
 
@@ -3450,20 +3444,19 @@ const App = {
               <tbody>
                 ${vouchers.map((v) => {
                   const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
-                  
-                  const routerUser = routerUsers.find(u => u.name === v.username);
-                  let statusBadge = '';
-                  let statusIcon = '';
-                  
-                  if (!routerUser) {
+
+                  const isActive = routerUsers.some(u => u.name === v.username && u.disabled !== 'true');
+                  let statusBadge, statusIcon;
+
+                  if (!v.is_used) {
                     statusBadge = '<span class="status-badge voucher-available">Available</span>';
                     statusIcon = '○';
-                  } else if (routerUser.disabled === 'true') {
-                    statusBadge = '<span class="status-badge voucher-used">Used</span>';
-                    statusIcon = '✓';
-                  } else {
+                  } else if (isActive) {
                     statusBadge = '<span class="status-badge voucher-inuse">In Use</span>';
                     statusIcon = '◉';
+                  } else {
+                    statusBadge = '<span class="status-badge voucher-used">Used</span>';
+                    statusIcon = '✓';
                   }
                   
                   return `

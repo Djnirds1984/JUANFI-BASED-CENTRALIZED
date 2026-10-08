@@ -6,6 +6,7 @@ const App = {
   portalDirty: false,
   _portalPreviewTimer: null,
   _portalPreviewTheme: null,
+  hotspotTab: 'hosts',
 
   init() {
     if (api.getToken()) {
@@ -645,7 +646,7 @@ const App = {
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>Hotspot Hosts</h3>
+          <h3>Hotspot Users</h3>
           <div style="display:flex;gap:0.5rem">
             <select id="hotspot-router-select" class="btn btn-outline">
               ${connectedRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
@@ -653,20 +654,48 @@ const App = {
             <button class="btn btn-primary btn-sm" onclick="App.showAddUserModal()">Add User</button>
           </div>
         </div>
-        <div id="hotspot-users-table">Loading...</div>
+        <div class="tabs">
+          <button class="tab ${this.hotspotTab === 'hosts' ? 'active' : ''}" data-tab="hosts">Hosts</button>
+          <button class="tab ${this.hotspotTab === 'active' ? 'active' : ''}" data-tab="active">Active Users</button>
+        </div>
+        <div id="hotspot-tab-content">Loading...</div>
       </div>
     `;
 
     document.getElementById('hotspot-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
-      this.loadHotspotHosts();
+      this.loadHotspotTab();
     });
 
-    this.loadHotspotHosts();
+    document.querySelectorAll('.tabs .tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.hotspotTab = tab.dataset.tab;
+        document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadHotspotTab();
+      });
+    });
+
+    this.loadHotspotTab();
   },
 
-  async loadHotspotHosts() {
-    const container = document.getElementById('hotspot-users-table');
+  async loadHotspotTab() {
+    const container = document.getElementById('hotspot-tab-content');
+    container.innerHTML = 'Loading...';
+
+    try {
+      if (this.hotspotTab === 'hosts') {
+        await this.loadHotspotHosts(container);
+      } else if (this.hotspotTab === 'active') {
+        await this.loadActiveUsers(container);
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadHotspotHosts(container) {
+    if (!container) container = document.getElementById('hotspot-tab-content');
     try {
       const hosts = await api.getHotspotHosts(this.selectedRouterId);
       if (hosts.length === 0) {
@@ -700,6 +729,50 @@ const App = {
                   <td>${h['idle-time'] || '0s'}</td>
                   <td>${h['rate-limit'] || h['rx-rate'] || '0 bps'}</td>
                   <td>${h['tx-rate'] || '0 bps'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadActiveUsers(container) {
+    if (!container) container = document.getElementById('hotspot-tab-content');
+    try {
+      const connections = await api.getActiveConnections(this.selectedRouterId);
+      if (connections.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No active hotspot users.</p></div>';
+        return;
+      }
+
+      container.innerHTML = `
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>IP Address</th>
+                <th>MAC Address</th>
+                <th>Uptime</th>
+                <th>Bytes In</th>
+                <th>Bytes Out</th>
+                <th>Login By</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${connections.map((c) => `
+                <tr>
+                  <td>${this.escapeHtml(c.user || '')}</td>
+                  <td>${this.escapeHtml(c.address || '')}</td>
+                  <td><code>${this.escapeHtml(c.mac || '')}</code></td>
+                  <td>${c.uptime || '0s'}</td>
+                  <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
+                  <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
+                  <td>${this.escapeHtml(c['login-by'] || '-')}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -4723,6 +4796,14 @@ var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  },
+
+  formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   },
 };
 

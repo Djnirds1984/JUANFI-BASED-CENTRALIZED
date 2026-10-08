@@ -704,34 +704,56 @@ const App = {
         api.getActiveConnections(this.selectedRouterId)
       ]);
       
-      if (hosts.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No hotspot hosts found.</p></div>';
-        return;
+      const hostByIp = new Map();
+      for (const host of hosts) {
+        const ip = this.normalizeIp(host.address || '');
+        if (ip) hostByIp.set(ip, host);
       }
 
-      const activeByIp = new Map();
-      for (const conn of connections) {
-        if (conn.address) {
-          activeByIp.set(this.normalizeIp(conn.address), conn);
+      const seenIps = new Set();
+      const enrichedHosts = connections.map(conn => {
+        const ip = this.normalizeIp(conn.address || '');
+        seenIps.add(ip);
+        const host = hostByIp.get(ip);
+        return {
+          'mac-address': conn.mac || (host ? host['mac-address'] : '') || '',
+          address: conn.address || '',
+          'host-name': conn.hostname || (host ? host['host-name'] : '') || '-',
+          user: conn.user || '',
+          server: conn.server || (host ? host.server : '') || '',
+          'is-active': true,
+          'active-id': conn['.id'] || null,
+          'session-time-left': conn['session-time-left'] || '',
+          'bytes-in': conn['bytes-in'] || '0',
+          'bytes-out': conn['bytes-out'] || '0',
+          'rx-rate': conn['rx-rate'] || '0 bps',
+          'tx-rate': conn['tx-rate'] || '0 bps',
+          'login-by': conn['login-by'] || ''
+        };
+      });
+
+      for (const host of hosts) {
+        const ip = this.normalizeIp(host.address || '');
+        if (!seenIps.has(ip)) {
+          enrichedHosts.push({
+            ...host,
+            'is-active': false,
+            'active-id': null,
+            'user': '',
+            'session-time-left': '',
+            'bytes-in': '0',
+            'bytes-out': '0',
+            'rx-rate': '0 bps',
+            'tx-rate': '0 bps',
+            'login-by': ''
+          });
         }
       }
 
-      const enrichedHosts = hosts.map(host => {
-        const ip = this.normalizeIp(host.address || '');
-        const active = activeByIp.get(ip);
-        return {
-          ...host,
-          'is-active': !!active,
-          'active-id': active ? active['.id'] : null,
-          'user': active ? active.user || '' : '',
-          'session-time-left': active ? active['session-time-left'] || '' : '',
-          'bytes-in': active ? active['bytes-in'] || '0' : '0',
-          'bytes-out': active ? active['bytes-out'] || '0' : '0',
-          'rx-rate': active ? active['rx-rate'] || '0 bps' : '0 bps',
-          'tx-rate': active ? active['tx-rate'] || '0 bps' : '0 bps',
-          'login-by': active ? active['login-by'] || '' : ''
-        };
-      });
+      if (enrichedHosts.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No hotspot hosts found.</p></div>';
+        return;
+      }
 
       container.innerHTML = `
         <div class="table-wrapper">
@@ -765,29 +787,51 @@ const App = {
             api.getActiveConnections(this.selectedRouterId)
           ]);
           
-          const freshActiveByIp = new Map();
-          for (const conn of freshConnections) {
-            if (conn.address) {
-              freshActiveByIp.set(this.normalizeIp(conn.address), conn);
-            }
+          const freshHostByIp = new Map();
+          for (const host of freshHosts) {
+            const ip = this.normalizeIp(host.address || '');
+            if (ip) freshHostByIp.set(ip, host);
           }
 
-          const freshEnrichedHosts = freshHosts.map(host => {
-            const ip = this.normalizeIp(host.address || '');
-            const active = freshActiveByIp.get(ip);
+          const freshSeenIps = new Set();
+          const freshEnrichedHosts = freshConnections.map(conn => {
+            const ip = this.normalizeIp(conn.address || '');
+            freshSeenIps.add(ip);
+            const host = freshHostByIp.get(ip);
             return {
-              ...host,
-              'is-active': !!active,
-              'active-id': active ? active['.id'] : null,
-              'user': active ? active.user || '' : '',
-              'session-time-left': active ? active['session-time-left'] || '' : '',
-              'bytes-in': active ? active['bytes-in'] || '0' : '0',
-              'bytes-out': active ? active['bytes-out'] || '0' : '0',
-              'rx-rate': active ? active['rx-rate'] || '0 bps' : '0 bps',
-              'tx-rate': active ? active['tx-rate'] || '0 bps' : '0 bps',
-              'login-by': active ? active['login-by'] || '' : ''
+              'mac-address': conn.mac || (host ? host['mac-address'] : '') || '',
+              address: conn.address || '',
+              'host-name': conn.hostname || (host ? host['host-name'] : '') || '-',
+              user: conn.user || '',
+              server: conn.server || (host ? host.server : '') || '',
+              'is-active': true,
+              'active-id': conn['.id'] || null,
+              'session-time-left': conn['session-time-left'] || '',
+              'bytes-in': conn['bytes-in'] || '0',
+              'bytes-out': conn['bytes-out'] || '0',
+              'rx-rate': conn['rx-rate'] || '0 bps',
+              'tx-rate': conn['tx-rate'] || '0 bps',
+              'login-by': conn['login-by'] || ''
             };
           });
+
+          for (const host of freshHosts) {
+            const ip = this.normalizeIp(host.address || '');
+            if (!freshSeenIps.has(ip)) {
+              freshEnrichedHosts.push({
+                ...host,
+                'is-active': false,
+                'active-id': null,
+                'user': '',
+                'session-time-left': '',
+                'bytes-in': '0',
+                'bytes-out': '0',
+                'rx-rate': '0 bps',
+                'tx-rate': '0 bps',
+                'login-by': ''
+              });
+            }
+          }
           
           const tbody = document.getElementById('hosts-tbody');
           if (tbody) {

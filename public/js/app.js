@@ -810,6 +810,12 @@ const App = {
       const rxRate = h['rx-rate'] || '0 bps';
       const txRate = h['tx-rate'] || '0 bps';
       
+      let countdownClass = '';
+      if (totalSeconds !== Infinity && totalSeconds > 0) {
+        if (totalSeconds <= 60) countdownClass = 'countdown-critical';
+        else if (totalSeconds <= 300) countdownClass = 'countdown-warning';
+      }
+      
       return `
         <tr>
           <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
@@ -819,10 +825,10 @@ const App = {
           <td>${this.escapeHtml(h.server || '')}</td>
           <td>
             ${isActive ? `
-              <div class="session-countdown" data-seconds="${totalSeconds}">
+              <div class="session-countdown ${countdownClass}" data-seconds="${totalSeconds}">
                 <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
                 <div class="countdown-bar">
-                  <div class="countdown-bar-fill" style="width: 100%"></div>
+                  <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
                 </div>
               </div>
             ` : '<span style="color:var(--text-muted)">Inactive</span>'}

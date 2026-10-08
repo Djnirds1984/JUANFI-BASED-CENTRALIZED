@@ -402,6 +402,11 @@ class MikroTikService {
       }
     }
 
+    console.log(`[getActiveConnections] Router ${routerId}: ${connections.length} active connections`);
+    if (connections.length > 0) {
+      console.log(`[getActiveConnections] Sample connection:`, JSON.stringify(connections[0], null, 2));
+    }
+
     let hotspotHosts: any[] = [];
     try {
       if (config?.useRestApi) {
@@ -430,28 +435,33 @@ class MikroTikService {
       if (!id) continue;
       currentIds.add(id);
 
-      const bytesIn = parseInt(conn['bytes-in'] || '0', 10);
-      const bytesOut = parseInt(conn['bytes-out'] || '0', 10);
-      const key = `${routerId}:${id}`;
-      const prev = this.rateHistory.get(key);
+      if (!conn['rx-rate']) {
+        const bytesIn = parseInt(conn['bytes-in'] || '0', 10);
+        const bytesOut = parseInt(conn['bytes-out'] || '0', 10);
+        const key = `${routerId}:${id}`;
+        const prev = this.rateHistory.get(key);
 
-      if (prev) {
-        const deltaSeconds = (now - prev.timestamp) / 1000;
-        if (deltaSeconds > 0) {
-          const rxBytesPerSec = (bytesIn - prev.bytesIn) / deltaSeconds;
-          const txBytesPerSec = (bytesOut - prev.bytesOut) / deltaSeconds;
-          conn['rx-rate'] = this.formatRate(rxBytesPerSec * 8);
-          conn['tx-rate'] = this.formatRate(txBytesPerSec * 8);
+        if (prev) {
+          const deltaSeconds = (now - prev.timestamp) / 1000;
+          if (deltaSeconds > 0) {
+            const rxBytesPerSec = (bytesIn - prev.bytesIn) / deltaSeconds;
+            const txBytesPerSec = (bytesOut - prev.bytesOut) / deltaSeconds;
+            conn['rx-rate'] = this.formatRate(rxBytesPerSec * 8);
+            conn['tx-rate'] = this.formatRate(txBytesPerSec * 8);
+          } else {
+            conn['rx-rate'] = '0 bps';
+            conn['tx-rate'] = '0 bps';
+          }
         } else {
           conn['rx-rate'] = '0 bps';
           conn['tx-rate'] = '0 bps';
         }
-      } else {
-        conn['rx-rate'] = '0 bps';
-        conn['tx-rate'] = '0 bps';
-      }
 
-      this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
+        this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
+      } else {
+        conn['rx-rate'] = this.formatNativeRate(conn['rx-rate']);
+        conn['tx-rate'] = this.formatNativeRate(conn['tx-rate']);
+      }
 
       const ipKey = this.normalizeIp(conn.address || '');
       const host = ipKey ? hostByIp.get(ipKey) : undefined;
@@ -480,6 +490,15 @@ class MikroTikService {
     if (bitsPerSecond < 1_000_000) return `${(bitsPerSecond / 1000).toFixed(1)} kbps`;
     if (bitsPerSecond < 1_000_000_000) return `${(bitsPerSecond / 1_000_000).toFixed(1)} Mbps`;
     return `${(bitsPerSecond / 1_000_000_000).toFixed(1)} Gbps`;
+  }
+
+  private formatNativeRate(rate: string): string {
+    if (!rate || rate === '0') return '0 bps';
+    const match = rate.match(/([\d.]+)\s*([kmg]?bps)/i);
+    if (!match) return rate;
+    const value = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+    return `${value} ${unit}`;
   }
 
   async removeActiveConnection(routerId: number, activeId: string): Promise<void> {

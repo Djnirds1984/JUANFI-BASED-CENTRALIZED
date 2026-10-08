@@ -411,11 +411,16 @@ class MikroTikService {
       console.log(`Hotspot host query failed for router ${routerId}, continuing without host data`);
     }
 
-    const hostByMac = new Map<string, any>();
+    const hostByIp = new Map<string, any>();
     for (const host of hotspotHosts) {
-      if (host['mac-address']) {
-        hostByMac.set(host['mac-address'].toLowerCase(), host);
+      if (host.address) {
+        hostByIp.set(host.address, host);
       }
+    }
+
+    console.log(`[ActiveConnections] Found ${hotspotHosts.length} hosts, ${hostByIp.size} with IP addresses`);
+    if (hotspotHosts.length > 0) {
+      console.log('[ActiveConnections] Sample host:', hotspotHosts[0]);
     }
 
     const now = Date.now();
@@ -449,14 +454,16 @@ class MikroTikService {
 
       this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
 
-      const macKey = (conn.mac || '').toLowerCase();
-      const host = macKey ? hostByMac.get(macKey) : undefined;
+      const ipKey = conn.address || '';
+      const host = ipKey ? hostByIp.get(ipKey) : undefined;
+      console.log(`[ActiveConnections] conn.address=${conn.address}, ipKey=${ipKey}, host found=${!!host}`);
       if (host) {
         if (host['mac-address'] && !conn.mac) {
           conn.mac = host['mac-address'];
         }
         if (host['host-name']) {
           conn.hostname = host['host-name'];
+          console.log(`[ActiveConnections] Set hostname=${host['host-name']} for ${conn.user || conn.address}`);
         }
       }
     }

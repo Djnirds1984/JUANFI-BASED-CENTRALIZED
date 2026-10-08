@@ -3382,15 +3382,15 @@ const App = {
 
       const availableCount = vouchers.filter(v => {
         const routerUser = routerUsers.find(u => u.name === v.username);
+        return !routerUser;
+      }).length;
+      
+      const inUseCount = vouchers.filter(v => {
+        const routerUser = routerUsers.find(u => u.name === v.username);
         return routerUser && routerUser.disabled !== 'true';
       }).length;
       
       const usedCount = vouchers.filter(v => {
-        const routerUser = routerUsers.find(u => u.name === v.username);
-        return !routerUser;
-      }).length;
-      
-      const disabledCount = vouchers.filter(v => {
         const routerUser = routerUsers.find(u => u.name === v.username);
         return routerUser && routerUser.disabled === 'true';
       }).length;
@@ -3407,18 +3407,18 @@ const App = {
                 <div class="voucher-summary-label">Available</div>
               </div>
             </div>
+            <div class="voucher-summary-card voucher-summary-inuse">
+              <div class="voucher-summary-icon"></div>
+              <div class="voucher-summary-content">
+                <div class="voucher-summary-value">${inUseCount}</div>
+                <div class="voucher-summary-label">In Use</div>
+              </div>
+            </div>
             <div class="voucher-summary-card voucher-summary-used">
               <div class="voucher-summary-icon">✓</div>
               <div class="voucher-summary-content">
                 <div class="voucher-summary-value">${usedCount}</div>
                 <div class="voucher-summary-label">Used</div>
-              </div>
-            </div>
-            <div class="voucher-summary-card voucher-summary-disabled">
-              <div class="voucher-summary-icon">⊘</div>
-              <div class="voucher-summary-content">
-                <div class="voucher-summary-value">${disabledCount}</div>
-                <div class="voucher-summary-label">Disabled</div>
               </div>
             </div>
           </div>
@@ -3456,14 +3456,14 @@ const App = {
                   let statusIcon = '';
                   
                   if (!routerUser) {
-                    statusBadge = '<span class="status-badge voucher-used">Used</span>';
-                    statusIcon = '✓';
-                  } else if (routerUser.disabled === 'true') {
-                    statusBadge = '<span class="status-badge voucher-disabled">Disabled</span>';
-                    statusIcon = '⊘';
-                  } else {
                     statusBadge = '<span class="status-badge voucher-available">Available</span>';
                     statusIcon = '○';
+                  } else if (routerUser.disabled === 'true') {
+                    statusBadge = '<span class="status-badge voucher-used">Used</span>';
+                    statusIcon = '✓';
+                  } else {
+                    statusBadge = '<span class="status-badge voucher-inuse">In Use</span>';
+                    statusIcon = '◉';
                   }
                   
                   return `

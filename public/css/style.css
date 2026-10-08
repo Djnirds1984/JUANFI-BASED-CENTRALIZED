@@ -1469,6 +1469,27 @@ tr:hover td {
   }
 }
 
+.voucher-inuse {
+  background: linear-gradient(135deg, #fef9c3, #fde68a);
+  color: #92400e;
+  border: 1px solid #fbbf24;
+  animation: pulse-inuse 1.5s infinite;
+}
+
+.voucher-inuse::before {
+  content: '◉ ';
+  font-weight: bold;
+}
+
+@keyframes pulse-inuse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+  }
+}
+
 .voucher-disabled {
   background: #fef3c7;
   color: #92400e;
@@ -1491,6 +1512,10 @@ tr:has(.voucher-used) .voucher-status-icon {
 
 tr:has(.voucher-available) .voucher-status-icon {
   color: #1e40af;
+}
+
+tr:has(.voucher-inuse) .voucher-status-icon {
+  color: #d97706;
 }
 
 tr:has(.voucher-disabled) .voucher-status-icon {

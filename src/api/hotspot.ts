@@ -263,8 +263,24 @@ router.get('/router/:routerId/hosts', async (req: Request, res: Response) => {
       return;
     }
 
-    const hosts = await mikroTikService.getHotspotHosts(routerId);
-    res.json(hosts);
+    const [hosts, leases] = await Promise.all([
+      mikroTikService.getHotspotHosts(routerId),
+      mikroTikService.getDhcpLeases(routerId),
+    ]);
+
+    const leaseMap = new Map<string, string>();
+    for (const lease of leases) {
+      if (lease['mac-address'] && lease['host-name']) {
+        leaseMap.set(lease['mac-address'].toLowerCase(), lease['host-name']);
+      }
+    }
+
+    const enrichedHosts = hosts.map((host: any) => ({
+      ...host,
+      'host-name': leaseMap.get(host['mac-address']?.toLowerCase() || '') || host['host-name'] || '',
+    }));
+
+    res.json(enrichedHosts);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

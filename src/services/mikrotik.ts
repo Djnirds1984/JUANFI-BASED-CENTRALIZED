@@ -40,6 +40,7 @@ export interface ActiveConnection {
   user: string;
   address: string;
   mac: string;
+  hostname?: string;
   uptime: string;
   'bytes-in': number;
   'bytes-out': number;
@@ -397,6 +398,26 @@ class MikroTikService {
       }
     }
 
+    let dhcpLeases: any[] = [];
+    try {
+      if (config?.useRestApi) {
+        const result = await this.restApiCall(config, 'GET', '/ip/dhcp-server/lease');
+        dhcpLeases = Array.isArray(result) ? result : [];
+      } else {
+        const client = this.getClient(routerId);
+        dhcpLeases = await client.write('/ip/dhcp-server/lease/print') as any[];
+      }
+    } catch (err) {
+      console.log(`DHCP lease query failed for router ${routerId}, continuing without lease data`);
+    }
+
+    const leaseByIp = new Map<string, any>();
+    for (const lease of dhcpLeases) {
+      if (lease.address) {
+        leaseByIp.set(lease.address, lease);
+      }
+    }
+
     const now = Date.now();
     const currentIds = new Set<string>();
 
@@ -427,6 +448,16 @@ class MikroTikService {
       }
 
       this.rateHistory.set(key, { bytesIn, bytesOut, timestamp: now });
+
+      const lease = leaseByIp.get(conn.address);
+      if (lease) {
+        if (lease.macAddress && !conn.mac) {
+          conn.mac = lease.macAddress;
+        }
+        if (lease.hostName) {
+          conn.hostname = lease.hostName;
+        }
+      }
     }
 
     for (const [key] of this.rateHistory) {

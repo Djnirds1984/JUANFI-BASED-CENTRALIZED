@@ -1390,7 +1390,7 @@ class MikroTikService {
     try {
       if (config.useRestApi) {
         const protocol = config.port === 443 ? 'https' : 'http';
-        const url = `${protocol}://${config.host}:${config.port}/rest/file/print`;
+        const url = `${protocol}://${config.host}:${config.port}/rest/file`;
         const auth = Buffer.from(`${config.username}:${config.password}`).toString('base64');
         const response = await fetch(url, {
           method: 'GET',
@@ -1413,7 +1413,7 @@ class MikroTikService {
       console.error(`Failed to check flash directory for router ${routerId}:`, (err as Error).message);
     }
 
-    this.hasFlashCache.set(routerId, false);
+    // Detection failed — return false but don't cache, so a later check can succeed
     return false;
   }
 

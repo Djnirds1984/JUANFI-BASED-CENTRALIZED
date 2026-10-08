@@ -6,7 +6,128 @@
     <link rel="stylesheet" href="assets/css/bootstrap.min.css">
 	<link rel="stylesheet" href="assets/css/toast.min.css">
 	<link rel="stylesheet" href="assets/css/core.css">
-	<link rel="stylesheet" href="assets/css/JuanFi.css">
+	
+<style>
+body {
+  background: linear-gradient(180deg, #0d3b2e 0%, #1e5c47 50%, #0d3b2e 100%);
+  position: relative; overflow-x: hidden;
+}
+body::before {
+  content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background-image:
+    radial-gradient(2px 2px at 20px 30px, #fff, transparent),
+    radial-gradient(2px 2px at 40px 70px, #fff, transparent),
+    radial-gradient(1px 1px at 90px 40px, #fff, transparent),
+    radial-gradient(2px 2px at 130px 80px, #fff, transparent),
+    radial-gradient(1px 1px at 160px 30px, #fff, transparent);
+  background-size: 200px 100px;
+  animation: snowfall 8s linear infinite;
+  pointer-events: none; z-index: 0; opacity: 0.7;
+}
+@keyframes snowfall {
+  0% { background-position: 0 0; }
+  100% { background-position: 200px 400px; }
+}
+.container {
+  background: rgba(255, 253, 245, 0.97);
+  border: 3px solid #c0392b;
+  box-shadow: 0 0 30px rgba(192, 57, 43, 0.4), 0 0 60px rgba(241, 196, 15, 0.2);
+  position: relative; z-index: 1; color: #2c1810;
+}
+.status-disconnected, .status-connected {
+  border: 2px solid #c0392b; color: #2c1810;
+  background: rgba(255, 245, 230, 0.7); text-shadow: none;
+}
+.blinking1 { color: #c0392b !important; }
+.blinking2 { color: #27ae60 !important; }
+.info { color: #2c1810; }
+.info-title {
+  color: #c0392b; border: 2px solid #f1c40f;
+  background: rgba(255, 245, 230, 0.7); text-shadow: none;
+}
+.info-status { border: 2px solid #c0392b; background: rgba(255, 245, 230, 0.5); }
+.break {
+  background: linear-gradient(90deg, #c0392b 20%, #f1c40f 40%, #27ae60 60%, #c0392b 80%);
+  box-shadow: 0 2px 8px rgba(192, 57, 43, 0.4);
+}
+.inscoin { border: 2px solid #c0392b; background: rgba(255, 245, 230, 0.6); }
+.vcCodeHolder { border: 2px dashed #f1c40f; background: rgba(255, 245, 230, 0.8); }
+.convertVoucherBlock { border: 2px dashed #c0392b; background: rgba(255, 245, 230, 0.8); }
+.status-holder { color: #2c1810; text-shadow: none; background: rgba(255, 245, 230, 0.5); }
+#insertBtn {
+  background: linear-gradient(90deg, #c0392b, #f1c40f);
+  box-shadow: 0 4px 15px rgba(192, 57, 43, 0.5);
+  color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  border: 2px solid #f1c40f; font-weight: bold; letter-spacing: 1px;
+}
+#promoRateBtn {
+  background: #27ae60; color: #fff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+  border: 2px solid #f1c40f; box-shadow: 0 4px 12px rgba(39, 174, 96, 0.4);
+}
+#chargingBtn {
+  background: #c0392b; color: #fff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+  border: 2px solid #f1c40f; box-shadow: 0 4px 12px rgba(192, 57, 43, 0.4);
+}
+#eloadBtn {
+  background: #f1c40f; color: #2c1810 !important;
+  text-shadow: none !important; border: 2px solid #c0392b;
+  box-shadow: 0 4px 12px rgba(241, 196, 15, 0.5);
+}
+#memberLoginBtn {
+  background: transparent; color: #c0392b !important;
+  border: 2px solid #c0392b; text-shadow: none !important;
+}
+#connectBtn {
+  background: linear-gradient(90deg, #27ae60, #c0392b);
+  color: #fff !important; border: 2px solid #f1c40f;
+  box-shadow: 0 4px 15px rgba(39, 174, 96, 0.5);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important; font-weight: bold;
+}
+#scanQrBtn { background: #f1c40f; color: #2c1810 !important; text-shadow: none !important; border: 2px solid #c0392b; }
+.form-group { border: 2px solid #c0392b; background: rgba(255, 245, 230, 0.5); }
+.form-control, #vendoSelected {
+  background: #fffcf0 !important; color: #2c1810 !important;
+  border: 1px solid #c0392b !important;
+}
+.form-control::placeholder { color: #a87070 !important; }
+.form-control:focus, #vendoSelected:focus {
+  background: #fff !important; border-color: #f1c40f !important;
+  box-shadow: 0 0 8px rgba(241, 196, 15, 0.4) !important;
+}
+#vendoSelectDiv { border: 2px solid #c0392b; background: rgba(255, 245, 230, 0.5); }
+#vendoSelectDiv label { color: #c0392b !important; font-weight: bold; }
+.modal-content {
+  background: #fffcf0 !important; color: #2c1810 !important;
+  border: 3px solid #c0392b; box-shadow: 0 10px 40px rgba(192, 57, 43, 0.4);
+}
+.modal-header, .modal-footer { border-color: #c0392b !important; }
+.modal-title { color: #c0392b !important; }
+.close span { color: #c0392b !important; }
+.btn-primary { background: #c0392b !important; border-color: #c0392b !important; }
+.btn-success { background: #27ae60 !important; border-color: #27ae60 !important; color: #fff !important; }
+.btn-danger { background: #c0392b !important; border-color: #c0392b !important; }
+.btn-warning { background: #f1c40f !important; border-color: #f1c40f !important; color: #2c1810 !important; }
+.btn-info { background: #27ae60 !important; border-color: #27ae60 !important; color: #fff !important; }
+.btn-secondary { background: transparent !important; color: #c0392b !important; border: 1px solid #c0392b !important; }
+.btn-default { background: transparent !important; color: #c0392b !important; border: 1px solid #c0392b !important; }
+.footer { border: 2px solid #c0392b; color: #2c1810; background: rgba(255, 245, 230, 0.5); }
+.footers a { color: #c0392b !important; }
+.footers a:hover { color: #27ae60 !important; }
+.memdiv { border: 2px solid #c0392b; background: rgba(255, 245, 230, 0.7); box-shadow: 0 4px 15px rgba(192, 57, 43, 0.3); }
+.memdiv input { background: #fffcf0; color: #2c1810; border: 1px solid #c0392b; }
+.memdiv span { color: #c0392b !important; }
+.rholder { border-color: #c0392b; background: linear-gradient(90deg, #c0392b 8%, rgba(255, 253, 245, 0.9) 8%); }
+.rdata { color: #2c1810; text-shadow: none; }
+#codeGenerated { color: #27ae60 !important; text-shadow: none; }
+#totalCoin, #totalTime, #expectedCoin { color: #c0392b !important; text-shadow: none; }
+.progress-bar { background: linear-gradient(90deg, #c0392b, #f1c40f) !important; }
+#noticeText { color: #c0392b !important; }
+#eloadConfirm, #eloadConfirm2 { color: #c0392b !important; text-shadow: none !important; }
+.qrcode-wrapper { background: #fff; box-shadow: 0 4px 15px rgba(192, 57, 43, 0.3); border: 2px solid #f1c40f; }
+</style>
+
     <title>Aircoins Login Portal</title>
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
@@ -243,8 +364,7 @@ body#loginBody {
 	margin: 10px 0;
 	box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
-</style>
-</head>
+</style></head>
 
 <body id="loginBody">
 

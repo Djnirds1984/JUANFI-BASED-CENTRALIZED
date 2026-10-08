@@ -6,7 +6,7 @@
 	<link rel="stylesheet" href="assets/css/toast.min.css">
 	<link rel="stylesheet" href="assets/css/core.css">
 	<link rel="stylesheet" href="assets/css/JuanFi.css">
-    <title>JuanFi - Status</title>
+    <title>Aircoins - Status</title>
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -21,15 +21,203 @@
 		var remainingTimer = null;
 	</script>
 
+	<style>
+		:root {
+			--primary-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+			--accent-gradient: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+			--success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+			--card-bg: rgba(255, 255, 255, 0.88);
+			--backdrop-blur: blur(16px);
+		}
+
+		body#loginBody {
+			background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%);
+			background-attachment: fixed;
+			font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+			min-height: 100vh;
+			color: #1e293b;
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			padding: 20px 0;
+		}
+
+		.main-card {
+			background: var(--card-bg);
+			backdrop-filter: var(--backdrop-blur);
+			-webkit-backdrop-filter: var(--backdrop-blur);
+			border: 1px solid rgba(255, 255, 255, 0.4);
+			border-radius: 24px;
+			box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+			overflow: hidden;
+			padding: 30px;
+		}
+
+		.brand-img-container {
+			border-radius: 20px;
+			overflow: hidden;
+			box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+			background: #fff;
+			padding: 5px;
+			margin-bottom: 20px;
+		}
+
+		.info {
+			background: rgba(255, 255, 255, 0.7);
+			border-radius: 14px;
+			padding: 12px;
+			margin-bottom: 15px;
+			border: 1px solid rgba(226, 232, 240, 0.8);
+			box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+		}
+
+		.info span {
+			font-weight: 600;
+			color: #475569;
+			font-size: 13px;
+		}
+
+		.status-badge {
+			display: inline-block;
+			background: rgba(16, 185, 129, 0.1);
+			color: #10b981;
+			padding: 8px 16px;
+			border-radius: 30px;
+			font-weight: 600;
+			font-size: 14px;
+			border: 1px solid rgba(16, 185, 129, 0.2);
+		}
+
+		.info-status {
+			background: #f8fafc;
+			border-radius: 16px;
+			padding: 16px;
+			margin-bottom: 20px;
+			border: 1px solid #e2e8f0;
+			box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+		}
+
+		.status-holder {
+			margin-bottom: 14px;
+		}
+
+		.status-holder:last-child {
+			margin-bottom: 0;
+		}
+
+		.info-title {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #64748b;
+			font-size: 12px;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+			margin-bottom: 4px;
+		}
+
+		.info-title img {
+			margin-right: 6px;
+		}
+
+		.portal-btn {
+			display: block;
+			width: 100%;
+			padding: 14px;
+			border-radius: 12px;
+			font-weight: 600;
+			border: none;
+			text-shadow: none !important;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+			transition: all 0.2s ease;
+			color: white !important;
+		}
+
+		.portal-btn:hover {
+			transform: translateY(-2px);
+			box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+		}
+
+		#insertBtn { background: var(--accent-gradient); }
+		#promoRateBtn { background: linear-gradient(135deg, #f59e0b, #d97706); }
+		#pauseTimeBtn { background: linear-gradient(135deg, #ef4444, #dc2626); }
+		#chargingBtn { background: var(--success-gradient); }
+		#eloadBtn { background: linear-gradient(135deg, #0ea5e9, #0284c7); }
+
+		.form-control {
+			border-radius: 12px;
+			border: 1px solid #cbd5e1;
+			padding: 12px 16px;
+			height: auto;
+			background: rgba(255, 255, 255, 0.9);
+		}
+
+		.form-control:focus {
+			border-color: #6366f1;
+			box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+			background: #fff;
+		}
+
+		.modal-content {
+			border-radius: 24px;
+			border: none;
+			box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
+			overflow: hidden;
+		}
+
+		.modal-header {
+			background: #1e1b4b;
+			color: white;
+			border-bottom: none;
+			padding: 20px 24px;
+		}
+
+		.modal-header .close span {
+			color: white !important;
+		}
+
+		.modal-body {
+			padding: 24px;
+		}
+
+		.inscoinholder {
+			background: #1e293b;
+			border-radius: 14px;
+			padding: 16px;
+			margin: 10px 0;
+			box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+		}
+
+		.footer {
+			text-align: center;
+			margin-top: 25px;
+			color: #94a3b8;
+			font-size: 13px;
+		}
+
+		.footer a {
+			color: #a5b4fc;
+			text-decoration: none;
+		}
+
+		.footer a:hover {
+			text-decoration: underline;
+		}
+
+		#vendoSelectDiv label {
+			font-weight: 600;
+			color: #334155;
+			font-size: 14px;
+			margin-bottom: 6px;
+		}
+	</style>
 </head>
+
 <body id="loginBody">
 
-<!-- Messenger Chat plugin Code -->
     <div id="fb-root"></div>
-
-    <!-- Your Chat plugin code -->
-    <div id="fb-customer-chat" class="fb-customerchat">
-    </div>
+    <div id="fb-customer-chat" class="fb-customerchat"></div>
 
     <script>
       var chatbox = document.getElementById('fb-customer-chat');
@@ -52,406 +240,379 @@
       }(document, 'script', 'facebook-jssdk'));
     </script>
 
-<div class="container">
-<center>
-		<form action="$(link-logout)" name="logout" >
-		</form>
-
-		<form action="$(link-logout)" name="forcelogout" >
-			<input type="hidden" name="erase-cookie" value="true" />
-		</form>
-		
-        <div class="row">
-            <div class="col-sm-5">
-                <div class="row" style="margin-bottom: 20px">
-                    <img src="assets/MainPic.PNG" class="img-fluid" />
-                </div>
-				
-				<div class="info"><center>
-						<div class="info-ip">
-						<img src="assets/img/ip.png" width="20px" height="20px" />
-						<span>$(ip)</span>
-						</div>
-						<div class="info-mac">
-						<img src="assets/img/mac.png" width="20px" height="20px" />
-						<span>$(mac)</span>
-						</div>
-					</center>
-				</div>
-				
-				<center>			
-				<span class="status-connected">Status: <span class="blinking2" id="connectionStatus" style="color: #4cd137">Connected</span></span>
-                </center>
-            </div>
-
-            <div class="col-sm-7">
-                <div class="login">
-				
-				
-				
-				<div class="info-status">
-				<center>
-					<div class="status-holder">
-						<div class="info-title"><img src="assets/img/voucher.png" width="20px" height="20px" /><span> Voucher</span></div>
-						<span style="font-size: 25px; font-weight: bold; text-shadow: 1px 1px 3px #000">$(username)</span>
-					</div>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-8 col-lg-7">
+				<div class="main-card">
+					<form action="$(link-logout)" name="logout"></form>
+					<form action="$(link-logout)" name="forcelogout">
+						<input type="hidden" name="erase-cookie" value="true" />
+					</form>
 					
-					<div class="break2"></div>
-					
-					<div class="status-holder">						
-						<div class="info-title"><img src="assets/img/time.png" width="20px" height="20px" /><span> Remaining Time</span></div>
-						<span class="odometer" id="remainTime" style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000"></span><br>
+					<div class="row align-items-center">
+						<div class="col-sm-5 text-center">
+							<div class="brand-img-container">
+								<img src="assets/MainPic.PNG" class="img-fluid rounded" alt="Aircoins Logo" />
+							</div>
+							
+							<div class="info">
+								<div class="d-flex align-items-center justify-content-center mb-1">
+									<img src="assets/img/ip.png" width="18px" height="18px" class="mr-2" />
+									<span>$(ip)</span>
+								</div>
+								<div class="d-flex align-items-center justify-content-center">
+									<img src="assets/img/mac.png" width="18px" height="18px" class="mr-2" />
+									<span>$(mac)</span>
+								</div>
+							</div>
+							
+							<div class="mb-4">
+								<span class="status-badge">Status: <span class="blinking2 font-weight-bold" id="connectionStatus">Connected</span></span>
+							</div>
+						</div>
 						
-					</div>
-					
-					<div class="break2"></div>
-					
-					<div class="status-holder">					
-						<div class="info-title"><img src="assets/img/timeexpired.png" width="20px" height="20px" /><span> Expiration Time</span></div>
-						<span id="expirationTime" style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000"></span>
-					</div>
-					
-					<div class="break2"></div>
-					
-					<div class="status-holder">
-						<div class="info-title"><img src="assets/img/data.png" width="20px" height="20px" /><span> Data Usage</span></div>
-						<div style="display: inline-block"><img src="assets/img/upload.png" width="20px" height="20px" /><span style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000">$(bytes-in-nice)</span></div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-						<div style="display: inline-block"><img src="assets/img/download.png" width="20px" height="20px" /><span style="font-size: 16px; font-weight: bold; text-shadow: 1px 1px 3px #000">$(bytes-out-nice)</span></div>
-						<div class="inscoinholder" id="dataInfoDiv2">
-							<span id="totalDataInfo" style="font-size: 20px; font-weight: bold; color: #ffffff">$(remain-bytes-total-nice)</span><br>
-							<span style="color: #ffffff">Remaining Data</span>
+						<div class="col-sm-7">
+							<div class="info-status text-center">
+								<div class="status-holder">
+									<div class="info-title"><img src="assets/img/voucher.png" width="16px" height="16px" /><span>Voucher</span></div>
+									<span class="text-dark" style="font-size: 22px; font-weight: bold;">$(username)</span>
+								</div>
+								
+								<div class="status-holder">						
+									<div class="info-title"><img src="assets/img/time.png" width="16px" height="16px" /><span>Remaining Time</span></div>
+									<span class="odometer text-primary" id="remainTime" style="font-size: 18px; font-weight: bold;"></span>
+								</div>
+								
+								<div class="status-holder">					
+									<div class="info-title"><img src="assets/img/timeexpired.png" width="16px" height="16px" /><span>Expiration Time</span></div>
+									<span class="text-secondary" id="expirationTime" style="font-size: 14px; font-weight: 600;"></span>
+								</div>
+								
+								<div class="status-holder">
+									<div class="info-title"><img src="assets/img/data.png" width="16px" height="16px" /><span>Data Usage</span></div>
+									<div class="d-flex justify-content-center align-items-center mb-2">
+										<div class="mr-3"><img src="assets/img/upload.png" width="16px" height="16px" class="mr-1" /><span style="font-size: 13px; font-weight: 600; color: #475569;">$(bytes-in-nice)</span></div>
+										<div><img src="assets/img/download.png" width="16px" height="16px" class="mr-1" /><span style="font-size: 13px; font-weight: 600; color: #475569;">$(bytes-out-nice)</span></div>
+									</div>
+									<div class="inscoinholder py-2 my-1">
+										<span id="totalDataInfo" style="font-size: 16px; font-weight: bold; color: #ffffff">$(remain-bytes-total-nice)</span><br>
+										<span style="color: #94a3b8; font-size: 12px;">Remaining Data</span>
+									</div>
+								</div>
+							</div>
+								
+							<div id="vendoSelectDiv" class="form-group">
+								<label for="vendoSelected">Select Vendo</label>
+								<select class="form-control" name="vendoSelected" id="vendoSelected"></select>
+							</div>
+							
+							<div class="mt-3"></div>
+							
+							<button type="button" id="insertBtn" onclick="insertBtnAction(); return false" class="btn portal-btn mb-3" data-insert-type="extend" data-toggle="modal">EXTEND TIME</button>
+							<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn portal-btn mb-3">PROMO RATES</button>
+							<button type="button" id="pauseTimeBtn" onClick="pause(); return false" class="btn portal-btn mb-3">PAUSE TIME</button>
+							<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn portal-btn mb-3">CHARGING STATION</button>
+							<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn portal-btn mb-3">E-LOAD</button>
 						</div>
 					</div>
-				</center>
 				</div>
-					
-					<div id="vendoSelectDiv" style="margin-top: 20px">
-						<label for="exampleFormControlSelect2">Select Vendo</label>
-						<select class="form-control" name="vendoSelected" id="vendoSelected" >
-						</select>
-					</div>
-					<br>
 				
-					<button type="button" id="insertBtn" onclick="insertBtnAction(); return false" class="btn btn-success btn-block" data-insert-type="extend" data-toggle="modal" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">EXTEND TIME</button>
-					<div style="margin-bottom:-5px"></div>
-					<br>
-					<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn btn-warning" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">PROMO RATES</button>
-					<div style="margin-bottom:-5px"></div>
-					<br>
-					<button type="button" id="pauseTimeBtn" onClick="pause(); return false" class="btn btn-danger btn-block" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">PAUSE TIME</button>
-					<br>
-					<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn btn-secondary" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">CHARGING STATION</button>
-					<br>
-					<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn btn-info" style="display: block; width: 100%; color: #fff; text-shadow: 0px 1px 2px #000;">E-LOAD</button>
-					<div style="margin-top: 18px"></div>
-			
-					<div class="modal fade" id="insertCoinModal" style="z-index: 1500" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-labelledby="insertCoinModalTitle" aria-hidden="true">
-						<div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						  <div class="modal-content">
-							<div class="modal-header">
-							  <h5 class="modal-title" id="insertCoinModalTitle">Please insert the coin</h5>
-							  <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-								<span aria-hidden="true">&times;</span>
-							  </button>
+				<div class="modal fade" id="insertCoinModal" style="z-index: 1500" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-labelledby="insertCoinModalTitle" aria-hidden="true">
+					<div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					  <div class="modal-content">
+						<div class="modal-header">
+						  <h5 class="modal-title font-weight-bold" id="insertCoinModalTitle">Please insert the coin</h5>
+						  <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+							<span aria-hidden="true">&times;</span>
+						  </button>
+						</div>
+						<div class="modal-body">
+							<div class="progress" style="margin-bottom: 20px; height: 8px; border-radius: 4px;">
+								<div id="progressDiv" class="progress-bar progress-bar-striped progress-bar-animated bg-danger" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width: 100%;"></div>
 							</div>
-							<div class="modal-body">
-								  <div class="progress" style="margin-bottom: 20px">
-									  <div id="progressDiv" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width: 100%; height: 30px"></div>
-								  </div>
-  
-								  <div id="noticeDiv" style="display: none">
-									  <center>
-										  <h4 id="noticeText">Coin is reading, please wait</h4>
-									  </center>
-								  </div>
-								  
-								  <div class="inscoin">
-								  <center>
-								  <div class="inscoinholder" style="border: 2px solid #576574; padding: 5px; height: 90px; border-radius: 3px">
-								  <span style="color: #747d8c">Your code is</span><br>
-								  <span id="codeGeneratedBlock">
-									  <span id="codeGenerated" style="font-size: 35px; font-weight: bold; color: #4cd137">*****</span>
-								  </span>
-								  </div>
-  
-								  <div class="inscoinholder convertVoucherBlock" id="convertVoucherBlockDiv">
-									  <span style="color: #747d8c">Convert unsed voucher</span><br>
-								  <input type="text" class="form-control" id="convertVoucherCode" placeholder="Enter voucher" style="width: 140px; text-align: center; ">
-								  <br>
-								  <button type="button" id="convertBtn" class="btn btn-success" onclick="convertVoucherAction(); return false">Convert</button>
-								  </div>
-								  
-								  <div class="inscoinholder">
-								  <span id="totalCoin" style="font-size: 20px; font-weight: bold; color: #fff">0</span><span style="font-size: 20px; font-weight: bold; color: #fff">.00 Php</span><br>
-								  <span style="color: #747d8c">Coin</span>
-								  </div>
-								  
-								  <div class="inscoinholder" id="totalTimeDiv">
-								  <span id="totalTime" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
-								  <span style="color: #747d8c">Time: </span>
-								  </div>
-								  
-								  <div class="inscoinholder" id="expectedCoinDiv" style="display: none">
-								  <span id="expectedCoin" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
-								  <span style="color: #747d8c">Expected Coin </span>
-								  </div>
-								  
-								  </center>
-								  </div>
-								  
-								  
-								  
+
+							<div id="noticeDiv" style="display: none" class="mb-3">
+								<center>
+									<h4 id="noticeText" class="text-secondary font-weight-bold">Coin is reading, please wait</h4>
+								</center>
 							</div>
-							<div class="modal-footer">
-							  <button type="button" id="saveVoucherButton" data-save-type="extend" onclick="saveVoucherBtnAction(); return false" class="btn btn-primary" data-dismiss="modal">
-								Done
-							  </button>
-							  <button type="button" id="cncl" class="btn btn-danger" data-dismiss="modal">Cancel</button>
+							
+							<div class="inscoin">
+								<center>
+									<div class="inscoinholder vcCodeHolder" id="vcCodeDiv">
+										<span style="color: #94a3b8; font-size: 13px;">Your code is</span><br>
+										<span id="codeGeneratedBlock">
+											<span id="codeGenerated" style="font-size: 32px; font-weight: bold; color: #4cd137">*****</span>
+										</span>
+									</div>
+
+									<div class="inscoinholder convertVoucherBlock" id="convertVoucherBlockDiv">
+										<span style="color: #94a3b8; font-size: 13px;">Convert unused voucher</span><br>
+										<input type="text" class="form-control mt-2 mb-2 mx-auto" id="convertVoucherCode" placeholder="Enter voucher" style="width: 180px; text-align: center;">
+										<button type="button" id="convertBtn" class="btn btn-success btn-sm px-4" onclick="convertVoucherAction(); return false">Convert</button>
+									</div>
+									
+									<div class="inscoinholder">
+										<span id="totalCoin" style="font-size: 24px; font-weight: bold; color: #fff">0</span><span style="font-size: 24px; font-weight: bold; color: #fff">.00 Php</span><br>
+										<span style="color: #94a3b8; font-size: 13px;">Coin</span>
+									</div>
+									
+									<div class="inscoinholder" id="totalTimeDiv">
+										<span id="totalTime" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
+										<span style="color: #94a3b8; font-size: 13px;">Time: </span>
+									</div>
+									
+									<div class="inscoinholder" id="expectedCoinDiv" style="display: none">
+										<span id="expectedCoin" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
+										<span style="color: #94a3b8; font-size: 13px;">Expected Coin </span>
+									</div>
+								</center>
 							</div>
-						  </div>
+						</div>
+						<div class="modal-footer bg-light">
+						  <button type="button" id="saveVoucherButton" data-save-type="extend" onclick="saveVoucherBtnAction(); return false" class="btn btn-primary px-4" data-dismiss="modal">
+							Done
+						  </button>
+						  <button type="button" id="cncl" class="btn btn-outline-danger px-4" data-dismiss="modal">Cancel</button>
 						</div>
 					  </div>
-					
-					<div class="modal fade" id="promoRatesModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">Promo Rates</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							<center>
-								<div id="rateTypeDiv">
-								<label for="rateType" class="rate-title"><b>Rate Type</b></label>
+					</div>
+				</div>
+				
+				<div class="modal fade" id="promoRatesModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">Promo Rates</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>
+							<div id="rateTypeDiv" class="w-50 mx-auto">
+								<label for="rateType" class="rate-title font-weight-bold text-secondary mb-2">Rate Type</label>
 								<select name="rateType" class="form-control" id="rateType" onChange="onRateTypeChange(this)">
 								  <option value="1">Internet</option>
 								  <option value="2">Charging</option>
 								</select>
-								</div>
-							</center>
-							<br/>
-							<center>	
+							</div>
+						</center>
+						<br/>
+						<center>	
 							<div id="ratesBody"></div>
 							<div id="totalTime"></div>							
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" class="btn btn-danger" data-dismiss="modal">Close</button>
-						  </div>
-						</div>
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
 					  </div>
 					</div>
-					
-					<div class="modal fade" id="chargingModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">Charging Station</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							<center>	
+				  </div>
+				</div>
+				
+				<div class="modal fade" id="chargingModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">Charging Station</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>	
 							<div id="chargingBody"></div>
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" class="btn btn-danger" data-dismiss="modal">Close</button>
-						  </div>
-						</div>
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
 					  </div>
 					</div>
-					
-					<div class="modal fade" id="eloadModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
-					  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
-						<div class="modal-content">
-						  <div class="modal-header">
-							<h5 class="modal-title" id="exampleModalLabel">E-LOAD</h5>
-							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
-							  <span aria-hidden="true" style="color: #fff">&times;</span>
-							</button>
-						  </div>
-						  <div class="modal-body">
-							<center>	
+				  </div>
+				</div>
+				
+				<div class="modal fade" id="eloadModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
+				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+					<div class="modal-content">
+					  <div class="modal-header">
+						<h5 class="modal-title font-weight-bold" id="exampleModalLabel">E-LOAD</h5>
+						<button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+						  <span aria-hidden="true">&times;</span>
+						</button>
+					  </div>
+					  <div class="modal-body">
+						<center>	
 							<div id="eloadingBody">
-								<h4 id="eloadConfirm" style="display: none"><span style="color: #2e86de; text-shadow: 1px 2px 3px #000">CONFIRM YOUR SELECTED DETAILS</span></h4>
-								<div id="mobileNumDiv" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2">Mobile #</label>
-									<input type="number" class="form-control" id="mobileNo" aria-describedby="mobileNo"  pattern="\d*" maxlength="11" placeholder="Enter mobile number (Ex: 09182392234)" required>
+								<h4 id="eloadConfirm" style="display: none" class="mb-3"><span style="color: #2e86de; font-weight: bold;">CONFIRM YOUR SELECTED DETAILS</span></h4>
+								<div id="mobileNumDiv" class="input-bottom-space-20px text-left">
+									<label for="mobileNo" class="font-weight-bold text-secondary">Mobile #</label>
+									<input type="number" class="form-control" id="mobileNo" aria-describedby="mobileNo" pattern="\d*" maxlength="11" placeholder="Enter mobile number (Ex: 09182392234)" required>
 								</div>
-								<div id="loadTypeDiv" style="display: none" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2" >Select Load Type</label>
-									<select class="form-control" name="loadType" onChange="loadTypeChanged(this)" id="loadTypeSelected" >
-									</select>
+								<div id="loadTypeDiv" style="display: none;" class="input-bottom-space-20px text-left">
+									<label for="loadTypeSelected" class="font-weight-bold text-secondary">Select Load Type</label>
+									<select class="form-control" name="loadType" onChange="loadTypeChanged(this)" id="loadTypeSelected"></select>
 								</div>
-								<div id="productTypeDiv" style="display: none" class="input-bottom-space-20px">
-									<label for="exampleFormControlSelect2">Select Product</label>
-									<select class="form-control input-bottom-space-20px" name="productType" id="productTypeSelected" onChange="productTypeChanged(this)">
-									</select>
-									<label for="exampleFormControlSelect2">Price (PHP)</label>
+								<div id="productTypeDiv" style="display: none;" class="input-bottom-space-20px text-left">
+									<label for="productTypeSelected" class="font-weight-bold text-secondary">Select Product</label>
+									<select class="form-control input-bottom-space-20px" name="productType" id="productTypeSelected" onChange="productTypeChanged(this)"></select>
+									<label for="price" class="font-weight-bold text-secondary">Price (PHP)</label>
 									<input type="text" class="form-control" id="price" aria-describedby="mobileNo" disabled>
 								</div>
 								<br/>
-								<h5 id="eloadConfirm2" style="display: none;" class="input-bottom-space-20px"><span style="color: #2e86de; text-shadow: 1px 2px 3px #000">Please make sure to insert the exact amount <ul style="
-									font-size: medium;
-									color: white;
-									text-align: left;
-								"><li>In case theres an excess amount or amount is insufficient, it will be converted to a voucher code and you can use it for your next e-Loading or you can use it on internet service.</li></ul></span></h5>
+								<h5 id="eloadConfirm2" style="display: none;" class="input-bottom-space-20px bg-light p-3 rounded text-left border">
+									<span style="color: #334155; font-size: 14px;">Please make sure to insert the exact amount 
+										<ul class="text-secondary mt-2 mb-0" style="font-size: 13px;">
+											<li>In case there's an excess amount or amount is insufficient, it will be converted to a voucher code and you can use it for your next e-Loading or you can use it on internet service.</li>
+										</ul>
+									</span>
+								</h5>
 							</div>
-							</center>
-						  </div>
-						  <div class="modal-footer">
-							<button type="button" id="buyEloadPrevBtn" class="btn btn-danger" onclick="buyEloadPrevAction(); return false">Close</button>
-						    <button type="button" id="buyEloadBtn" onclick="buyEloadAction(); return false" class="btn btn-success">Next</button>
-						  </div>
-						</div>
+						</center>
+					  </div>
+					  <div class="modal-footer bg-light">
+						<button type="button" id="buyEloadPrevBtn" class="btn btn-outline-danger px-4" onclick="buyEloadPrevAction(); return false">Close</button>
+					    <button type="button" id="buyEloadBtn" onclick="buyEloadAction(); return false" class="btn btn-success px-4">Next</button>
 					  </div>
 					</div>
+				  </div>
+				</div>
 
-                </div>
-				
-			<div class="footer">
+				<div class="footer">
 					<span class="footers">
-					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.0</a> &copy; All rights reserved 2022<br>
-					
+					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.1</a> &copy; All rights reserved 2022
 					</span>				
 				</div>
-            </div>	
-			<script src="assets/js/jquery.min.js"></script>
-			<script src="assets/js/popper.min.js"></script>
-			<script src="assets/js/bootstrap.min.js"></script>
-			<script src="assets/js/toast.min.js"></script>
-			<script src="assets/js/core.js"></script>
-			<script src="assets/js/eload.js"></script>
-			<script src="assets/js/pako.min.js"></script>
+            </div>
+        </div>
+			
+		<script src="assets/js/jquery.min.js"></script>
+		<script src="assets/js/popper.min.js"></script>
+		<script src="assets/js/bootstrap.min.js"></script>
+		<script src="assets/js/toast.min.js"></script>
+		<script src="assets/js/core.js"></script>
+		<script src="assets/js/eload.js"></script>
+		<script src="assets/js/pako.min.js"></script>
 
+		<script>
+			var sessiontime = "$(session-time-left-secs)";
+			var uptime = "$(uptime-secs)";
+			var currentVoucher = "$(username)";
+			window.name="hotspot_status";
 			
-			
-			<script>
-				var sessiontime = "$(session-time-left-secs)";
-				var uptime = "$(uptime-secs)";
-				var currentVoucher = "$(username)";
-				window.name="hotspot_status";
+			$(document).ready(function(){
+				voucher = currentVoucher;
+				$("#expirationTime").html("Loading...");
+				setTimeout(function(){
+					fetchValidity(1);
+				}, 1000);
 				
-				$(document).ready(function(){
-					voucher = currentVoucher;
-					$("#expirationTime").html("Loading...");
-					setTimeout(function(){
-						fetchValidity(1);
-					}, 1000);
-					
-					setStorageValue('activeVoucher', currentVoucher);
-					
-					var time = sessiontime;
-					if(time == "0"){
-						$("#remainTime").html("Unlimited");
-					}else{
+				setStorageValue('activeVoucher', currentVoucher);
+				
+				var time = sessiontime;
+				if(time == "0"){
+					$("#remainTime").html("Unlimited");
+				}else{
+					$("#remainTime").html(secondsToDhms(time));
+					remainingTimer = setInterval(function(){
+						time--;
 						$("#remainTime").html(secondsToDhms(time));
-						remainingTimer = setInterval(function(){
-							time--;
-							$("#remainTime").html(secondsToDhms(time));
-							if(time <= 0){
-								$.toast({
-									title: 'Success',
-									content: 'Time limit exceeded, Thank you for the purchase, will be logout shortly',
-									type: 'success',
-									delay: 5000
-								});
-								clearInterval(remainingTimer);
+						if(time <= 0){
+							$.toast({
+								title: 'Success',
+								content: 'Time limit exceeded, Thank you for the purchase, will be logout shortly',
+								type: 'success',
+								delay: 5000
+							});
+							clearInterval(remainingTimer);
+							setTimeout(function(){
+								document.logout.submit();
+							}, 6000);
+						}
+					}, 1000);
+				}
+				
+			});
+			
+			function fetchValidity(retryNo){
+				if(retryNo > 5){
+					fallbackValidity();
+					return;
+				}
+				var macNoColon = replaceAll(mac, ":");
+				$.ajax({
+						type: "GET",
+						url: "/data/"+macNoColon+".txt?query="+new Date().getTime(),
+						success: function(data){
+							if(data.length > 50){
 								setTimeout(function(){
-									document.logout.submit();
-								}, 6000);
+									fetchValidity(retryNo++);
+								}, 1000);
+								return;
 							}
-						}, 1000);
-					}
-					
-				});
-				
-				function fetchValidity(retryNo){
-					if(retryNo > 5){
-						fallbackValidity();
-						return;
-					}
-					var macNoColon = replaceAll(mac, ":");
-					$.ajax({
-							  type: "GET",
-							  url: "/data/"+macNoColon+".txt?query="+new Date().getTime(),
-							  success: function(data){
-								if(data.length > 50){
-									setTimeout(function(){
-										fetchValidity(retryNo++);
-									}, 1000);
-									return;
-								}
-								var macData = data.split("#");
-								var validityRaw = macData[1];
-								
-								var validityTime = null;
-								if(validityRaw.length > 15){
-									validityTime = new Date(Date.parse(validityRaw));
-								}else if(validityRaw.length > 8){
-									var dt = validityRaw.split(" ");
-									var yr = new Date().getFullYear();
-									validityTime = new Date(Date.parse(dt[0]+"/"+yr+" "+dt[1]));
-								}else if(validityRaw.length == 0){
-									validityTime = null;
-								} else{
-									var curDate = new Date();
-									var m = curDate.getMonth()+1;
-									var d = curDate.getDate();
-									var yr = curDate.getFullYear();
-									validityTime = new Date(Date.parse(m+"/"+d+"/"+yr+" "+validityRaw));
-								}
-								if(validityTime != null){
-									$("#expirationTime").html(validityTime.toLocaleString());
-								}else{
-									$("#expirationTime").html("No Expiration");
-								}
-							  },
-							  error: function(d){
-									fallbackValidity();
-							 }
-					});			
-				}
-				
-				function fallbackValidity(){
-					var validity = getStorageValue(voucher+"validity");
-					if(validity != null){
-						var curDate = new Date();
-						var validityTime = new Date(parseInt(validity));
-						if(validityTime.getTime() < curDate.getTime()){
-							removeStorageValue(voucher+"validity");
-							removeStorageValue(voucher+"tempValidity");
-							$("#expirationTime").html("Not Available");
-						}else{
-							$("#expirationTime").html(validityTime.toLocaleString());
-						}
-					}else{
+							var macData = data.split("#");
+							var validityRaw = macData[1];
+							
+							var validityTime = null;
+							if(validityRaw.length > 15){
+								validityTime = new Date(Date.parse(validityRaw));
+							}else if(validityRaw.length > 8){
+								var dt = validityRaw.split(" ");
+								var yr = new Date().getFullYear();
+								validityTime = new Date(Date.parse(dt[0]+"/"+yr+" "+dt[1]));
+							}else if(validityRaw.length == 0){
+								validityTime = null;
+							} else{
+								var curDate = new Date();
+								var m = curDate.getMonth()+1;
+								var d = curDate.getDate();
+								var yr = curDate.getFullYear();
+								validityTime = new Date(Date.parse(m+"/"+d+"/"+yr+" "+validityRaw));
+							}
+							if(validityTime != null){
+								$("#expirationTime").html(validityTime.toLocaleString());
+							}else{
+								$("#expirationTime").html("No Expiration");
+							}
+						},
+						error: function(d){
+								fallbackValidity();
+						 }
+				});			
+			}
+			
+			function fallbackValidity(){
+				var validity = getStorageValue(voucher+"validity");
+				if(validity != null){
+					var curDate = new Date();
+					var validityTime = new Date(parseInt(validity));
+					if(validityTime.getTime() < curDate.getTime()){
+						removeStorageValue(voucher+"validity");
+						removeStorageValue(voucher+"tempValidity");
 						$("#expirationTime").html("Not Available");
+					}else{
+						$("#expirationTime").html(validityTime.toLocaleString());
 					}
+				}else{
+					$("#expirationTime").html("Not Available");
 				}
-				
-				$(if refresh-timeout)
-					setInterval(function(){
-						if(!insertingCoin){
-							location.reload();
-						}
-					}, $(refresh-timeout-secs) * 1000);
-				$(endif)
-			</script>
+			}
 			
-			
-			<div id="loaderDiv" class="spinner hidden">
-				<center>
-					<img src="assets/loading.svg" />
-				</center>
-			</div>
-</div>
-</center>
-</div>
+			$(if refresh-timeout)
+				setInterval(function(){
+					if(!insertingCoin){
+						location.reload();
+					}
+				}, $(refresh-timeout-secs) * 1000);
+			$(endif)
+		</script>
+		
+		<div id="loaderDiv" class="spinner hidden">
+			<center>
+				<img src="assets/loading.svg" />
+			</center>
+		</div>
+	</div>
 </body>
 
 </html>

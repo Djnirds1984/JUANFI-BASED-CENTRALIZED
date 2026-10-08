@@ -389,7 +389,9 @@ class MikroTikService {
 
     const client = this.getClient(routerId);
     try {
-      const connections = await client.write('/ip/hotspot/active/print');
+      const connections = await client.write('/ip/hotspot/active/print', [
+        '.proplist=.id,user,address,mac,uptime,bytes-in,bytes-out,session-time-left,idle-time,login-by,rx-rate,tx-rate,server'
+      ]);
       return connections as ActiveConnection[];
     } catch (err) {
       console.error(`getActiveConnections failed for router ${routerId}:`, (err as Error).message);

@@ -73,9 +73,14 @@ router.post('/restore', async (req: Request, res: Response) => {
   try {
     const token = req.body?.token;
     const mac = normalizeBodyMac(req.body?.mac);
+    const username = String(req.body?.username || '').trim();
 
-    if (!isValidToken(token)) {
-      res.status(400).json({ error: 'Valid token is required' });
+    if (token && !isValidToken(token)) {
+      res.status(400).json({ error: 'Invalid token' });
+      return;
+    }
+    if (!token && !username) {
+      res.status(400).json({ error: 'Valid token or username is required' });
       return;
     }
     if (!MAC_RE.test(mac)) {
@@ -89,6 +94,7 @@ router.post('/restore', async (req: Request, res: Response) => {
       ip: req.body?.ip,
       server: req.body?.server,
       routerId: parseInt(req.body?.routerId || '1', 10) || 1,
+      username: username || undefined,
     });
 
     res.json(result);

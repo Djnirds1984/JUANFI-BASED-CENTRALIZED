@@ -146,6 +146,39 @@ export interface RestoreResult {
   password?: string | null;
   remaining?: number;
   rebind?: boolean;
+  token?: string;
+}
+
+/**
+ * Find the best live session for a username (used when the browser token was
+ * lost on SSID switch — e.g. captive-portal mini-browser with isolated
+ * storage — but the device already authenticated on another SSID/MAC).
+ */
+export function findSessionByUsername(username: string, routerId?: number): any | null {
+  const name = String(username || '').trim();
+  if (!name) return null;
+  const db = getDb();
+  const rows = (
+    routerId
+      ? db
+          .prepare(
+            `SELECT * FROM device_sessions WHERE username = ? AND router_id = ?
+             ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 5`
+          )
+          .all(name, routerId)
+      : db
+          .prepare(
+            `SELECT * FROM device_sessions WHERE username = ?
+             ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 5`
+          )
+          .all(name)
+  ) as any[];
+  // Prefer a row that actually still has time left.
+  return (
+    rows.find((r) => Number(r.remaining_seconds) > 0) ||
+    rows[0] ||
+    null
+  );
 }
 
 /**
@@ -159,8 +192,15 @@ export async function restoreSession(params: {
   ip?: string;
   server?: string;
   routerId?: number;
+  username?: any;
 }): Promise<RestoreResult> {
-  const session = getSessionByToken(params.token);
+  let session = getSessionByToken(params.token);
+  // Fallback: token cookie was lost on SSID switch (captive-portal browsers
+  // isolate storage per SSID) but the user re-entered the same voucher.
+  if (!session && params.username) {
+    const r = Number(params.routerId) || 1;
+    session = findSessionByUsername(params.username, r) || findSessionByUsername(params.username);
+  }
   if (!session) return { restore: false, reason: 'unknown-token' };
   if (!session.username) return { restore: false, reason: 'never-logged-in' };
   if (session.status === 'expired' || session.remaining_seconds <= 0) {
@@ -180,8 +220,12 @@ export async function restoreSession(params: {
       console.error(`restoreSession kick failed for session ${session.id}:`, (err as Error).message);
     }
 
-    // 2) the next login must start with the remaining time
+    // 2) the next login must start with the remaining time. IMPORTANT:
+    // `limit-uptime` is measured against the user's *accumulated* uptime, so
+    // reset the counters first — otherwise the already-used time is subtracted
+    // AGAIN from the new limit and the user loses time on every roam.
     try {
+      await mikroTikService.resetHotspotUserCounters(routerId, session.username);
       const applied = await mikroTikService.setUserUptimeLimit(
         routerId,
         session.username,
@@ -226,6 +270,7 @@ export async function restoreSession(params: {
     password: session.password || lookupCredentials(session.username).password,
     remaining: session.remaining_seconds,
     rebind,
+    token: session.session_token,
   };
 }
 
@@ -239,18 +284,39 @@ export function bindSession(params: {
   username: string;
   server?: string;
   sessionTimeLeft?: any;
-}): { ok: boolean; token: string } {
+}): { ok: boolean; token: string; adoptToken?: string } {
   const db = getDb();
   const routerId = 1;
   const mac = normalizeMac(params.mac);
   const username = String(params.username || '');
   const now = nowStamp();
+  const incomingToken = isValidToken(params.token) ? String(params.token) : null;
 
-  let session = isValidToken(params.token) ? getSessionByToken(params.token) : null;
+  let session = incomingToken ? getSessionByToken(incomingToken) : null;
   if (!session && mac) {
     session = db
       .prepare('SELECT * FROM device_sessions WHERE router_id = ? AND mac_address = ?')
       .get(routerId, mac) as any;
+  }
+  // Token is fresh (cookie was lost on SSID switch) but this voucher already
+  // has a live session on the old MAC — adopt THAT row so its remaining time
+  // is kept instead of starting a duplicate session with 0 time.
+  let adoptedByUsername = false;
+  if (username) {
+    const owner = findSessionByUsername(username, routerId) || findSessionByUsername(username);
+    if (owner && (!session || owner.id !== session.id)) {
+      // Prefer the row that actually holds the voucher's time.
+      if (!session || !session.username || Number(owner.remaining_seconds) > Number(session.remaining_seconds)) {
+        // Retire the empty fresh-token row in favour of the real session.
+        if (session && session.id !== owner.id && !session.username) {
+          try {
+            db.prepare('DELETE FROM device_sessions WHERE id = ?').run(session.id);
+          } catch { /* keep both rows rather than failing login */ }
+        }
+        session = owner;
+        adoptedByUsername = true;
+      }
+    }
   }
   if (!session) {
     session = getSessionByToken(initSession({ mac, server: params.server, routerId }).token);
@@ -259,7 +325,10 @@ export function bindSession(params: {
 
   const creds = lookupCredentials(username);
   const left = mikrotikTimeToSeconds(params.sessionTimeLeft);
-  const remaining = left === Infinity ? session.remaining_seconds : left;
+  // When adopting by username after a roam, the status page reports the NEW
+  // login's full limit-uptime (which we just set to the old remaining time),
+  // so keep the tracked remaining instead of overwriting it.
+  const remaining = left === Infinity || adoptedByUsername ? session.remaining_seconds : left;
   const macChanged = !!mac && !!session.mac_address && mac !== session.mac_address;
 
   const set: string[] = [];
@@ -297,7 +366,13 @@ export function bindSession(params: {
   });
   apply();
 
-  return { ok: true, token: session.session_token };
+  // Tell the portal to adopt the surviving token when we merged a fresh
+  // token into an older session row (roam with lost cookie).
+  const adoptToken =
+    adoptedByUsername && incomingToken && incomingToken !== session.session_token
+      ? session.session_token
+      : undefined;
+  return { ok: true, token: session.session_token, ...(adoptToken ? { adoptToken } : {}) };
 }
 
 

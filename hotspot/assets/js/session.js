@@ -115,13 +115,22 @@
    * Roam restore: present the cookie token + current MAC. On success the
    * response carries { username, password, remaining, rebind } so the caller
    * (login.html, which has access to the CHAP variables) can log back in.
+   * When the token cookie was lost (SSID switch in a captive-portal browser
+   * with isolated storage), pass username too so the server can adopt that
+   * voucher's live session by name instead of stranding its time.
    */
-  function restore(mac, ip, server) {
+  function restore(mac, ip, server, username) {
     var token = getToken();
-    if (!token || !configured()) return Promise.resolve(null);
+    if ((!token && !username) || !configured()) return Promise.resolve(null);
 
-    return post('/session/restore', { token: token, mac: mac, ip: ip, server: server }, 6000)
+    var body = { token: token, mac: mac, ip: ip, server: server };
+    if (username) body.username = username;
+    return post('/session/restore', body, 6000)
       .then(function (data) {
+        // Adopt the surviving token when the server merged sessions.
+        if (data && data.token && TOKEN_RE.test(data.token) && data.token !== token) {
+          setCookie(cookieName, data.token, TEN_YEARS);
+        }
         return data || null;
       })
       .catch(function () {
@@ -131,7 +140,9 @@
 
   /*
    * Called from status.html right after a successful login: bind the token to
-   * this MAC + username and adopt the live session-time-left.
+   * this MAC + username and adopt the live session-time-left. When the server
+   * merged a fresh token into the surviving session (roam with lost cookie),
+   * adopt that surviving token so later heartbeats hit the right row.
    */
   function bind(mac, username, server, sessionTimeLeftSecs) {
     var token = ensureToken(mac, '', server);
@@ -141,7 +152,12 @@
         '/session/bind',
         { token: t, mac: mac, username: username, server: server, sessionTimeLeft: sessionTimeLeftSecs },
         6000
-      ).catch(function () {
+      ).then(function (data) {
+        if (data && data.adoptToken && TOKEN_RE.test(data.adoptToken) && data.adoptToken !== t) {
+          setCookie(cookieName, data.adoptToken, TEN_YEARS);
+        }
+        return data || null;
+      }).catch(function () {
         return null;
       });
     });

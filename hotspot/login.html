@@ -745,35 +745,45 @@ body#loginBody {
 			(function () {
 				if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
 				var server = interfaceName || hotspotAddress || '';
-				JuanFiSession.ensureToken(mac, uIp, server).then(function () {
-					// Only attempt restore when the user is not already logged in
-					// (ImOnLogin === '1' means we are on the login page).
-					if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
-					JuanFiSession.restore(mac, uIp, server).then(function (res) {
-						if (!res || !res.restore || !res.username) return;
+				if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
+				function doRestore(user) {
+					return JuanFiSession.restore(mac, uIp, server, user).then(function (res) {
+						if (!res || !res.restore || !res.username) return false;
 						var remainingTxt = '';
 						if (typeof res.remaining === 'number' && res.remaining > 0 && typeof secondsToDhms === 'function') {
 							remainingTxt = ' - ' + secondsToDhms(res.remaining) + ' remaining';
 						}
-						if (typeof $.toast === 'function') {
+						if (typeof $ !== 'undefined' && typeof $.toast === 'function') {
 							$.toast({ title: 'Welcome back', content: 'Session restored' + remainingTxt, type: 'success', delay: 4000 });
 						}
-						// Log back in through the existing CHAP form using the stored credentials.
 						setTimeout(function () {
 							try {
 								setStorageValue('activeVoucher', res.username);
 								document.sendin.username.value = res.username;
 								if (loginOption == 0) {
-									document.sendin.password.value = hexMD5('$(chap-id)' + "" + '$(chap-challenge)');
+									document.sendin.password.value = hexMD5('$(chap-id)' + '' + '$(chap-challenge)');
 								} else {
 									document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
 								}
 								document.sendin.submit();
-							} catch (e) {
-								// If CHAP submit fails, leave the normal login form visible.
-							}
+							} catch (e) {}
 						}, 400);
+						return true;
 					});
+				}
+				doRestore().then(function (ok) {
+					if (ok) return;
+					var typed = '';
+					try { typed = ($('#voucherInput').val() || '').trim(); } catch (e) {}
+					if (!typed) {
+						JuanFiSession.ensureToken(mac, uIp, server);
+						$('#voucherInput').one('input change', function () {
+							var v = ($('#voucherInput').val() || '').trim();
+							if (v) doRestore(v);
+						});
+						return;
+					}
+					doRestore(typed).then(function (ok2) { if (!ok2) JuanFiSession.ensureToken(mac, uIp, server); });
 				});
 			})();
 		</script>

@@ -526,6 +526,46 @@ class MikroTikService {
    * with exactly the remaining time we tracked for it. Returns false when the
    * user does not exist on the router.
    */
+  async resetHotspotUserCounters(routerId: number, username: string): Promise<boolean> {
+    const config = this.routerConfigs.get(routerId);
+
+    try {
+      if (config?.useRestApi) {
+        const users = await this.restApiCall(config, 'GET', `/ip/hotspot/user?name=${encodeURIComponent(username)}`);
+        const user = Array.isArray(users) ? users.find((u: any) => u.name === username) : null;
+        if (!user || !user['.id']) return false;
+        // RouterOS REST action: POST /ip/hotspot/user/{id}/reset-counters
+        try {
+          await this.restApiCall(config, 'POST', `/ip/hotspot/user/${user['.id']}/reset-counters`, {});
+        } catch {
+          // Older firmware: fall back to clearing uptime via PATCH.
+          await this.restApiCall(config, 'PATCH', `/ip/hotspot/user/${user['.id']}`, { uptime: '00:00:00' });
+        }
+        return true;
+      }
+
+      const client = this.getClient(routerId);
+      const users = await client.write('/ip/hotspot/user/print', [`=?name=${username}`]) as any[];
+      const user = Array.isArray(users) && users.length > 0 ? users[0] : null;
+      if (!user || !user['.id']) return false;
+      try {
+        await client.write('/ip/hotspot/user/reset-counters', [`=.id=${user['.id']}`]);
+      } catch {
+        // Very old RouterOS without reset-counters: zero the uptime directly.
+        await client.write('/ip/hotspot/user/set', [`=.id=${user['.id']}`, '=uptime=00:00:00']);
+      }
+      return true;
+    } catch (err) {
+      console.error(`resetHotspotUserCounters failed for ${username} on router ${routerId}:`, (err as Error).message);
+      return false;
+    }
+  }
+
+  /**
+   * Set `limit-uptime` on a hotspot user so a restored (roamed) session starts
+   * with exactly the remaining time we tracked for it. Returns false when the
+   * user does not exist on the router.
+   */
   async setUserUptimeLimit(routerId: number, username: string, limitUptime: string): Promise<boolean> {
     const config = this.routerConfigs.get(routerId);
 

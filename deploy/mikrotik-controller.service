@@ -7,7 +7,9 @@ Type=simple
 User=mikrotik-controller
 Group=mikrotik-controller
 WorkingDirectory=/opt/mikrotik-controller
-ExecStartPre=/bin/chown -R mikrotik-controller:mikrotik-controller /opt/mikrotik-controller/hotspot
+# NOTE: no chown here. ExecStartPre runs as the unprivileged 'mikrotik-controller'
+# user, which cannot chown root-owned files (Operation not permitted), which would
+# abort startup. Ownership is set as root by deploy/install.sh and deploy/update.sh.
 ExecStart=/usr/bin/node /opt/mikrotik-controller/dist/server.js
 Restart=on-failure
 RestartSec=10

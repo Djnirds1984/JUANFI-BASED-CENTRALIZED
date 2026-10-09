@@ -36,6 +36,12 @@ rm -rf "$APP_DIR/public"
 cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
 cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
 cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
+# Portal files (login/status/logout pages + assets/js). These are edited in the
+# repo, so they must be redeployed on update too.
+if [ -d "$SCRIPT_DIR/hotspot" ]; then
+    rm -rf "$APP_DIR/hotspot"
+    cp -r "$SCRIPT_DIR/hotspot" "$APP_DIR/"
+fi
 cd "$APP_DIR"
 npm install --production
 

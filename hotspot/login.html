@@ -739,7 +739,8 @@ body#loginBody {
 			// This ensures the backend API has time to process the MAC address
 			// and respond with the token, fixing issues with devices roaming between SSIDs
 			window.addEventListener('load', function() {
-				// Short delay to ensure all async operations are complete
+				// Delay to ensure MikroTik and backend API have time to process the MAC address
+				// 2000ms gives enough time for the captive portal to fully initialize
 				setTimeout(function() {
 					if(reLogin == '1'){
 						setStorageValue('reLogin', '0');
@@ -754,7 +755,14 @@ body#loginBody {
 						if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
 						var server = interfaceName || hotspotAddress || '';
 						if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
-						function doRestore() {
+
+						// First ensure we have a token and the MAC is registered with the backend
+						// This is critical for roaming devices - the backend needs to know about
+						// the new MAC before we can restore the session
+						JuanFiSession.ensureToken(mac, uIp, server).then(function(token) {
+							if (!token) return; // No token and couldn't create one
+
+							// Now try to restore the session with the registered token
 							return JuanFiSession.restore(mac, uIp, server).then(function (res) {
 								if (!res || !res.restore || !res.username) return false;
 								var remainingTxt = '';
@@ -778,15 +786,12 @@ body#loginBody {
 								}, 400);
 								return true;
 							});
-						}
-						doRestore().then(function (ok) {
-							// No token or nothing to restore: mint the device token lazily
-							// so the NEXT visit can auto-restore. A typed voucher takes
-							// the normal manual login path below.
-							if (!ok) JuanFiSession.ensureToken(mac, uIp, server);
+						}).then(function(ok) {
+							// If restore failed or no token, that's OK - user can manually login
+							// The token is already created for next time
 						});
 					})();
-				}, 500);
+				}, 2000);
 			});
 		</script>
 		<script>

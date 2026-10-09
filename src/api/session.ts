@@ -69,18 +69,16 @@ router.post('/init', (req: Request, res: Response) => {
 });
 
 // POST /api/session/restore - roam: token + new MAC -> credentials + remaining
+// Pure token+MAC design: the device carries the token, the server compares it
+// against the stored token+MAC binding. Same token on a new MAC = same owner
+// roaming -> rebind and restore the remaining time. No passwords, no prompts.
 router.post('/restore', async (req: Request, res: Response) => {
   try {
     const token = req.body?.token;
     const mac = normalizeBodyMac(req.body?.mac);
-    const username = String(req.body?.username || '').trim();
 
-    if (token && !isValidToken(token)) {
-      res.status(400).json({ error: 'Invalid token' });
-      return;
-    }
-    if (!token && !username) {
-      res.status(400).json({ error: 'Valid token or username is required' });
+    if (!isValidToken(token)) {
+      res.status(400).json({ error: 'Valid token is required' });
       return;
     }
     if (!MAC_RE.test(mac)) {
@@ -94,7 +92,6 @@ router.post('/restore', async (req: Request, res: Response) => {
       ip: req.body?.ip,
       server: req.body?.server,
       routerId: parseInt(req.body?.routerId || '1', 10) || 1,
-      username: username || undefined,
     });
 
     res.json(result);

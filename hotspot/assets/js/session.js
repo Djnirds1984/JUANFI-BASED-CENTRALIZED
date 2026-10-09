@@ -115,16 +115,16 @@
    * Roam restore: present the cookie token + current MAC. On success the
    * response carries { username, password, remaining, rebind } so the caller
    * (login.html, which has access to the CHAP variables) can log back in.
-   * When the token cookie was lost (SSID switch in a captive-portal browser
-   * with isolated storage), pass username too so the server can adopt that
-   * voucher's live session by name instead of stranding its time.
+   * Pure token+MAC design: same token on a new MAC = same owner roaming, so
+   * the server rebinds and restores the remaining time. Fully automatic —
+   * no passwords, no prompts. Another device can't restore because it
+   * doesn't carry this device's token cookie.
    */
-  function restore(mac, ip, server, username) {
+  function restore(mac, ip, server) {
     var token = getToken();
-    if ((!token && !username) || !configured()) return Promise.resolve(null);
+    if (!token || !configured()) return Promise.resolve(null);
 
     var body = { token: token, mac: mac, ip: ip, server: server };
-    if (username) body.username = username;
     return post('/session/restore', body, 6000)
       .then(function (data) {
         // Adopt the surviving token when the server merged sessions.
@@ -140,9 +140,7 @@
 
   /*
    * Called from status.html right after a successful login: bind the token to
-   * this MAC + username and adopt the live session-time-left. When the server
-   * merged a fresh token into the surviving session (roam with lost cookie),
-   * adopt that surviving token so later heartbeats hit the right row.
+   * this MAC + username and adopt the live session-time-left.
    */
   function bind(mac, username, server, sessionTimeLeftSecs) {
     var token = ensureToken(mac, '', server);
@@ -153,9 +151,6 @@
         { token: t, mac: mac, username: username, server: server, sessionTimeLeft: sessionTimeLeftSecs },
         6000
       ).then(function (data) {
-        if (data && data.adoptToken && TOKEN_RE.test(data.adoptToken) && data.adoptToken !== t) {
-          setCookie(cookieName, data.adoptToken, TEN_YEARS);
-        }
         return data || null;
       }).catch(function () {
         return null;

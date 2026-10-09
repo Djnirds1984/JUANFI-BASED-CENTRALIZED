@@ -192,15 +192,8 @@ export async function restoreSession(params: {
   ip?: string;
   server?: string;
   routerId?: number;
-  username?: any;
 }): Promise<RestoreResult> {
-  let session = getSessionByToken(params.token);
-  // Fallback: token cookie was lost on SSID switch (captive-portal browsers
-  // isolate storage per SSID) but the user re-entered the same voucher.
-  if (!session && params.username) {
-    const r = Number(params.routerId) || 1;
-    session = findSessionByUsername(params.username, r) || findSessionByUsername(params.username);
-  }
+  const session = getSessionByToken(params.token);
   if (!session) return { restore: false, reason: 'unknown-token' };
   if (!session.username) return { restore: false, reason: 'never-logged-in' };
   if (session.status === 'expired' || session.remaining_seconds <= 0) {
@@ -284,7 +277,7 @@ export function bindSession(params: {
   username: string;
   server?: string;
   sessionTimeLeft?: any;
-}): { ok: boolean; token: string; adoptToken?: string } {
+}): { ok: boolean; token: string } {
   const db = getDb();
   const routerId = 1;
   const mac = normalizeMac(params.mac);
@@ -298,26 +291,13 @@ export function bindSession(params: {
       .prepare('SELECT * FROM device_sessions WHERE router_id = ? AND mac_address = ?')
       .get(routerId, mac) as any;
   }
-  // Token is fresh (cookie was lost on SSID switch) but this voucher already
-  // has a live session on the old MAC — adopt THAT row so its remaining time
-  // is kept instead of starting a duplicate session with 0 time.
-  let adoptedByUsername = false;
-  if (username) {
-    const owner = findSessionByUsername(username, routerId) || findSessionByUsername(username);
-    if (owner && (!session || owner.id !== session.id)) {
-      // Prefer the row that actually holds the voucher's time.
-      if (!session || !session.username || Number(owner.remaining_seconds) > Number(session.remaining_seconds)) {
-        // Retire the empty fresh-token row in favour of the real session.
-        if (session && session.id !== owner.id && !session.username) {
-          try {
-            db.prepare('DELETE FROM device_sessions WHERE id = ?').run(session.id);
-          } catch { /* keep both rows rather than failing login */ }
-        }
-        session = owner;
-        adoptedByUsername = true;
-      }
-    }
-  }
+  // STRICT token+MAC binding: a different device presenting the same voucher
+  // username but WITHOUT this session's token must NOT adopt it — that would
+  // let anyone who knows the voucher steal the remaining time. Username-only
+  // adoption was removed for this reason. The genuine roam path is:
+  // same device carries its token cookie -> /session/restore rebinds the
+  // token to the new MAC -> status page binds with the SAME (adopted) token.
+  const adoptedByUsername = false;
   if (!session) {
     session = getSessionByToken(initSession({ mac, server: params.server, routerId }).token);
   }
@@ -325,10 +305,7 @@ export function bindSession(params: {
 
   const creds = lookupCredentials(username);
   const left = mikrotikTimeToSeconds(params.sessionTimeLeft);
-  // When adopting by username after a roam, the status page reports the NEW
-  // login's full limit-uptime (which we just set to the old remaining time),
-  // so keep the tracked remaining instead of overwriting it.
-  const remaining = left === Infinity || adoptedByUsername ? session.remaining_seconds : left;
+  const remaining = left === Infinity ? session.remaining_seconds : left;
   const macChanged = !!mac && !!session.mac_address && mac !== session.mac_address;
 
   const set: string[] = [];
@@ -366,13 +343,7 @@ export function bindSession(params: {
   });
   apply();
 
-  // Tell the portal to adopt the surviving token when we merged a fresh
-  // token into an older session row (roam with lost cookie).
-  const adoptToken =
-    adoptedByUsername && incomingToken && incomingToken !== session.session_token
-      ? session.session_token
-      : undefined;
-  return { ok: true, token: session.session_token, ...(adoptToken ? { adoptToken } : {}) };
+  return { ok: true, token: session.session_token };
 }
 
 

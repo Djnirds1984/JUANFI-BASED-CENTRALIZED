@@ -746,8 +746,8 @@ body#loginBody {
 				if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
 				var server = interfaceName || hotspotAddress || '';
 				if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
-				function doRestore(user) {
-					return JuanFiSession.restore(mac, uIp, server, user).then(function (res) {
+				function doRestore() {
+					return JuanFiSession.restore(mac, uIp, server).then(function (res) {
 						if (!res || !res.restore || !res.username) return false;
 						var remainingTxt = '';
 						if (typeof res.remaining === 'number' && res.remaining > 0 && typeof secondsToDhms === 'function') {
@@ -775,15 +775,16 @@ body#loginBody {
 					if (ok) return;
 					var typed = '';
 					try { typed = ($('#voucherInput').val() || '').trim(); } catch (e) {}
+
 					if (!typed) {
 						JuanFiSession.ensureToken(mac, uIp, server);
 						$('#voucherInput').one('input change', function () {
 							var v = ($('#voucherInput').val() || '').trim();
-							if (v) doRestore(v);
+							if (v) doRestore();
 						});
 						return;
 					}
-					doRestore(typed).then(function (ok2) { if (!ok2) JuanFiSession.ensureToken(mac, uIp, server); });
+					doRestore().then(function (ok2) { if (!ok2) JuanFiSession.ensureToken(mac, uIp, server); });
 				});
 			})();
 		</script>

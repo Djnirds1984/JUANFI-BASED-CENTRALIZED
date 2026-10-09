@@ -112,13 +112,16 @@
   }
 
   /*
-   * Roam restore: present the cookie token + current MAC. On success the
-   * response carries { username, password, remaining, rebind } so the caller
-   * (login.html, which has access to the CHAP variables) can log back in.
-   * Pure token+MAC design: same token on a new MAC = same owner roaming, so
-   * the server rebinds and restores the remaining time. Fully automatic —
-   * no passwords, no prompts. Another device can't restore because it
-   * doesn't carry this device's token cookie.
+   * Roam restore: portal -> panel handshake.
+   * On every captive-portal load, login.html sends { token, mac, ip, server }
+   * to POST /api/session/restore (panel URL comes from config.js
+   * `controllerApiUrl`). The panel compares the received token against its
+   * stored token+MAC binding: same token + different MAC = same owner roaming
+   * to a new SSID -> it rebinds the session, restores the remaining time via
+   * limit-uptime, and returns { username, password, remaining, rebind } so the
+   * caller (login.html, which owns the CHAP variables) logs back in silently.
+   * Fully automatic — no passwords, no prompts. Another device can't restore
+   * because it doesn't carry this device's token cookie.
    */
   function restore(mac, ip, server) {
     var token = getToken();
@@ -127,10 +130,6 @@
     var body = { token: token, mac: mac, ip: ip, server: server };
     return post('/session/restore', body, 6000)
       .then(function (data) {
-        // Adopt the surviving token when the server merged sessions.
-        if (data && data.token && TOKEN_RE.test(data.token) && data.token !== token) {
-          setCookie(cookieName, data.token, TEN_YEARS);
-        }
         return data || null;
       })
       .catch(function () {

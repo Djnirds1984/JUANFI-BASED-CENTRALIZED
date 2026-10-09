@@ -772,19 +772,10 @@ body#loginBody {
 					});
 				}
 				doRestore().then(function (ok) {
-					if (ok) return;
-					var typed = '';
-					try { typed = ($('#voucherInput').val() || '').trim(); } catch (e) {}
-
-					if (!typed) {
-						JuanFiSession.ensureToken(mac, uIp, server);
-						$('#voucherInput').one('input change', function () {
-							var v = ($('#voucherInput').val() || '').trim();
-							if (v) doRestore();
-						});
-						return;
-					}
-					doRestore().then(function (ok2) { if (!ok2) JuanFiSession.ensureToken(mac, uIp, server); });
+					// No token or nothing to restore: mint the device token lazily
+					// so the NEXT visit can auto-restore. A typed voucher takes
+					// the normal manual login path below.
+					if (!ok) JuanFiSession.ensureToken(mac, uIp, server);
 				});
 			})();
 		</script>

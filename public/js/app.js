@@ -3,6 +3,8 @@ const App = {
   selectedRouterId: null,
   _overviewInterval: null,
   _activeUsersInterval: null,
+  _hostsInterval: null,
+  _activeInterval: null,
   portalCurrentFile: 'login.html',
   portalDirty: false,
   _portalPreviewTimer: null,
@@ -79,6 +81,7 @@ const App = {
       clearInterval(this._overviewInterval);
       this._overviewInterval = null;
     }
+    this.clearHotspotPollers();
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -656,7 +659,8 @@ const App = {
           </div>
         </div>
         <div class="tabs">
-          <button class="tab active" data-tab="hosts">Hosts</button>
+          <button class="tab ${this.hotspotTab === 'hosts' ? 'active' : ''}" data-tab="hosts">Hosts</button>
+          <button class="tab ${this.hotspotTab === 'active' ? 'active' : ''}" data-tab="active">Active Devices</button>
         </div>
         <div id="hotspot-tab-content">Loading...</div>
       </div>
@@ -681,76 +685,40 @@ const App = {
 
   async loadHotspotTab() {
     const container = document.getElementById('hotspot-tab-content');
+    if (!container) return;
+    this.clearHotspotPollers();
     container.innerHTML = 'Loading...';
 
     try {
-      await this.loadHotspotHosts(container);
+      if (this.hotspotTab === 'active') {
+        await this.loadHotspotActiveDevices(container);
+      } else {
+        await this.loadHotspotHosts(container);
+      }
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
   },
 
-  async loadHotspotHosts(container) {
-    if (!container) container = document.getElementById('hotspot-tab-content');
-    
+  clearHotspotPollers() {
     if (this._hostsInterval) {
       clearInterval(this._hostsInterval);
       this._hostsInterval = null;
     }
-    
+    if (this._activeInterval) {
+      clearInterval(this._activeInterval);
+      this._activeInterval = null;
+    }
+  },
+
+  async loadHotspotHosts(container) {
+    if (!container) container = document.getElementById('hotspot-tab-content');
+    this.clearHotspotPollers();
+
     try {
-      const [hosts, connections] = await Promise.all([
-        api.getHotspotHosts(this.selectedRouterId),
-        api.getActiveConnections(this.selectedRouterId)
-      ]);
-      
-      const hostByIp = new Map();
-      for (const host of hosts) {
-        const ip = this.normalizeIp(host.address || '');
-        if (ip) hostByIp.set(ip, host);
-      }
+      const hosts = await api.getHotspotHosts(this.selectedRouterId);
 
-      const seenIps = new Set();
-      const enrichedHosts = connections.map(conn => {
-        const ip = this.normalizeIp(conn.address || '');
-        seenIps.add(ip);
-        const host = hostByIp.get(ip);
-        return {
-          'mac-address': conn.mac || (host ? host['mac-address'] : '') || '',
-          address: conn.address || '',
-          'host-name': conn.hostname || (host ? host['host-name'] : '') || '-',
-          user: conn.user || '',
-          server: conn.server || (host ? host.server : '') || '',
-          'is-active': true,
-          'active-id': conn['.id'] || null,
-          'session-time-left': conn['session-time-left'] || '',
-          'bytes-in': conn['bytes-in'] || '0',
-          'bytes-out': conn['bytes-out'] || '0',
-          'rx-rate': conn['rx-rate'] || '0 bps',
-          'tx-rate': conn['tx-rate'] || '0 bps',
-          'login-by': conn['login-by'] || ''
-        };
-      });
-
-      for (const host of hosts) {
-        const ip = this.normalizeIp(host.address || '');
-        if (!seenIps.has(ip)) {
-          enrichedHosts.push({
-            ...host,
-            'is-active': false,
-            'active-id': null,
-            'user': '',
-            'session-time-left': '',
-            'bytes-in': '0',
-            'bytes-out': '0',
-            'rx-rate': '0 bps',
-            'tx-rate': '0 bps',
-            'login-by': ''
-          });
-        }
-      }
-
-      if (enrichedHosts.length === 0) {
+      if (!hosts || hosts.length === 0) {
         container.innerHTML = '<div class="empty-state"><p>No hotspot hosts found.</p></div>';
         return;
       }
@@ -763,18 +731,12 @@ const App = {
                 <th>MAC Address</th>
                 <th>IP Address</th>
                 <th>Hostname</th>
-                <th>User</th>
                 <th>Server</th>
-                <th>Session Time Left</th>
-                <th>RX Rate</th>
-                <th>TX Rate</th>
-                <th>Bytes In</th>
-                <th>Bytes Out</th>
-                <th>Actions</th>
+                <th>Uptime</th>
               </tr>
             </thead>
             <tbody id="hosts-tbody">
-              ${this.renderHostsRows(enrichedHosts)}
+              ${this.renderHostsRows(hosts)}
             </tbody>
           </table>
         </div>
@@ -782,60 +744,10 @@ const App = {
 
       this._hostsInterval = setInterval(async () => {
         try {
-          const [freshHosts, freshConnections] = await Promise.all([
-            api.getHotspotHosts(this.selectedRouterId),
-            api.getActiveConnections(this.selectedRouterId)
-          ]);
-          
-          const freshHostByIp = new Map();
-          for (const host of freshHosts) {
-            const ip = this.normalizeIp(host.address || '');
-            if (ip) freshHostByIp.set(ip, host);
-          }
-
-          const freshSeenIps = new Set();
-          const freshEnrichedHosts = freshConnections.map(conn => {
-            const ip = this.normalizeIp(conn.address || '');
-            freshSeenIps.add(ip);
-            const host = freshHostByIp.get(ip);
-            return {
-              'mac-address': conn.mac || (host ? host['mac-address'] : '') || '',
-              address: conn.address || '',
-              'host-name': conn.hostname || (host ? host['host-name'] : '') || '-',
-              user: conn.user || '',
-              server: conn.server || (host ? host.server : '') || '',
-              'is-active': true,
-              'active-id': conn['.id'] || null,
-              'session-time-left': conn['session-time-left'] || '',
-              'bytes-in': conn['bytes-in'] || '0',
-              'bytes-out': conn['bytes-out'] || '0',
-              'rx-rate': conn['rx-rate'] || '0 bps',
-              'tx-rate': conn['tx-rate'] || '0 bps',
-              'login-by': conn['login-by'] || ''
-            };
-          });
-
-          for (const host of freshHosts) {
-            const ip = this.normalizeIp(host.address || '');
-            if (!freshSeenIps.has(ip)) {
-              freshEnrichedHosts.push({
-                ...host,
-                'is-active': false,
-                'active-id': null,
-                'user': '',
-                'session-time-left': '',
-                'bytes-in': '0',
-                'bytes-out': '0',
-                'rx-rate': '0 bps',
-                'tx-rate': '0 bps',
-                'login-by': ''
-              });
-            }
-          }
-          
+          const freshHosts = await api.getHotspotHosts(this.selectedRouterId);
           const tbody = document.getElementById('hosts-tbody');
           if (tbody) {
-            tbody.innerHTML = this.renderHostsRows(freshEnrichedHosts);
+            tbody.innerHTML = this.renderHostsRows(freshHosts);
           }
         } catch (err) {
           console.error('Failed to refresh hosts:', err);
@@ -846,67 +758,197 @@ const App = {
     }
   },
 
+  async loadHotspotActiveDevices(container) {
+    if (!container) container = document.getElementById('hotspot-tab-content');
+    this.clearHotspotPollers();
+
+    try {
+      const connections = await api.getActiveConnections(this.selectedRouterId);
+      const devices = this.mapActiveDevices(connections);
+
+      container.innerHTML = `
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>MAC Address</th>
+                <th>IP Address</th>
+                <th>Hostname</th>
+                <th>User</th>
+                <th>Server</th>
+                <th>Uptime</th>
+                <th>Session Time Left</th>
+                <th>RX Rate</th>
+                <th>TX Rate</th>
+                <th>Bytes In</th>
+                <th>Bytes Out</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="active-devices-tbody">
+              ${this.renderActiveDeviceRows(devices)}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      this._activeInterval = setInterval(async () => {
+        try {
+          const freshConnections = await api.getActiveConnections(this.selectedRouterId);
+          this.refreshActiveDeviceRows(this.mapActiveDevices(freshConnections));
+        } catch (err) {
+          console.error('Failed to refresh active devices:', err);
+        }
+      }, 1000);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  mapActiveDevices(connections) {
+    return (connections || []).map((conn) => ({
+      '.id': conn['.id'] || '',
+      user: conn.user || '',
+      address: conn.address || '',
+      'mac-address': conn.mac || conn['mac-address'] || '',
+      'host-name': conn.hostname || conn['host-name'] || '-',
+      server: conn.server || '',
+      uptime: conn.uptime || '',
+      'session-time-left': conn['session-time-left'] || '',
+      'bytes-in': conn['bytes-in'] || '0',
+      'bytes-out': conn['bytes-out'] || '0',
+      'rx-rate': conn['rx-rate'] || '0 bps',
+      'tx-rate': conn['tx-rate'] || '0 bps',
+      'login-by': conn['login-by'] || ''
+    }));
+  },
+
   renderHostsRows(hosts) {
-    return hosts.map((h) => {
-      const isActive = h['is-active'];
-      const sessionTimeLeft = h['session-time-left'] || '';
-      const totalSeconds = isActive ? this.parseTimeToSeconds(sessionTimeLeft) : 0;
-      const rxRate = h['rx-rate'] || '0 bps';
-      const txRate = h['tx-rate'] || '0 bps';
-      
+    if (!hosts || hosts.length === 0) {
+      return '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem">No hotspot hosts found.</td></tr>';
+    }
+
+    return hosts.map((h) => `
+      <tr>
+        <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
+        <td>${this.escapeHtml(h.address || '')}</td>
+        <td>${this.escapeHtml(h['host-name'] || '-')}</td>
+        <td>${this.escapeHtml(h.server || '-')}</td>
+        <td>${this.escapeHtml(h.uptime || '-')}</td>
+      </tr>
+    `).join('');
+  },
+
+  renderActiveDeviceRows(devices) {
+    if (!devices || devices.length === 0) {
+      return '<tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:2rem">No active devices found.</td></tr>';
+    }
+
+    return devices.map((d) => {
+      const totalSeconds = this.parseTimeToSeconds(d['session-time-left'] || '');
+      const rxRate = d['rx-rate'] || '0 bps';
+      const txRate = d['tx-rate'] || '0 bps';
+
       let countdownClass = '';
       if (totalSeconds !== Infinity && totalSeconds > 0) {
         if (totalSeconds <= 60) countdownClass = 'countdown-critical';
         else if (totalSeconds <= 300) countdownClass = 'countdown-warning';
       }
-      
+
       return `
-        <tr>
-          <td><code>${this.escapeHtml(h['mac-address'] || '')}</code></td>
-          <td>${this.escapeHtml(h.address || '')}</td>
-          <td>${this.escapeHtml(h['host-name'] || '-')}</td>
-          <td>${isActive ? this.escapeHtml(h.user || '-') : '<span style="color:var(--text-muted)">-</span>'}</td>
-          <td>${this.escapeHtml(h.server || '')}</td>
+        <tr data-active-id="${this.escapeHtml(d['.id'] || '')}">
+          <td><code>${this.escapeHtml(d['mac-address'] || '')}</code></td>
+          <td>${this.escapeHtml(d.address || '')}</td>
+          <td>${this.escapeHtml(d['host-name'] || '-')}</td>
+          <td>${this.escapeHtml(d.user || '-')}</td>
+          <td>${this.escapeHtml(d.server || '-')}</td>
+          <td>${this.escapeHtml(d.uptime || '-')}</td>
           <td>
-            ${isActive ? `
-              <div class="session-countdown ${countdownClass}" data-seconds="${totalSeconds}">
-                <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
-                <div class="countdown-bar">
-                  <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
-                </div>
+            <div class="session-countdown ${countdownClass}">
+              <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
+              <div class="countdown-bar">
+                <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
               </div>
-            ` : '<span style="color:var(--text-muted)">Inactive</span>'}
+            </div>
           </td>
           <td>
-            ${isActive ? `
-              <div class="rate-indicator">
-                <span class="rate-value">${this.escapeHtml(rxRate)}</span>
-                <div class="rate-bar">
-                  <div class="rate-bar-fill rx-fill" style="width: ${this.calculateRateBarWidth(rxRate)}%"></div>
-                </div>
+            <div class="rate-indicator">
+              <span class="rate-value" data-rate="rx">${this.escapeHtml(rxRate)}</span>
+              <div class="rate-bar">
+                <div class="rate-bar-fill rx-fill" data-rate-bar="rx" style="width: ${this.calculateRateBarWidth(rxRate)}%"></div>
               </div>
-            ` : '<span style="color:var(--text-muted)">-</span>'}
+            </div>
           </td>
           <td>
-            ${isActive ? `
-              <div class="rate-indicator">
-                <span class="rate-value">${this.escapeHtml(txRate)}</span>
-                <div class="rate-bar">
-                  <div class="rate-bar-fill tx-fill" style="width: ${this.calculateRateBarWidth(txRate)}%"></div>
-                </div>
+            <div class="rate-indicator">
+              <span class="rate-value" data-rate="tx">${this.escapeHtml(txRate)}</span>
+              <div class="rate-bar">
+                <div class="rate-bar-fill tx-fill" data-rate-bar="tx" style="width: ${this.calculateRateBarWidth(txRate)}%"></div>
               </div>
-            ` : '<span style="color:var(--text-muted)">-</span>'}
+            </div>
           </td>
-          <td>${isActive ? this.formatBytes(parseInt(h['bytes-in'] || '0')) : '<span style="color:var(--text-muted)">-</span>'}</td>
-          <td>${isActive ? this.formatBytes(parseInt(h['bytes-out'] || '0')) : '<span style="color:var(--text-muted)">-</span>'}</td>
+          <td data-field="bytes-in">${this.formatBytes(parseInt(d['bytes-in'] || '0', 10) || 0)}</td>
+          <td data-field="bytes-out">${this.formatBytes(parseInt(d['bytes-out'] || '0', 10) || 0)}</td>
           <td>
-            ${isActive && h['active-id'] ? `
-              <button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${h['active-id']}', '${this.escapeHtml(h.user || h.address)}')">Disconnect</button>
-            ` : ''}
+            ${d['.id'] ? `<button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${d['.id']}', '${this.escapeHtml(d.user || d.address)}')">Disconnect</button>` : ''}
           </td>
         </tr>
       `;
     }).join('');
+  },
+
+  refreshActiveDeviceRows(devices) {
+    const tbody = document.getElementById('active-devices-tbody');
+    if (!tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
+    const freshIds = devices.map((d) => d['.id']).join('|');
+    const liveIds = rows.map((r) => r.dataset.activeId).join('|');
+
+    if (freshIds !== liveIds) {
+      tbody.innerHTML = this.renderActiveDeviceRows(devices);
+      return;
+    }
+
+    rows.forEach((row, index) => {
+      const device = devices[index];
+      if (!device) return;
+
+      const totalSeconds = this.parseTimeToSeconds(device['session-time-left'] || '');
+
+      const countdown = row.querySelector('.session-countdown');
+      if (countdown) {
+        let countdownClass = 'session-countdown';
+        if (totalSeconds !== Infinity && totalSeconds > 0) {
+          if (totalSeconds <= 60) countdownClass += ' countdown-critical';
+          else if (totalSeconds <= 300) countdownClass += ' countdown-warning';
+        }
+        countdown.className = countdownClass;
+
+        const value = countdown.querySelector('.countdown-value');
+        if (value) value.textContent = this.formatCountdown(totalSeconds);
+
+        const fill = countdown.querySelector('.countdown-bar-fill');
+        if (fill) fill.style.width = `${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%`;
+      }
+
+      this.updateRateCell(row, 'rx', device['rx-rate']);
+      this.updateRateCell(row, 'tx', device['tx-rate']);
+
+      const bytesIn = row.querySelector('[data-field="bytes-in"]');
+      if (bytesIn) bytesIn.textContent = this.formatBytes(parseInt(device['bytes-in'] || '0', 10) || 0);
+
+      const bytesOut = row.querySelector('[data-field="bytes-out"]');
+      if (bytesOut) bytesOut.textContent = this.formatBytes(parseInt(device['bytes-out'] || '0', 10) || 0);
+    });
+  },
+
+  updateRateCell(row, direction, rate) {
+    const value = row.querySelector(`[data-rate="${direction}"]`);
+    if (value) value.textContent = rate || '0 bps';
+
+    const fill = row.querySelector(`[data-rate-bar="${direction}"]`);
+    if (fill) fill.style.width = `${this.calculateRateBarWidth(rate || '0 bps')}%`;
   },
 
   normalizeIp(raw) {
@@ -984,7 +1026,7 @@ const App = {
     try {
       await api.removeActiveConnection(this.selectedRouterId, activeId);
       this.toast('User disconnected', 'success');
-      this.loadHotspotHosts();
+      this.loadHotspotTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -1038,7 +1080,7 @@ const App = {
       });
       this.closeModal();
       this.toast('User created', 'success');
-      this.loadHotspotHosts();
+      this.loadHotspotTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -1049,7 +1091,7 @@ const App = {
     try {
       await api.deleteHotspotUser(this.selectedRouterId, userId);
       this.toast('User removed', 'success');
-      this.loadHotspotHosts();
+      this.loadHotspotTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }

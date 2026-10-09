@@ -357,11 +357,18 @@ export function syncSessionsWithDevices(routerId: number, live: any[]): void {
     .prepare('SELECT * FROM device_sessions WHERE router_id = ?')
     .all(routerId) as any[];
 
+  // Track which live connections are already represented by a session row so
+  // we can seed the untracked ones below (keeps the Sessions tab in sync with
+  // Active Devices even when the portal could not reach the controller).
+  const trackedConns = new Set<any>();
+
   for (const session of sessions) {
     const conn =
       (session.mac_address && byMac.get(session.mac_address)) ||
       (session.username && byUser.get(session.username)) ||
       null;
+
+    if (conn) trackedConns.add(conn);
 
     if (conn) {
       const left = mikrotikTimeToSeconds(conn['session-time-left']);
@@ -379,6 +386,57 @@ export function syncSessionsWithDevices(routerId: number, live: any[]): void {
     } else if (session.status === 'active' && session.remaining_seconds <= 0) {
       db.prepare("UPDATE device_sessions SET status = 'expired' WHERE id = ?").run(session.id);
     }
+  }
+
+  // Seed a session row for every live connection that has no row yet. This is
+  // the server-side counterpart of the portal's /session/init + /session/bind:
+  // when a phone can't reach the controller pre-login (walled-garden), the
+  // token never gets created, so the Sessions tab would stay empty even though
+  // the device shows under Active Devices. Seeding here keeps them consistent.
+  // We skip MAC-less connections so the (router_id, mac_address) unique index
+  // stays clean; if a MAC slot is already taken we just update that row.
+  const seedInsert = db.prepare(
+    `INSERT INTO device_sessions (session_token, mac_address, router_id, hotspot_server, username, status,
+        total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+     VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 1, ?, ?)`
+  );
+
+  for (const conn of live || []) {
+    if (trackedConns.has(conn)) continue;
+    const mac = normalizeMac(conn.mac || conn['mac-address']);
+    if (!mac) continue; // only track connections we can dedupe by MAC
+
+    // Respect the unique (router_id, mac_address) index: if a row already owns
+    // this MAC under this router, adopt/refresh it instead of inserting a dup.
+    const existing = db
+      .prepare('SELECT id FROM device_sessions WHERE router_id = ? AND mac_address = ?')
+      .get(routerId, mac) as any;
+    if (existing) {
+      db.prepare(
+        `UPDATE device_sessions SET is_online = 1, status = 'active',
+           hotspot_server = COALESCE(NULLIF(?, ''), hotspot_server),
+           username = COALESCE(NULLIF(?, ''), username),
+           last_seen = ? WHERE id = ?`
+      ).run(String(conn.server || ''), String(conn.user || ''), now, existing.id);
+      continue;
+    }
+
+    const left = mikrotikTimeToSeconds(conn['session-time-left']);
+    // Unlimited sessions report "infinity"; store 0 remaining but keep the row
+    // active - the next sync tick refines it from the live session-time-left.
+    const remaining = left === Infinity ? 0 : Math.max(0, Math.floor(left));
+    const token = generateSessionToken();
+    seedInsert.run(
+      token,
+      mac,
+      routerId,
+      String(conn.server || ''),
+      String(conn.user || ''),
+      remaining,
+      remaining,
+      now,
+      now
+    );
   }
 }
 

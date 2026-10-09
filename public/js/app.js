@@ -712,6 +712,10 @@ const App = {
       clearInterval(this._activeInterval);
       this._activeInterval = null;
     }
+    if (this._sessionsInterval) {
+      clearInterval(this._sessionsInterval);
+      this._sessionsInterval = null;
+    }
   },
 
   async loadHotspotHosts(container) {
@@ -839,37 +843,52 @@ const App = {
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody>
-              ${sessions.map((s) => {
-                const tokenShort = String(s.session_token || '').slice(0, 8) + '…';
-                const status = s.status || 'pending';
-                const remaining = this.formatSecondsToHMS(s.remaining_seconds || 0);
-                const badgeClass = s.is_online ? 'badge-online' : (status === 'expired' ? 'badge-expired' : 'badge-offline');
-                return `
-                  <tr>
-                    <td><code title="${this.escapeHtml(s.session_token || '')}">${this.escapeHtml(tokenShort)}</code></td>
-                    <td><code>${this.escapeHtml(s.mac_address || '-')}</code></td>
-                    <td><code>${this.escapeHtml(s.previous_mac || '-')}</code></td>
-                    <td>${this.escapeHtml(s.username || '-')}</td>
-                    <td>${this.escapeHtml(s.hotspot_server || '-')}</td>
-                    <td><span class="${badgeClass}">${this.escapeHtml(status)}</span></td>
-                    <td>${remaining}</td>
-                    <td>${s.is_online ? 'Yes' : 'No'}</td>
-                    <td>${this.escapeHtml(s.first_seen || '-')}</td>
-                    <td>${this.escapeHtml(s.last_seen || '-')}</td>
-                    <td>
-                      <button class="btn btn-danger btn-sm" onclick="App.revokeDeviceSession(${this.selectedRouterId}, ${s.id})">Revoke</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
+            <tbody id="device-sessions-tbody">
+              ${this.renderDeviceSessionRows(sessions)}
             </tbody>
           </table>
         </div>
       `;
+
+      this._sessionsInterval = setInterval(async () => {
+        try {
+          const freshSessions = await api.getDeviceSessions(this.selectedRouterId);
+          if (!freshSessions || freshSessions.length === 0) return; // keep last view; a revoke triggers a full reload
+          const tbody = document.getElementById('device-sessions-tbody');
+          if (tbody) tbody.innerHTML = this.renderDeviceSessionRows(freshSessions);
+        } catch (err) {
+          console.error('Failed to refresh device sessions:', err);
+        }
+      }, 1000);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
+  },
+
+  renderDeviceSessionRows(sessions) {
+    return (sessions || []).map((s) => {
+      const tokenShort = String(s.session_token || '').slice(0, 8) + '…';
+      const status = s.status || 'pending';
+      const remaining = this.formatSecondsToHMS(s.remaining_seconds || 0);
+      const badgeClass = s.is_online ? 'badge-online' : (status === 'expired' ? 'badge-expired' : 'badge-offline');
+      return `
+        <tr>
+          <td><code title="${this.escapeHtml(s.session_token || '')}">${this.escapeHtml(tokenShort)}</code></td>
+          <td><code>${this.escapeHtml(s.mac_address || '-')}</code></td>
+          <td><code>${this.escapeHtml(s.previous_mac || '-')}</code></td>
+          <td>${this.escapeHtml(s.username || '-')}</td>
+          <td>${this.escapeHtml(s.hotspot_server || '-')}</td>
+          <td><span class="${badgeClass}">${this.escapeHtml(status)}</span></td>
+          <td>${remaining}</td>
+          <td>${s.is_online ? 'Yes' : 'No'}</td>
+          <td>${this.escapeHtml(s.first_seen || '-')}</td>
+          <td>${this.escapeHtml(s.last_seen || '-')}</td>
+          <td>
+            <button class="btn btn-danger btn-sm" onclick="App.revokeDeviceSession(${this.selectedRouterId}, ${s.id})">Revoke</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
   },
 
   formatSecondsToHMS(secs) {

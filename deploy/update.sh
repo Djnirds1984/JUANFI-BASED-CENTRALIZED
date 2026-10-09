@@ -38,9 +38,15 @@ cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
 cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
 # Portal files (login/status/logout pages + assets/js). These are edited in the
 # repo, so they must be redeployed on update too.
+#
+# NOTE: dashboard portal Save writes directly to $APP_DIR/hotspot on disk, so we
+# back up the existing folder and copy repo files OVER it (without deleting) to
+# avoid wiping any edits that were made through the UI but not committed.
 if [ -d "$SCRIPT_DIR/hotspot" ]; then
-    rm -rf "$APP_DIR/hotspot"
-    cp -r "$SCRIPT_DIR/hotspot" "$APP_DIR/"
+    if [ -d "$APP_DIR/hotspot" ]; then
+        cp -r "$APP_DIR/hotspot" "$APP_DIR/hotspot.bak-$(date +%Y%m%d-%H%M%S)"
+    fi
+    cp -r "$SCRIPT_DIR/hotspot/." "$APP_DIR/hotspot/" 2>/dev/null || cp -r "$SCRIPT_DIR/hotspot" "$APP_DIR/hotspot"
 fi
 cd "$APP_DIR"
 npm install --production

@@ -100,11 +100,36 @@ export function initializeDatabase(): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS active_devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      mac_address TEXT NOT NULL DEFAULT '',
+      ip_address TEXT NOT NULL DEFAULT '',
+      hostname TEXT NOT NULL DEFAULT '',
+      user TEXT NOT NULL DEFAULT '',
+      server TEXT NOT NULL DEFAULT '',
+      login_by TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      uptime TEXT NOT NULL DEFAULT '',
+      session_time_left TEXT NOT NULL DEFAULT '',
+      bytes_in INTEGER NOT NULL DEFAULT 0,
+      bytes_out INTEGER NOT NULL DEFAULT 0,
+      rx_rate TEXT NOT NULL DEFAULT '0 bps',
+      tx_rate TEXT NOT NULL DEFAULT '0 bps',
+      mikrotik_active_id TEXT NOT NULL DEFAULT '',
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT,
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
     CREATE INDEX IF NOT EXISTS idx_monitoring_logs_router ON monitoring_logs(router_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_logs_recorded ON monitoring_logs(recorded_at);
+    CREATE INDEX IF NOT EXISTS idx_active_devices_router ON active_devices(router_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_active_devices_mac ON active_devices(router_id, mac_address) WHERE mac_address <> '';
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

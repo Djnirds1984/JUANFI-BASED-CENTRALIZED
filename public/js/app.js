@@ -763,8 +763,7 @@ const App = {
     this.clearHotspotPollers();
 
     try {
-      const connections = await api.getActiveConnections(this.selectedRouterId);
-      const devices = this.mapActiveDevices(connections);
+      const devices = this.mapActiveDevices(await api.getActiveDevices(this.selectedRouterId));
 
       container.innerHTML = `
         <div class="table-wrapper">
@@ -776,12 +775,14 @@ const App = {
                 <th>Hostname</th>
                 <th>User</th>
                 <th>Server</th>
+                <th>Status</th>
                 <th>Uptime</th>
                 <th>Session Time Left</th>
                 <th>RX Rate</th>
                 <th>TX Rate</th>
                 <th>Bytes In</th>
                 <th>Bytes Out</th>
+                <th>Last Seen</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -794,8 +795,8 @@ const App = {
 
       this._activeInterval = setInterval(async () => {
         try {
-          const freshConnections = await api.getActiveConnections(this.selectedRouterId);
-          this.refreshActiveDeviceRows(this.mapActiveDevices(freshConnections));
+          const freshDevices = this.mapActiveDevices(await api.getActiveDevices(this.selectedRouterId));
+          this.refreshActiveDeviceRows(freshDevices);
         } catch (err) {
           console.error('Failed to refresh active devices:', err);
         }
@@ -805,8 +806,9 @@ const App = {
     }
   },
 
-  mapActiveDevices(connections) {
-    return (connections || []).map((conn) => ({
+  mapActiveDevices(devices) {
+    return (devices || []).map((conn) => ({
+      id: conn.id || '',
       '.id': conn['.id'] || '',
       user: conn.user || '',
       address: conn.address || '',
@@ -814,12 +816,16 @@ const App = {
       'host-name': conn.hostname || conn['host-name'] || '-',
       server: conn.server || '',
       uptime: conn.uptime || '',
+      'is-active': conn['is-active'] === true,
       'session-time-left': conn['session-time-left'] || '',
       'bytes-in': conn['bytes-in'] || '0',
       'bytes-out': conn['bytes-out'] || '0',
       'rx-rate': conn['rx-rate'] || '0 bps',
       'tx-rate': conn['tx-rate'] || '0 bps',
-      'login-by': conn['login-by'] || ''
+      'login-by': conn['login-by'] || '',
+      'first-seen': conn['first-seen'] || '',
+      'last-seen': conn['last-seen'] || '',
+      'ended-at': conn['ended-at'] || ''
     }));
   },
 
@@ -841,37 +847,55 @@ const App = {
 
   renderActiveDeviceRows(devices) {
     if (!devices || devices.length === 0) {
-      return '<tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:2rem">No active devices found.</td></tr>';
+      return '<tr><td colspan="14" style="text-align:center;color:var(--text-muted);padding:2rem">No active devices recorded yet.</td></tr>';
     }
 
     return devices.map((d) => {
+      const isActive = d['is-active'] === true;
       const totalSeconds = this.parseTimeToSeconds(d['session-time-left'] || '');
       const rxRate = d['rx-rate'] || '0 bps';
       const txRate = d['tx-rate'] || '0 bps';
 
       let countdownClass = '';
-      if (totalSeconds !== Infinity && totalSeconds > 0) {
+      if (isActive && totalSeconds !== Infinity && totalSeconds > 0) {
         if (totalSeconds <= 60) countdownClass = 'countdown-critical';
         else if (totalSeconds <= 300) countdownClass = 'countdown-warning';
       }
 
-      return `
-        <tr data-active-id="${this.escapeHtml(d['.id'] || '')}">
-          <td><code>${this.escapeHtml(d['mac-address'] || '')}</code></td>
-          <td>${this.escapeHtml(d.address || '')}</td>
-          <td>${this.escapeHtml(d['host-name'] || '-')}</td>
-          <td>${this.escapeHtml(d.user || '-')}</td>
-          <td>${this.escapeHtml(d.server || '-')}</td>
-          <td>${this.escapeHtml(d.uptime || '-')}</td>
-          <td>
+      const sessionCell = isActive
+        ? `
             <div class="session-countdown ${countdownClass}">
               <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
               <div class="countdown-bar">
                 <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
               </div>
             </div>
-          </td>
-          <td>
+          `
+        : '<span data-field="session" style="color:var(--text-muted)">Session ended</span>';
+
+      const statusCell = isActive
+        ? '<span class="device-status device-status-active">Active</span>'
+        : '<span class="device-status device-status-offline">Offline</span>';
+
+      const actions = isActive
+        ? (d['.id']
+          ? `<button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${d['.id']}', '${this.escapeHtml(d.user || d.address)}')">Disconnect</button>`
+          : '')
+        : `<button class="btn btn-sm btn-outline" onclick="App.removeStoredActiveDevice(${parseInt(d.id, 10) || 0}, '${this.escapeHtml(d['mac-address'] || d.address || 'device')}')">Remove</button>`;
+
+      const muted = isActive ? '' : ' style="opacity:.6"';
+
+      return `
+        <tr data-active-id="${this.escapeHtml(String(d.id ?? ''))}" data-active="${isActive ? '1' : '0'}">
+          <td><code>${this.escapeHtml(d['mac-address'] || '')}</code></td>
+          <td>${this.escapeHtml(d.address || '')}</td>
+          <td>${this.escapeHtml(d['host-name'] || '-')}</td>
+          <td>${this.escapeHtml(d.user || '-')}</td>
+          <td>${this.escapeHtml(d.server || '-')}</td>
+          <td>${statusCell}</td>
+          <td data-field="uptime">${this.escapeHtml(d.uptime || '-')}</td>
+          <td>${sessionCell}</td>
+          <td${muted}>
             <div class="rate-indicator">
               <span class="rate-value" data-rate="rx">${this.escapeHtml(rxRate)}</span>
               <div class="rate-bar">
@@ -879,7 +903,7 @@ const App = {
               </div>
             </div>
           </td>
-          <td>
+          <td${muted}>
             <div class="rate-indicator">
               <span class="rate-value" data-rate="tx">${this.escapeHtml(txRate)}</span>
               <div class="rate-bar">
@@ -889,9 +913,8 @@ const App = {
           </td>
           <td data-field="bytes-in">${this.formatBytes(parseInt(d['bytes-in'] || '0', 10) || 0)}</td>
           <td data-field="bytes-out">${this.formatBytes(parseInt(d['bytes-out'] || '0', 10) || 0)}</td>
-          <td>
-            ${d['.id'] ? `<button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${d['.id']}', '${this.escapeHtml(d.user || d.address)}')">Disconnect</button>` : ''}
-          </td>
+          <td data-field="last-seen">${this.escapeHtml(d['last-seen'] || '-')}</td>
+          <td>${actions}</td>
         </tr>
       `;
     }).join('');
@@ -902,10 +925,13 @@ const App = {
     if (!tbody) return;
 
     const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
-    const freshIds = devices.map((d) => d['.id']).join('|');
-    const liveIds = rows.map((r) => r.dataset.activeId).join('|');
+    const rowKey = (d) => `${d.id}:${d['is-active'] ? 1 : 0}`;
+    const domKey = (r) => `${r.dataset.activeId}:${r.dataset.active}`;
 
-    if (freshIds !== liveIds) {
+    const freshKeys = devices.map(rowKey).join('|');
+    const liveKeys = rows.map(domKey).join('|');
+
+    if (freshKeys !== liveKeys) {
       tbody.innerHTML = this.renderActiveDeviceRows(devices);
       return;
     }
@@ -913,6 +939,15 @@ const App = {
     rows.forEach((row, index) => {
       const device = devices[index];
       if (!device) return;
+
+      const uptime = row.querySelector('[data-field="uptime"]');
+      if (uptime) uptime.textContent = device.uptime || '-';
+
+      const lastSeen = row.querySelector('[data-field="last-seen"]');
+      if (lastSeen) lastSeen.textContent = device['last-seen'] || '-';
+
+      // Ended sessions keep their stored values - only live ones animate.
+      if (device['is-active'] !== true) return;
 
       const totalSeconds = this.parseTimeToSeconds(device['session-time-left'] || '');
 
@@ -941,6 +976,19 @@ const App = {
       const bytesOut = row.querySelector('[data-field="bytes-out"]');
       if (bytesOut) bytesOut.textContent = this.formatBytes(parseInt(device['bytes-out'] || '0', 10) || 0);
     });
+  },
+
+  async removeStoredActiveDevice(deviceId, label) {
+    if (!deviceId) return;
+    if (!confirm(`Remove "${label}" from the active devices list?`)) return;
+
+    try {
+      await api.deleteActiveDevice(this.selectedRouterId, deviceId);
+      this.toast('Device removed', 'success');
+      this.loadHotspotTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   updateRateCell(row, direction, rate) {

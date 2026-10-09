@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
+import { syncActiveDevices, listActiveDevices, deleteActiveDevice } from '../services/activeDevices';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
@@ -167,6 +168,53 @@ router.delete('/router/:routerId/active/:activeId', async (req: Request, res: Re
 
     await mikroTikService.removeActiveConnection(routerId, activeId);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Permanent active-device list: syncs the live MikroTik sessions (hostname/MAC
+// enriched from /ip/dhcp/server/lease) into the local database and returns every
+// device ever seen, so rows survive after a session ends.
+router.get('/router/:routerId/devices', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (mikroTikService.isConnected(routerId)) {
+      try {
+        const live = await mikroTikService.getActiveConnections(routerId);
+        syncActiveDevices(routerId, live);
+      } catch (syncError: any) {
+        console.error('Active devices sync error:', syncError.message);
+      }
+    } else {
+      // Router offline: keep stored rows as-is instead of marking everyone offline.
+      syncActiveDevices(routerId, null);
+    }
+
+    res.json(listActiveDevices(routerId));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/router/:routerId/devices/:deviceId', (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const deviceId = parseInt(req.params.deviceId);
+
+    if (!Number.isFinite(deviceId)) {
+      res.status(400).json({ error: 'Invalid device id' });
+      return;
+    }
+
+    const removed = deleteActiveDevice(routerId, deviceId);
+    if (!removed) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    res.json({ message: 'Device removed from active devices' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

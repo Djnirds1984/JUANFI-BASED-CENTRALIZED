@@ -408,23 +408,44 @@ class MikroTikService {
     }
 
     let hotspotHosts: any[] = [];
-    try {
-      if (config?.useRestApi) {
-        const result = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
-        hotspotHosts = Array.isArray(result) ? result : [];
-      } else {
-        const client = this.getClient(routerId);
-        hotspotHosts = await client.write('/ip/hotspot/host/print') as any[];
-      }
-    } catch (err) {
-      console.log(`Hotspot host query failed for router ${routerId}, continuing without host data`);
-    }
+    let dhcpLeases: any[] = [];
+    await Promise.all([
+      (async () => {
+        try {
+          if (config?.useRestApi) {
+            const result = await this.restApiCall(config, 'GET', '/ip/hotspot/host');
+            hotspotHosts = Array.isArray(result) ? result : [];
+          } else {
+            const client = this.getClient(routerId);
+            hotspotHosts = await client.write('/ip/hotspot/host/print') as any[];
+          }
+        } catch (err) {
+          console.log(`Hotspot host query failed for router ${routerId}, continuing without host data`);
+        }
+      })(),
+      (async () => {
+        try {
+          dhcpLeases = await this.getDhcpLeases(routerId);
+        } catch (err) {
+          console.log(`DHCP lease query failed for router ${routerId}, continuing without lease data`);
+        }
+      })(),
+    ]);
 
     const hostByIp = new Map<string, any>();
     for (const host of hotspotHosts) {
       if (host.address) {
         hostByIp.set(this.normalizeIp(host.address), host);
       }
+    }
+
+    const leaseByMac = new Map<string, any>();
+    const leaseByIp = new Map<string, any>();
+    for (const lease of dhcpLeases) {
+      const leaseMac = (lease['mac-address'] || '').toLowerCase();
+      const leaseIp = this.normalizeIp(lease.address || '');
+      if (leaseMac && !leaseByMac.has(leaseMac)) leaseByMac.set(leaseMac, lease);
+      if (leaseIp && !leaseByIp.has(leaseIp)) leaseByIp.set(leaseIp, lease);
     }
 
     const now = Date.now();
@@ -464,12 +485,22 @@ class MikroTikService {
       }
 
       const ipKey = this.normalizeIp(conn.address || '');
+      const lease = (conn.mac && leaseByMac.get(String(conn.mac).toLowerCase())) || leaseByIp.get(ipKey);
+      if (lease) {
+        if (!conn.mac && lease['mac-address']) {
+          conn.mac = lease['mac-address'];
+        }
+        if (!conn.hostname && lease['host-name']) {
+          conn.hostname = lease['host-name'];
+        }
+      }
+
       const host = ipKey ? hostByIp.get(ipKey) : undefined;
       if (host) {
         if (host['mac-address'] && !conn.mac) {
           conn.mac = host['mac-address'];
         }
-        if (host['host-name']) {
+        if (host['host-name'] && !conn.hostname) {
           conn.hostname = host['host-name'];
         }
       }

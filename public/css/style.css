@@ -1429,6 +1429,40 @@ tr:hover td {
   }
 }
 
+.device-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.device-status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.device-status-active {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.device-status-active::before {
+  animation: pulse 1s infinite;
+}
+
+.device-status-offline {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
 .voucher-status {
   display: flex;
   align-items: center;

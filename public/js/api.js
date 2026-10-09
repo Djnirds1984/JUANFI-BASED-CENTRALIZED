@@ -119,6 +119,14 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/active`);
   }
 
+  async getActiveDevices(routerId) {
+    return this.get(`/hotspot/router/${routerId}/devices`);
+  }
+
+  async deleteActiveDevice(routerId, deviceId) {
+    return this.delete(`/hotspot/router/${routerId}/devices/${deviceId}`);
+  }
+
   async removeActiveConnection(routerId, activeId) {
     return this.delete(`/hotspot/router/${routerId}/active/${activeId}`);
   }

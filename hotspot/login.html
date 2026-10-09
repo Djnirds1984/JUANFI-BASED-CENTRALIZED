@@ -729,6 +729,7 @@ body#loginBody {
 		<script src="assets/js/toast.min.js"></script>
 		<script src="assets/js/core.js"></script>
 		<script src="assets/js/eload.js"></script>
+		<script src="assets/js/session.js"></script>
 		<script>
 			var reLogin = getStorageValue('reLogin');
 			var hotspotAddress = "$(server-address)"; 
@@ -737,6 +738,44 @@ body#loginBody {
 				setStorageValue('reLogin', '0');
 				doLogin();
 			}
+
+			// --- Roaming restore: if this browser already owns a session token
+			// (possibly from another SSID, with a new MAC), silently log it back
+			// in with the remaining time restored. ---
+			(function () {
+				if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
+				var server = interfaceName || hotspotAddress || '';
+				JuanFiSession.ensureToken(mac, uIp, server).then(function () {
+					// Only attempt restore when the user is not already logged in
+					// (ImOnLogin === '1' means we are on the login page).
+					if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
+					JuanFiSession.restore(mac, uIp, server).then(function (res) {
+						if (!res || !res.restore || !res.username) return;
+						var remainingTxt = '';
+						if (typeof res.remaining === 'number' && res.remaining > 0 && typeof secondsToDhms === 'function') {
+							remainingTxt = ' - ' + secondsToDhms(res.remaining) + ' remaining';
+						}
+						if (typeof $.toast === 'function') {
+							$.toast({ title: 'Welcome back', content: 'Session restored' + remainingTxt, type: 'success', delay: 4000 });
+						}
+						// Log back in through the existing CHAP form using the stored credentials.
+						setTimeout(function () {
+							try {
+								setStorageValue('activeVoucher', res.username);
+								document.sendin.username.value = res.username;
+								if (loginOption == 0) {
+									document.sendin.password.value = hexMD5('$(chap-id)' + "" + '$(chap-challenge)');
+								} else {
+									document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
+								}
+								document.sendin.submit();
+							} catch (e) {
+								// If CHAP submit fails, leave the normal login form visible.
+							}
+						}, 400);
+					});
+				});
+			})();
 		</script>
 		<script>
 			function off() {

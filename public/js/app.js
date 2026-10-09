@@ -661,6 +661,7 @@ const App = {
         <div class="tabs">
           <button class="tab ${this.hotspotTab === 'hosts' ? 'active' : ''}" data-tab="hosts">Hosts</button>
           <button class="tab ${this.hotspotTab === 'active' ? 'active' : ''}" data-tab="active">Active Devices</button>
+          <button class="tab ${this.hotspotTab === 'sessions' ? 'active' : ''}" data-tab="sessions">Sessions</button>
         </div>
         <div id="hotspot-tab-content">Loading...</div>
       </div>
@@ -692,6 +693,8 @@ const App = {
     try {
       if (this.hotspotTab === 'active') {
         await this.loadHotspotActiveDevices(container);
+      } else if (this.hotspotTab === 'sessions') {
+        await this.loadHotspotSessions(container);
       } else {
         await this.loadHotspotHosts(container);
       }
@@ -803,6 +806,88 @@ const App = {
       }, 1000);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadHotspotSessions(container) {
+    if (!container) container = document.getElementById('hotspot-tab-content');
+    this.clearHotspotPollers();
+
+    try {
+      const sessions = await api.getDeviceSessions(this.selectedRouterId);
+
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No device session tokens issued yet.</p></div>';
+        return;
+      }
+
+      container.innerHTML = `
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Token</th>
+                <th>Current MAC</th>
+                <th>Previous MAC</th>
+                <th>User</th>
+                <th>SSID / Server</th>
+                <th>Status</th>
+                <th>Remaining</th>
+                <th>Online</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sessions.map((s) => {
+                const tokenShort = String(s.session_token || '').slice(0, 8) + '…';
+                const status = s.status || 'pending';
+                const remaining = this.formatSecondsToHMS(s.remaining_seconds || 0);
+                const badgeClass = s.is_online ? 'badge-online' : (status === 'expired' ? 'badge-expired' : 'badge-offline');
+                return `
+                  <tr>
+                    <td><code title="${this.escapeHtml(s.session_token || '')}">${this.escapeHtml(tokenShort)}</code></td>
+                    <td><code>${this.escapeHtml(s.mac_address || '-')}</code></td>
+                    <td><code>${this.escapeHtml(s.previous_mac || '-')}</code></td>
+                    <td>${this.escapeHtml(s.username || '-')}</td>
+                    <td>${this.escapeHtml(s.hotspot_server || '-')}</td>
+                    <td><span class="${badgeClass}">${this.escapeHtml(status)}</span></td>
+                    <td>${remaining}</td>
+                    <td>${s.is_online ? 'Yes' : 'No'}</td>
+                    <td>${this.escapeHtml(s.first_seen || '-')}</td>
+                    <td>${this.escapeHtml(s.last_seen || '-')}</td>
+                    <td>
+                      <button class="btn btn-danger btn-sm" onclick="App.revokeDeviceSession(${this.selectedRouterId}, ${s.id})">Revoke</button>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  formatSecondsToHMS(secs) {
+    const total = Math.max(0, Math.floor(Number(secs) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  },
+
+  async revokeDeviceSession(routerId, sessionId) {
+    if (!confirm('Revoke this device session token? The device will need to log in again on its next visit.')) return;
+    try {
+      await api.deleteDeviceSession(routerId, sessionId);
+      const container = document.getElementById('hotspot-tab-content');
+      await this.loadHotspotSessions(container);
+    } catch (err) {
+      alert('Failed to revoke session: ' + err.message);
     }
   },
 

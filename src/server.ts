@@ -9,6 +9,7 @@ import { config } from './config';
 import { initializeDatabase, closeDb } from './database';
 import { initializeAdmin } from './services/auth';
 import { startMonitoring, stopMonitoring, reconnectRouters } from './services/monitor';
+import { startActiveDeviceSync, stopActiveDeviceSync } from './services/activeDevices';
 import { mikroTikService } from './services/mikrotik';
 
 import authRoutes from './api/auth';
@@ -20,6 +21,7 @@ import portalRoutes from './api/portal';
 import subvendoRoutes from './api/subvendo';
 import nodemcuRoutes from './api/nodemcu';
 import interfaceRoutes from './api/interfaces';
+import sessionRoutes from './api/session';
 
 const app = express();
 const server = http.createServer(app);
@@ -48,6 +50,7 @@ app.use('/api/portal', portalRoutes);
 app.use('/api/subvendo', subvendoRoutes);
 app.use('/api/nodemcu', nodemcuRoutes);
 app.use('/api/interfaces', interfaceRoutes);
+app.use('/api/session', sessionRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -83,6 +86,9 @@ async function bootstrap(): Promise<void> {
     console.log('Starting monitoring scheduler...');
     startMonitoring(5);
 
+    console.log('Starting active devices sync...');
+    startActiveDeviceSync(config.activeDevicesSyncSec);
+
     server.listen(config.port, config.host, () => {
       console.log('');
       console.log('╔══════════════════════════════════════════════╗');
@@ -105,6 +111,7 @@ async function bootstrap(): Promise<void> {
 function shutdown(): void {
   console.log('\nShutting down...');
   stopMonitoring();
+  stopActiveDeviceSync();
   mikroTikService.disconnectAll();
   closeDb();
   server.close(() => {

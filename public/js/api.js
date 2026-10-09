@@ -179,6 +179,14 @@ class ApiClient {
     return this.delete(`/hotspot/router/${routerId}/walled-garden/${entryId}`);
   }
 
+  async getDeviceSessions(routerId) {
+    return this.get(`/hotspot/router/${routerId}/sessions`);
+  }
+
+  async deleteDeviceSession(routerId, sessionId) {
+    return this.delete(`/hotspot/router/${routerId}/sessions/${sessionId}`);
+  }
+
   async getHotspotCookie(routerId) {
     return this.get(`/hotspot/router/${routerId}/cookie`);
   }

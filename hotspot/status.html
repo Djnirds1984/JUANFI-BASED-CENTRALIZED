@@ -613,6 +613,32 @@ body::before {
 		<script src="assets/js/core.js"></script>
 		<script src="assets/js/eload.js"></script>
 		<script src="assets/js/pako.min.js"></script>
+		<script src="assets/js/session.js"></script>
+<script>
+	// Report pause / logout to the controller so the stored session freezes
+	// immediately (the background sync also handles this when the device
+	// disappears from the live list, but this makes it instant).
+	(function () {
+		if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
+
+		if (typeof pause === 'function') {
+			var __origPause = pause;
+			window.pause = function () {
+				try { JuanFiSession.reportState('pause'); } catch (e) {}
+				return __origPause.apply(this, arguments);
+			};
+		}
+
+		['logout', 'forcelogout'].forEach(function (formName) {
+			var form = document.forms && document.forms[formName];
+			if (form) {
+				form.addEventListener('submit', function () {
+					try { JuanFiSession.reportState('logout'); } catch (e) {}
+				});
+			}
+		});
+	})();
+</script>
 
 		<script>
 			var sessiontime = "$(session-time-left-secs)";
@@ -628,6 +654,12 @@ body::before {
 				}, 1000);
 				
 				setStorageValue('activeVoucher', currentVoucher);
+				
+				// --- Bind this live session to the permanent device token so a roam
+				// to another SSID can restore it. ---
+				if (typeof JuanFiSession !== 'undefined' && JuanFiSession.isConfigured()) {
+					JuanFiSession.bind(mac, currentVoucher, interfaceName || hotspotAddress, sessiontime);
+				}
 				
 				var time = sessiontime;
 				if(time == "0"){

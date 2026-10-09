@@ -61,3 +61,9 @@ var disableVoucherInput = false;
 var macAsVoucherCode = false;
 
 var qrCodeVoucherPurchase = false;
+
+// JuanFi centralized roaming session token support.
+// URL of this controller as seen from the hotspot LAN (must be walled-garden allowed).
+var controllerApiUrl = "http://10.0.0.243:3000/api";
+// First-party cookie holding the permanent per-device session token (no expiry).
+var sessionCookieName = "juanfi_sid";

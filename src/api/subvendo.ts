@@ -35,6 +35,8 @@ interface SubVendoConfig {
   disableVoucherInput: boolean;
   macAsVoucherCode: boolean;
   qrCodeVoucherPurchase: boolean;
+  controllerApiUrl: string;
+  sessionCookieName: string;
 }
 
 function parseConfigJs(content: string): SubVendoConfig {
@@ -110,6 +112,8 @@ function parseConfigJs(content: string): SubVendoConfig {
     disableVoucherInput: getBool('disableVoucherInput'),
     macAsVoucherCode: getBool('macAsVoucherCode'),
     qrCodeVoucherPurchase: getBool('qrCodeVoucherPurchase'),
+    controllerApiUrl: getStr('controllerApiUrl'),
+    sessionCookieName: getStr('sessionCookieName'),
   };
 }
 
@@ -170,6 +174,10 @@ var disableVoucherInput = ${config.disableVoucherInput};
 var macAsVoucherCode = ${config.macAsVoucherCode};
 
 var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
+
+// JuanFi centralized roaming session token support.
+var controllerApiUrl = "${config.controllerApiUrl || ''}";
+var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 `;
 }
 

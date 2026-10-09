@@ -1,4 +1,6 @@
 import { getDb } from '../database';
+import { mikroTikService } from './mikrotik';
+import { syncSessionsWithDevices } from './deviceSessions';
 
 /**
  * Persistent store for hotspot active devices.
@@ -172,5 +174,107 @@ export function deleteActiveDevice(routerId: number, deviceId: number): boolean 
   const db = getDb();
   const info = db.prepare('DELETE FROM active_devices WHERE id = ? AND router_id = ?').run(deviceId, routerId);
   return info.changes > 0;
+}
+
+
+// ---------------------------------------------------------------------------
+// Background sync
+//
+// Keeps `active_devices` up to date even when nobody has the Active Devices
+// tab open, so sessions that start and end between UI polls are still recorded.
+// Routers that are not connected are skipped: their rows keep their last known
+// status instead of being wrongly flagged offline.
+// ---------------------------------------------------------------------------
+
+let syncInterval: NodeJS.Timeout | null = null;
+let syncInFlight = false;
+
+/*
+ * Pre-login the portal pages call the controller (POST /api/session/*), so the
+ * controller IP must be allowed in each router's IP > Hotspot > Walled Garden
+ * before authentication. This makes that idempotent - it only adds the entry
+ * when it is missing, and is done at most once per router per process run.
+ */
+const walledGardenChecked = new Set<number>();
+
+export async function ensureWalledGardenForController(routerId: number): Promise<void> {
+  if (walledGardenChecked.has(routerId)) return;
+  walledGardenChecked.add(routerId);
+
+  const lanIp = process.env.CONTROLLER_LAN_IP ? process.env.CONTROLLER_LAN_IP.trim() : '';
+  if (!lanIp) return;
+
+  try {
+    const entries = await mikroTikService.getWalledGarden(routerId);
+    const exists = (Array.isArray(entries) ? entries : []).some((entry: any) => {
+      const dstHost = String(entry['dst-host'] || '');
+      const dstAddr = String(entry['dst-address'] || '');
+      return dstHost === lanIp || dstAddr.split('/')[0] === lanIp;
+    });
+
+    if (!exists) {
+      await mikroTikService.createWalledGarden(routerId, {
+        'dst-host': lanIp,
+        action: 'accept',
+        comment: 'JuanFi controller (session tokens)',
+      });
+      console.log(`Walled garden entry added for controller ${lanIp} on router ${routerId}`);
+    }
+  } catch (err) {
+    // Non-fatal: the token restore simply won't work until the entry is added
+    // manually; log once so it can be diagnosed.
+    walledGardenChecked.delete(routerId);
+    console.error(`Walled garden check failed for router ${routerId}:`, (err as Error).message);
+  }
+}
+
+export async function syncActiveDevicesOnce(): Promise<void> {
+  const db = getDb();
+  const routers = db.prepare('SELECT id FROM routers WHERE is_active = 1').all() as any[];
+
+  for (const router of routers) {
+    if (!mikroTikService.isConnected(router.id)) continue;
+
+    try {
+      await ensureWalledGardenForController(router.id);
+    } catch (err) {
+      // ignore - handled inside
+    }
+
+    try {
+      const live = await mikroTikService.getActiveConnections(router.id);
+      syncActiveDevices(router.id, live);
+      syncSessionsWithDevices(router.id, live);
+    } catch (err) {
+      console.error(`Active devices sync failed for router ${router.id}:`, (err as Error).message);
+    }
+  }
+}
+
+export function startActiveDeviceSync(intervalSeconds?: number): void {
+  stopActiveDeviceSync();
+
+  const seconds = Math.max(1, intervalSeconds || 5);
+  console.log(`Starting active devices sync (every ${seconds}s)`);
+
+  syncActiveDevicesOnce().catch((err) => console.error('Initial active devices sync failed:', err.message));
+
+  syncInterval = setInterval(() => {
+    if (syncInFlight) return; // previous pass still running - skip this tick
+    syncInFlight = true;
+    syncActiveDevicesOnce()
+      .catch((err) => console.error('Active devices sync failed:', err.message))
+      .finally(() => {
+        syncInFlight = false;
+      });
+  }, seconds * 1000);
+}
+
+export function stopActiveDeviceSync(): void {
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
+  syncInFlight = false;
 }
 

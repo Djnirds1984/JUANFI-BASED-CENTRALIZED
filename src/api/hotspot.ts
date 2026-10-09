@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { syncActiveDevices, listActiveDevices, deleteActiveDevice } from '../services/activeDevices';
+import { syncSessionsWithDevices, listSessions, deleteSession } from '../services/deviceSessions';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
@@ -184,6 +185,7 @@ router.get('/router/:routerId/devices', async (req: Request, res: Response) => {
       try {
         const live = await mikroTikService.getActiveConnections(routerId);
         syncActiveDevices(routerId, live);
+        syncSessionsWithDevices(routerId, live);
       } catch (syncError: any) {
         console.error('Active devices sync error:', syncError.message);
       }
@@ -215,6 +217,38 @@ router.delete('/router/:routerId/devices/:deviceId', (req: Request, res: Respons
     }
 
     res.json({ message: 'Device removed from active devices' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Device session tokens (roaming)
+// ---------------------------------------------------------------------------
+
+// Admin listing of every issued session token for a router.
+router.get('/router/:routerId/sessions', (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    res.json(listSessions(routerId));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Revoke a token so the device gets a fresh session on its next visit.
+router.delete('/router/:routerId/sessions/:sessionId', (req: Request, res: Response) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId);
+    if (!Number.isFinite(sessionId)) {
+      res.status(400).json({ error: 'Invalid session id' });
+      return;
+    }
+    if (!deleteSession(sessionId)) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.json({ message: 'Session token revoked' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

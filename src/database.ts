@@ -123,6 +123,39 @@ export function initializeDatabase(): void {
       FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS device_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_token TEXT NOT NULL UNIQUE,
+      mac_address TEXT NOT NULL DEFAULT '',
+      previous_mac TEXT,
+      username TEXT NOT NULL DEFAULT '',
+      password TEXT,
+      profile TEXT,
+      router_id INTEGER NOT NULL DEFAULT 1,
+      hotspot_server TEXT NOT NULL DEFAULT '',
+      total_seconds INTEGER NOT NULL DEFAULT 0,
+      remaining_seconds INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      is_online INTEGER NOT NULL DEFAULT 0,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_rebind_at TEXT,
+      expires_at TEXT
+      -- No FK on router_id: the portal can't know the controller's router id
+      -- and defaults to 1; router_id is only used for admin grouping.
+    );
+
+    CREATE TABLE IF NOT EXISTS session_bindings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      old_mac TEXT NOT NULL DEFAULT '',
+      new_mac TEXT NOT NULL DEFAULT '',
+      hotspot_server TEXT NOT NULL DEFAULT '',
+      reason TEXT NOT NULL DEFAULT 'login',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES device_sessions(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
@@ -130,6 +163,9 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_monitoring_logs_recorded ON monitoring_logs(recorded_at);
     CREATE INDEX IF NOT EXISTS idx_active_devices_router ON active_devices(router_id, status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_active_devices_mac ON active_devices(router_id, mac_address) WHERE mac_address <> '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_device_sessions_mac ON device_sessions(router_id, mac_address) WHERE mac_address <> '';
+    CREATE INDEX IF NOT EXISTS idx_device_sessions_username ON device_sessions(username);
+    CREATE INDEX IF NOT EXISTS idx_session_bindings_session ON session_bindings(session_id);
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

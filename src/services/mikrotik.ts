@@ -58,6 +58,7 @@ class MikroTikService {
   private reconnectAttempts: Map<number, number> = new Map();
   private hasFlashCache: Map<number, boolean> = new Map();
   private rateHistory: Map<string, { bytesIn: number; bytesOut: number; timestamp: number }> = new Map();
+  private lastActiveCount: Map<number, number> = new Map();
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY = 5000;
 
@@ -402,9 +403,14 @@ class MikroTikService {
       }
     }
 
-    console.log(`[getActiveConnections] Router ${routerId}: ${connections.length} active connections`);
-    if (connections.length > 0) {
-      console.log(`[getActiveConnections] Sample connection:`, JSON.stringify(connections[0], null, 2));
+    // Log only when the active session count changes (this runs on a timer too,
+    // so logging every call would flood the log).
+    if (this.lastActiveCount.get(routerId) !== connections.length) {
+      this.lastActiveCount.set(routerId, connections.length);
+      console.log(`[getActiveConnections] Router ${routerId}: ${connections.length} active connections`);
+      if (connections.length > 0 && process.env.LOG_LEVEL === 'debug') {
+        console.log(`[getActiveConnections] Sample connection:`, JSON.stringify(connections[0], null, 2));
+      }
     }
 
     let hotspotHosts: any[] = [];
@@ -513,6 +519,55 @@ class MikroTikService {
     }
 
     return connections as ActiveConnection[];
+  }
+
+  /**
+   * Set `limit-uptime` on a hotspot user so a restored (roamed) session starts
+   * with exactly the remaining time we tracked for it. Returns false when the
+   * user does not exist on the router.
+   */
+  async setUserUptimeLimit(routerId: number, username: string, limitUptime: string): Promise<boolean> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const users = await this.restApiCall(config, 'GET', `/ip/hotspot/user?name=${encodeURIComponent(username)}`);
+      const user = Array.isArray(users) ? users.find((u: any) => u.name === username) : null;
+      if (!user || !user['.id']) return false;
+      await this.restApiCall(config, 'PATCH', `/ip/hotspot/user/${user['.id']}`, { 'limit-uptime': limitUptime });
+      return true;
+    }
+
+    const client = this.getClient(routerId);
+    const users = await client.write('/ip/hotspot/user/print', [`=?name=${username}`]) as any[];
+    const user = Array.isArray(users) && users.length > 0 ? users[0] : null;
+    if (!user || !user['.id']) return false;
+    await client.write('/ip/hotspot/user/set', [`=.id=${user['.id']}`, `=limit-uptime=${limitUptime}`]);
+    return true;
+  }
+
+  /**
+   * Disconnect a live hotspot session matching the given MAC and/or username.
+   * Used before a roam-restore so `shared-users=1` does not reject the new login.
+   */
+  async kickActiveSession(routerId: number, opts: { mac?: string; username?: string }): Promise<boolean> {
+    const connections = await this.getActiveConnections(routerId);
+    const mac = (opts.mac || '').toLowerCase();
+    const username = opts.username || '';
+
+    for (const conn of connections) {
+      const connMac = String(conn.mac || '').toLowerCase();
+      const connUser = String(conn.user || '');
+      if ((mac && connMac === mac) || (username && connUser === username)) {
+        try {
+          await this.removeActiveConnection(routerId, conn['.id']);
+          console.log(`kickActiveSession: removed ${connUser || connMac} on router ${routerId}`);
+          return true;
+        } catch (err) {
+          console.error(`kickActiveSession failed for router ${routerId}:`, (err as Error).message);
+        }
+      }
+    }
+    return false;
   }
 
   private formatRate(bitsPerSecond: number): string {

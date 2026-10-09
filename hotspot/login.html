@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="assets/css/bootstrap.min.css">
 	<link rel="stylesheet" href="assets/css/toast.min.css">
 	<link rel="stylesheet" href="assets/css/core.css">
-	
+
 <style>
 body {
   background: linear-gradient(180deg, #0d3b2e 0%, #1e5c47 50%, #0d3b2e 100%);
@@ -136,7 +136,7 @@ body::before {
     <script src="assets/js/md5.js"></script>
 	<script src="assets/js/pako.min.js"></script>
 	<script src="assets/js/qrcode.min.js"></script>
-	
+
 <style>
 :root {
 	--primary-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
@@ -400,7 +400,7 @@ body#loginBody {
 				}
 				var minutes = parseInt(tempValidity);
 				var expireDate = new Date(currentExpireDate.getTime() + minutes*60000);
-				
+
 				var currentDate = new Date();
 				if(expireDate.getTime() < currentDate.getTime()){
 					removeStorageValue(vc+"validity");
@@ -409,7 +409,7 @@ body#loginBody {
 					setStorageValue(vc+"validity", expireDate.getTime()+"");
 					removeStorageValue(vc+"tempValidity");
 				}
-				
+
 			}
             document.sendin.username.value = vc;
 			if(loginOption == 0){
@@ -421,7 +421,7 @@ body#loginBody {
             return false;
         }
     </script>
-	
+
 	<script type="text/javascript" src="assets/js/md5.js"></script>
 	<script type="text/javascript">
 	<!--
@@ -450,7 +450,7 @@ body#loginBody {
 							<div class="brand-img-container">
 								<img src="assets/MainPic.PNG" class="img-fluid rounded" alt="Aircoins Logo" />
 							</div>
-							
+
 							<div class="info">
 								<div class="d-flex align-items-center justify-content-center mb-1">
 									<img src="assets/img/ip.png" width="18px" height="18px" class="mr-2" />
@@ -461,12 +461,12 @@ body#loginBody {
 									<span>$(mac)</span>
 								</div>
 							</div>
-							
+
 							<div class="mb-4">
 								<span class="status-badge">Status: <span class="blinking1 text-danger font-weight-bold">Disconnected</span></span>
 							</div>
 						</div>
-						
+
 						<div class="col-sm-7">
 							<div class="login">
 								<div id="vendoSelectDiv" class="form-group">
@@ -474,15 +474,15 @@ body#loginBody {
 									<select class="form-control" name="vendoSelected" id="vendoSelected">
 									</select>
 								</div>
-								
+
 								<button type="button" id="insertBtn" onclick="insertBtnAction(); return false" class="btn btn-success btn-block" data-toggle="modal">INSERT COIN</button>
 								<div class="mt-3"></div>
-								
+
 								<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn portal-btn mb-3">PROMO RATES</button>
 								<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn portal-btn mb-3">CHARGING STATION</button>
 								<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn portal-btn mb-3">E-LOAD</button>
 								<button type="button" id="memberLoginBtn" class="btn portal-btn mb-3" data-toggle="modal" data-target="#memberModal">MEMBER LOGIN</button>
-									
+
 								<div class="form-group mt-4">
 									<span class="form-text voucher-section-label mb-1">VOUCHER CODE</span>
 									<input type="voucher" class="form-control" id="voucherInput" aria-describedby="voucherHelp" placeholder="Enter voucher code..">
@@ -494,7 +494,7 @@ body#loginBody {
 						</div>
 					</div>
 				</div>
-				
+
 				<!-- Modals & Hidden Elements -->
 				<div class="modal fade" id="insertCoinModal" style="z-index: 1500" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-labelledby="insertCoinModalTitle" aria-hidden="true">
 				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
@@ -515,7 +515,7 @@ body#loginBody {
 									<h4 id="noticeText" class="text-secondary font-weight-bold">Reading coin, please wait</h4>
 								</center>
 							</div>
-							
+
 							<div class="inscoin">
 							<center>
 							<div class="inscoinholder vcCodeHolder" id="vcCodeDiv">
@@ -526,26 +526,26 @@ body#loginBody {
 							</div>
 
 							<div class="inscoinholder convertVoucherBlock" id="convertVoucherBlockDiv">
-								<span style="color: #94a3b8; font-size: 13px;">Convert unused voucher</span><br>
+							<span style="color: #94a3b8; font-size: 13px;">Convert unused voucher</span><br>
 							<input type="text" class="form-control mt-2 mb-2 mx-auto" id="convertVoucherCode" placeholder="Enter voucher" style="width: 180px; text-align: center;">
 							<button type="button" id="convertBtn" class="btn btn-success btn-sm px-4" onclick="convertVoucherAction(); return false">Convert</button>
 							</div>
-							
+
 							<div class="inscoinholder">
 							<span id="totalCoin" style="font-size: 24px; font-weight: bold; color: #fff">0</span><span style="font-size: 24px; font-weight: bold; color: #fff">.00 Php</span><br>
 							<span style="color: #94a3b8; font-size: 13px;">Coin</span>
 							</div>
-							
+
 							<div class="inscoinholder" id="totalTimeDiv">
 							<span id="totalTime" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
 							<span style="color: #94a3b8; font-size: 13px;">Time: </span>
 							</div>
-							
+
 							<div class="inscoinholder" id="expectedCoinDiv" style="display: none">
 							<span id="expectedCoin" style="font-size: 20px; font-weight: bold; color: #fff"></span><br>
 							<span style="color: #94a3b8; font-size: 13px;">Expected Coin </span>
 							</div>
-							
+
 							</center>
 							</div>
 					  </div>
@@ -558,7 +558,7 @@ body#loginBody {
 					</div>
 				  </div>
 				</div>
-				
+
 				<div class="modal fade" id="promoRatesModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
 				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
 					<div class="modal-content">
@@ -579,9 +579,9 @@ body#loginBody {
 							</div>
 						</center>
 						<br/>
-						<center>	
+						<center>
 						<div id="ratesBody"></div>
-						<div id="totalTime"></div>							
+						<div id="totalTime"></div>
 						</center>
 					  </div>
 					  <div class="modal-footer bg-light">
@@ -590,7 +590,7 @@ body#loginBody {
 					</div>
 				  </div>
 				</div>
-				
+
 				<div class="modal fade" id="chargingModal" tabindex="1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true" data-backdrop="static" data-keyboard="false">
 				  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
 					<div class="modal-content">
@@ -601,7 +601,7 @@ body#loginBody {
 						</button>
 					  </div>
 					  <div class="modal-body">
-						<center>	
+						<center>
 						<div id="chargingBody"></div>
 						</center>
 					  </div>
@@ -622,7 +622,7 @@ body#loginBody {
 						</button>
 					  </div>
 					  <div class="modal-body">
-						<center>	
+						<center>
 						<div id="eloadingBody">
 							<h4 id="eloadConfirm" style="display: none" class="mb-3"><span style="color: #2e86de; font-weight: bold;">CONFIRM YOUR SELECTED DETAILS</span></h4>
 							<div id="mobileNumDiv" class="input-bottom-space-20px text-left">
@@ -643,7 +643,7 @@ body#loginBody {
 							</div>
 							<br/>
 							<h5 id="eloadConfirm2" style="display: none;" class="input-bottom-space-20px bg-light p-3 rounded text-left border">
-								<span style="color: #334155; font-size: 14px;">Please make sure to insert the exact amount 
+								<span style="color: #334155; font-size: 14px;">Please make sure to insert the exact amount
 									<ul class="text-secondary mt-2 mb-0" style="font-size: 13px;">
 										<li>In case there's an excess amount or amount is insufficient, it will be converted to a voucher code and you can use it for your next e-Loading or you can use it on internet service.</li>
 									</ul>
@@ -681,7 +681,7 @@ body#loginBody {
 					  </div>
 					</div>
 				</div>
-		
+
 				<div class="modal fade" id="memberModal" role="dialog" data-backdrop="static" data-keyboard="false">
 					<div class="modal-dialog modal-dialog-centered">
 					<div class="modal-content">
@@ -718,11 +718,11 @@ body#loginBody {
 				<div class="footer">
 					<span class="footers">
 					Powered by: <a href="https://www.facebook.com/groups/1172413279934139">JuanFi System v4.1</a> &copy; All rights reserved 2022
-					</span>				
+					</span>
 				</div>
             </div>
         </div>
-			
+
 		<script src="assets/js/jquery.min.js"></script>
 		<script src="assets/js/popper.min.js"></script>
 		<script src="assets/js/bootstrap.min.js"></script>
@@ -732,63 +732,73 @@ body#loginBody {
 		<script src="assets/js/session.js"></script>
 		<script>
 			var reLogin = getStorageValue('reLogin');
-			var hotspotAddress = "$(server-address)"; 
+			var hotspotAddress = "$(server-address)";
 			var interfaceName = "$(interface-name)";
-			if(reLogin == '1'){
-				setStorageValue('reLogin', '0');
-				doLogin();
-			}
 
-			// --- Roaming restore: if this browser already owns a session token
-			// (possibly from another SSID, with a new MAC), silently log it back
-			// in with the remaining time restored. ---
-			(function () {
-				if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
-				var server = interfaceName || hotspotAddress || '';
-				if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
-				function doRestore() {
-					return JuanFiSession.restore(mac, uIp, server).then(function (res) {
-						if (!res || !res.restore || !res.username) return false;
-						var remainingTxt = '';
-						if (typeof res.remaining === 'number' && res.remaining > 0 && typeof secondsToDhms === 'function') {
-							remainingTxt = ' - ' + secondsToDhms(res.remaining) + ' remaining';
-						}
-						if (typeof $ !== 'undefined' && typeof $.toast === 'function') {
-							$.toast({ title: 'Welcome back', content: 'Session restored' + remainingTxt, type: 'success', delay: 4000 });
-						}
-						setTimeout(function () {
-							try {
-								setStorageValue('activeVoucher', res.username);
-								document.sendin.username.value = res.username;
-								if (loginOption == 0) {
-									document.sendin.password.value = hexMD5('$(chap-id)' + '' + '$(chap-challenge)');
-								} else {
-									document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
+			// Wait for DOM to fully load before executing session restoration
+			// This ensures the backend API has time to process the MAC address
+			// and respond with the token, fixing issues with devices roaming between SSIDs
+			window.addEventListener('load', function() {
+				// Short delay to ensure all async operations are complete
+				setTimeout(function() {
+					if(reLogin == '1'){
+						setStorageValue('reLogin', '0');
+						doLogin();
+						return;
+					}
+
+					// --- Roaming restore: if this browser already owns a session token
+					// (possibly from another SSID, with a new MAC), silently log it back
+					// in with the remaining time restored. ---
+					(function () {
+						if (typeof JuanFiSession === 'undefined' || !JuanFiSession.isConfigured()) return;
+						var server = interfaceName || hotspotAddress || '';
+						if (typeof ImOnStatus !== 'undefined' && ImOnStatus === '1') return;
+						function doRestore() {
+							return JuanFiSession.restore(mac, uIp, server).then(function (res) {
+								if (!res || !res.restore || !res.username) return false;
+								var remainingTxt = '';
+								if (typeof res.remaining === 'number' && res.remaining > 0 && typeof secondsToDhms === 'function') {
+									remainingTxt = ' - ' + secondsToDhms(res.remaining) + ' remaining';
 								}
-								document.sendin.submit();
-							} catch (e) {}
-						}, 400);
-						return true;
-					});
-				}
-				doRestore().then(function (ok) {
-					// No token or nothing to restore: mint the device token lazily
-					// so the NEXT visit can auto-restore. A typed voucher takes
-					// the normal manual login path below.
-					if (!ok) JuanFiSession.ensureToken(mac, uIp, server);
-				});
-			})();
+								if (typeof $ !== 'undefined' && typeof $.toast === 'function') {
+									$.toast({ title: 'Welcome back', content: 'Session restored' + remainingTxt, type: 'success', delay: 4000 });
+								}
+								setTimeout(function () {
+									try {
+										setStorageValue('activeVoucher', res.username);
+										document.sendin.username.value = res.username;
+										if (loginOption == 0) {
+											document.sendin.password.value = hexMD5('$(chap-id)' + '' + '$(chap-challenge)');
+										} else {
+											document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
+										}
+										document.sendin.submit();
+									} catch (e) {}
+								}, 400);
+								return true;
+							});
+						}
+						doRestore().then(function (ok) {
+							// No token or nothing to restore: mint the device token lazily
+							// so the NEXT visit can auto-restore. A typed voucher takes
+							// the normal manual login path below.
+							if (!ok) JuanFiSession.ensureToken(mac, uIp, server);
+						});
+					})();
+				}, 500);
+			});
 		</script>
 		<script>
 			function off() {
 				document.getElementById("overlay").style.display = "none";
 			}
-			
+
 			var purchaseInfo = "juanfi://purchasevoucher?mac="+mac+"&ip="+uIp;
-			
+
 			new QRCode(document.getElementById("qrcode"), JSON.stringify(purchaseInfo) );
 		</script>
-		
+
 		<div id="loaderDiv" class="spinner hidden">
 			<center>
 				<img src="assets/loading.svg" />

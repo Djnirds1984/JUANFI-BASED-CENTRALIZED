@@ -12,6 +12,9 @@ const App = {
   hotspotTab: 'hosts',
 
   init() {
+    if (window.AdminThemes) {
+      AdminThemes.applyStored();
+    }
     if (api.getToken()) {
       this.showDashboard();
     } else {
@@ -97,6 +100,7 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
+      appearance: 'Appearance',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -118,6 +122,7 @@ const App = {
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'appearance': await this.renderAppearance(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -4329,6 +4334,75 @@ const App = {
       this.toast(err.message, 'error');
     }
   },
+
+  async renderAppearance() {
+    const content = document.getElementById('page-content');
+    const themes = window.AdminThemes ? AdminThemes.getThemeList() : [];
+    const activeId = window.AdminThemes ? AdminThemes.getStoredId() : 'midnight';
+    content.innerHTML = `
+      <div class="appearance-hero">
+        <div class="appearance-hero-text">
+          <h2>Admin Dashboard Themes</h2>
+          <p>Choose a look for your control panel. Your selection is saved locally and applied instantly.</p>
+        </div>
+        <div class="appearance-current">
+          <span class="appearance-current-label">Active theme</span>
+          <span class="appearance-current-name" id="appearance-current-name">${this.escapeHtml(AdminThemes.getTheme(activeId).name)}</span>
+        </div>
+      </div>
+      <div class="appearance-grid">
+        ${themes.map((t) => `
+          <div class="appearance-card${t.id === activeId ? ' active' : ''}" data-theme="${t.id}" onclick="App.applyAdminTheme('${t.id}')">
+            <div class="appearance-banner" style="background: ${t.banner}">
+              ${t.id === activeId ? '<span class="appearance-check">&#10003;</span>' : ''}
+            </div>
+            <div class="appearance-body">
+              <div class="appearance-name">${this.escapeHtml(t.name)}</div>
+              <div class="appearance-desc">${this.escapeHtml(t.description)}</div>
+              <div class="appearance-swatches">
+                ${t.swatches.map((c) => `<span class="appearance-swatch" style="background:${c}" title="${c}"></span>`).join('')}
+              </div>
+              <div class="appearance-actions">
+                <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();App.previewAdminTheme('${t.id}')">Preview</button>
+                <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();App.applyAdminTheme('${t.id}')">${t.id === activeId ? 'Active' : 'Apply'}</button>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  },
+
+  previewAdminTheme(themeId) {
+    if (!window.AdminThemes) return;
+    AdminThemes.apply(themeId);
+    this.toast(`Previewing "${AdminThemes.getTheme(themeId).name}"`, 'info');
+  },
+
+  applyAdminTheme(themeId) {
+    if (!window.AdminThemes) return;
+    const theme = AdminThemes.apply(themeId);
+    const nameEl = document.getElementById('appearance-current-name');
+    if (nameEl) nameEl.textContent = theme.name;
+    document.querySelectorAll('.appearance-card').forEach((c) => {
+      const isActive = c.dataset.theme === themeId;
+      c.classList.toggle('active', isActive);
+      const applyBtn = c.querySelector('.appearance-actions .btn-primary');
+      if (applyBtn) applyBtn.textContent = isActive ? 'Active' : 'Apply';
+      const banner = c.querySelector('.appearance-banner');
+      let check = banner ? banner.querySelector('.appearance-check') : null;
+      if (isActive && banner && !check) {
+        check = document.createElement('span');
+        check.className = 'appearance-check';
+        check.innerHTML = '&#10003;';
+        banner.appendChild(check);
+      } else if (!isActive && check) {
+        check.remove();
+      }
+    });
+    this.toast(`"${theme.name}" theme applied`, 'success');
+  },
+
 
   async pushPortal() {
     if (this.portalDirty && !confirm('You have unsaved changes. Push will use the last saved version. Continue?')) return;

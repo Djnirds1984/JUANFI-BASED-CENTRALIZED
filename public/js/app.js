@@ -4454,6 +4454,23 @@ const App = {
         </div>
 
         <div class="subvendo-section">
+          <h4>Roaming Session (Centralized)</h4>
+          <p style="font-size:.8rem;opacity:.7;margin-bottom:.75rem">
+            Lets a device keep its session token across SSIDs. Set the controller's
+            LAN URL as seen from the hotspot (must be allowed in the router's Walled
+            Garden). Leave blank to disable roaming.
+          </p>
+          <div class="form-row">
+            <label>Controller API URL:</label>
+            <input type="text" id="subvendo-controllerApiUrl" class="form-control" placeholder="http://10.0.0.243:3000/api">
+          </div>
+          <div class="form-row">
+            <label>Session Cookie Name:</label>
+            <input type="text" id="subvendo-sessionCookieName" class="form-control" placeholder="juanfi_sid">
+          </div>
+        </div>
+
+        <div class="subvendo-section">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
             <h4 style="margin:0">Preview (config.js)</h4>
             <button class="btn btn-sm btn-outline" onclick="App.updateSubVendoPreview()">Refresh Preview</button>
@@ -4517,6 +4534,8 @@ const App = {
     document.getElementById('subvendo-disableVoucherInput').checked = config.disableVoucherInput;
     document.getElementById('subvendo-macAsVoucherCode').checked = config.macAsVoucherCode;
     document.getElementById('subvendo-qrCodeVoucherPurchase').checked = config.qrCodeVoucherPurchase;
+    document.getElementById('subvendo-controllerApiUrl').value = config.controllerApiUrl || '';
+    document.getElementById('subvendo-sessionCookieName').value = config.sessionCookieName || 'juanfi_sid';
 
     const vendoList = document.getElementById('subvendo-vendo-list');
     vendoList.innerHTML = '';
@@ -4597,6 +4616,8 @@ const App = {
       disableVoucherInput: document.getElementById('subvendo-disableVoucherInput').checked,
       macAsVoucherCode: document.getElementById('subvendo-macAsVoucherCode').checked,
       qrCodeVoucherPurchase: document.getElementById('subvendo-qrCodeVoucherPurchase').checked,
+      controllerApiUrl: document.getElementById('subvendo-controllerApiUrl').value.trim(),
+      sessionCookieName: document.getElementById('subvendo-sessionCookieName').value.trim() || 'juanfi_sid',
     };
   },
 
@@ -4657,6 +4678,10 @@ var disableVoucherInput = ${config.disableVoucherInput};
 var macAsVoucherCode = ${config.macAsVoucherCode};
 
 var qrCodeVoucherPurchase = ${config.qrCodeVoucherPurchase};
+
+// JuanFi centralized roaming session token support.
+var controllerApiUrl = "${config.controllerApiUrl || ''}";
+var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 `;
   },
 

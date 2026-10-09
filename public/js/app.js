@@ -39,6 +39,12 @@ const App = {
       });
     });
 
+    const toggle = document.getElementById('sidebar-toggle');
+    if (toggle) toggle.addEventListener('click', () => this.toggleSidebar());
+
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (backdrop) backdrop.addEventListener('click', () => this.closeSidebar());
+
     document.getElementById('modal-close').addEventListener('click', () => {
       this.closeModal();
     });
@@ -79,6 +85,14 @@ const App = {
     this.showLogin();
   },
 
+  toggleSidebar() {
+    document.body.classList.toggle('sidebar-open');
+  },
+
+  closeSidebar() {
+    document.body.classList.remove('sidebar-open');
+  },
+
   navigate(page) {
     if (this._overviewInterval) {
       clearInterval(this._overviewInterval);
@@ -105,6 +119,7 @@ const App = {
 
     document.getElementById('page-title').textContent = titles[page] || page;
     this.renderPage(page);
+    this.closeSidebar();
   },
 
   async renderPage(page) {

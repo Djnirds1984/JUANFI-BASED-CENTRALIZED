@@ -3873,7 +3873,7 @@ const App = {
         </div>
         <div class="tabs">
           <button class="tab ${this.voucherTab === 'vouchers' ? 'active' : ''}" data-tab="vouchers">Vouchers</button>
-          ${isRadiusMode ? `<button class="tab ${this.voucherTab === 'radius' ? 'active' : ''}" data-tab="radius">RADIUS Users</button>` : ''}
+          ${isRadiusMode ? `<button class="tab ${this.voucherTab === 'radius' ? 'active' : ''}" data-tab="radius">RADIUS Vouchers</button>` : ''}
         </div>
         <div id="voucher-tab-content">Loading...</div>
       </div>
@@ -3903,7 +3903,7 @@ const App = {
 
     try {
       if (this.voucherTab === 'radius') {
-        await this.loadRadiusUsers(container);
+        await this.loadRadiusVouchers(container);
       } else {
         await this.loadVouchersContent(container);
       }
@@ -3912,61 +3912,78 @@ const App = {
     }
   },
 
-  async loadRadiusUsers(container) {
-    const [users, radiusProfiles] = await Promise.all([
-      api.getHotspotUsers(this.selectedRouterId),
-      api.getRadiusProfiles(this.selectedRouterId),
-    ]);
+  async loadRadiusVouchers(container) {
+    const data = await api.getVouchers(this.selectedRouterId);
+    const vouchers = data.vouchers || [];
 
-    const profileMap = {};
-    for (const p of radiusProfiles) {
-      profileMap[p.id] = p.name;
-    }
+    const availableCount = vouchers.filter(v => !v.is_used).length;
+    const usedCount = vouchers.filter(v => v.is_used).length;
 
     let headerHtml = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">RADIUS Users (${users.length})</h4>
-        <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">RADIUS Vouchers (${vouchers.length})</h4>
+        <button class="btn btn-primary btn-sm" onclick="App.showGenerateRadiusVouchersModal()">Generate Vouchers</button>
       </div>
     `;
 
-    if (!users || users.length === 0) {
-      container.innerHTML = headerHtml + '<div class="empty-state"><p>No RADIUS users. Add users that will be authenticated via RADIUS.</p></div>';
+    const summaryHtml = `
+      <div class="voucher-summary" style="margin-bottom:1.5rem">
+        <div class="voucher-summary-grid">
+          <div class="voucher-summary-card voucher-summary-available">
+            <div class="voucher-summary-icon">○</div>
+            <div class="voucher-summary-content">
+              <div class="voucher-summary-value">${availableCount}</div>
+              <div class="voucher-summary-label">Available</div>
+            </div>
+          </div>
+          <div class="voucher-summary-card voucher-summary-used">
+            <div class="voucher-summary-icon">✓</div>
+            <div class="voucher-summary-content">
+              <div class="voucher-summary-value">${usedCount}</div>
+              <div class="voucher-summary-label">Used</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    if (vouchers.length === 0) {
+      container.innerHTML = headerHtml + summaryHtml + '<div class="empty-state"><p>No RADIUS vouchers generated yet.</p></div>';
       return;
     }
 
-    container.innerHTML = headerHtml + `
+    container.innerHTML = headerHtml + summaryHtml + `
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
+              <th>Code</th>
               <th>Username</th>
               <th>RADIUS Profile</th>
               <th>Status</th>
-              <th>Comment</th>
               <th>Created</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            ${users.map((u) => {
-              const comment = u.comment || '';
-              const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '';
-              const userId = u.id || u['.id'] || '';
-              const disabled = u.disabled === 'true' || u.disabled === 1;
-              const rpName = u.radius_profile_id ? (profileMap[u.radius_profile_id] || 'Unknown') : '-';
+            ${vouchers.map((v) => {
+              const created = v.created_at ? new Date(v.created_at).toLocaleDateString() : '';
+              const profileName = v.radius_profile_name || '-';
+              let statusBadge;
+              if (!v.is_used) {
+                statusBadge = '<span class="status-badge voucher-available">Available</span>';
+              } else {
+                statusBadge = '<span class="status-badge voucher-used">Used</span>';
+              }
               return `
                 <tr>
-                  <td><strong>${this.escapeHtml(u.username || u.name || '')}</strong></td>
-                  <td>${this.escapeHtml(rpName)}</td>
-                  <td>
-                    ${disabled ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}
-                  </td>
-                  <td>${this.escapeHtml(comment)}</td>
+                  <td><strong>${this.escapeHtml(v.code)}</strong></td>
+                  <td>${this.escapeHtml(v.username)}</td>
+                  <td>${this.escapeHtml(profileName)}</td>
+                  <td>${statusBadge}</td>
                   <td>${created}</td>
                   <td>
-                    <button class="btn btn-sm btn-outline" onclick="App.showEditRadiusUserModal(${userId})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteRadiusUser(${userId})">Delete</button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteVoucher(${v.id})">Delete</button>
                   </td>
                 </tr>
               `;
@@ -3977,20 +3994,18 @@ const App = {
     `;
   },
 
-  async showAddRadiusUserModal() {
-    const [radiusProfiles] = await Promise.all([
-      api.getRadiusProfiles(this.selectedRouterId),
-    ]);
+  async showGenerateRadiusVouchersModal() {
+    const radiusProfiles = await api.getRadiusProfiles(this.selectedRouterId);
 
-    this.openModal('Add RADIUS User', `
-      <form id="add-radius-user-form">
+    this.openModal('Generate RADIUS Vouchers', `
+      <form id="generate-radius-vouchers-form">
         <div class="form-group">
-          <label>Username</label>
-          <input type="text" name="username" required>
+          <label>Number of Vouchers</label>
+          <input type="number" name="count" value="10" min="1" max="100">
         </div>
         <div class="form-group">
-          <label>Password</label>
-          <input type="text" name="password" required>
+          <label>Code Length</label>
+          <input type="number" name="codeLength" value="8" min="4" max="20">
         </div>
         <div class="form-group">
           <label>RADIUS Profile</label>
@@ -4000,99 +4015,28 @@ const App = {
           </select>
         </div>
         <div class="form-group">
-          <label>Comment (optional)</label>
-          <input type="text" name="comment">
+          <label>Code Prefix (optional)</label>
+          <input type="text" name="prefix" placeholder="e.g. WIFI">
         </div>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
-      { label: 'Add User', class: 'btn btn-primary', action: () => this.submitAddRadiusUser() },
+      { label: 'Generate', class: 'btn btn-primary', action: () => this.submitGenerateRadiusVouchers() },
     ]);
   },
 
-  async submitAddRadiusUser() {
-    const form = document.getElementById('add-radius-user-form');
+  async submitGenerateRadiusVouchers() {
+    const form = document.getElementById('generate-radius-vouchers-form');
     try {
-      await api.createHotspotUser(this.selectedRouterId, {
-        username: form.username.value,
-        password: form.password.value,
-        profile: 'default',
-        comment: form.comment.value,
+      const result = await api.generateVouchers(this.selectedRouterId, {
+        count: parseInt(form.count.value),
+        codeLength: parseInt(form.codeLength.value) || 8,
         radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
+        prefix: form.prefix.value || undefined,
       });
+
       this.closeModal();
-      this.toast('User added', 'success');
-      this.loadVoucherTab();
-    } catch (err) {
-      this.toast(err.message, 'error');
-    }
-  },
-
-  async showEditRadiusUserModal(userId) {
-    const [users, radiusProfiles] = await Promise.all([
-      api.getHotspotUsers(this.selectedRouterId),
-      api.getRadiusProfiles(this.selectedRouterId),
-    ]);
-
-    const user = users.find((u) => (u.id || u['.id']) == userId);
-    if (!user) {
-      this.toast('User not found', 'error');
-      return;
-    }
-
-    const disabled = user.disabled === 'true' || user.disabled === 1;
-
-    this.openModal('Edit RADIUS User', `
-      <form id="edit-radius-user-form">
-        <div class="form-group">
-          <label>Username</label>
-          <input type="text" value="${this.escapeHtml(user.username || '')}" disabled>
-        </div>
-        <div class="form-group">
-          <label>RADIUS Profile</label>
-          <select name="radiusProfileId">
-            <option value="">-- No profile --</option>
-            ${radiusProfiles.map((p) => `<option value="${p.id}" ${p.id === user.radius_profile_id ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Comment</label>
-          <input type="text" name="comment" value="${this.escapeHtml(user.comment || '')}">
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:0.5rem">
-            <input type="checkbox" name="disabled" ${disabled ? 'checked' : ''}>
-            Disabled
-          </label>
-        </div>
-      </form>
-    `, [
-      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
-      { label: 'Save Changes', class: 'btn btn-primary', action: () => this.submitEditRadiusUser(userId) },
-    ]);
-  },
-
-  async submitEditRadiusUser(userId) {
-    const form = document.getElementById('edit-radius-user-form');
-    try {
-      await api.updateHotspotUser(this.selectedRouterId, userId, {
-        radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
-        comment: form.comment.value,
-        disabled: form.disabled.checked ? 1 : 0,
-      });
-      this.closeModal();
-      this.toast('User updated', 'success');
-      this.loadVoucherTab();
-    } catch (err) {
-      this.toast(err.message, 'error');
-    }
-  },
-
-  async deleteRadiusUser(userId) {
-    if (!confirm('Delete this RADIUS user?')) return;
-    try {
-      await api.deleteHotspotUser(this.selectedRouterId, userId);
-      this.toast('User deleted', 'success');
+      this.toast(`Generated ${result.vouchers?.length || 0} RADIUS voucher(s)`, 'success');
       this.loadVoucherTab();
     } catch (err) {
       this.toast(err.message, 'error');

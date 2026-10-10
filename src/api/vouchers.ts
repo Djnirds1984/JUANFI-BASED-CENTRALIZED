@@ -86,6 +86,15 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
       .prepare('SELECT COUNT(*) as count FROM vouchers WHERE router_id = ?')
       .get(routerId) as any).count;
 
+    if (isRadius) {
+      const profiles = db.prepare('SELECT id, name FROM radius_profiles').all() as any[];
+      const profileMap: Record<number, string> = {};
+      for (const p of profiles) profileMap[p.id] = p.name;
+      for (const v of vouchers as any[]) {
+        v.radius_profile_name = v.radius_profile_id ? (profileMap[v.radius_profile_id] || null) : null;
+      }
+    }
+
     res.json({ vouchers, total, routerUsers });
   } catch (error) {
     console.error('Get vouchers error:', error);
@@ -96,7 +105,7 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
 router.post('/router/:routerId/generate', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength } = req.body;
+    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength, radiusProfileId } = req.body;
 
     const quantity = Math.min(count || 1, 100);
     const codeLen = Math.min(Math.max(parseInt(codeLength) || 8, 4), 20);
@@ -108,10 +117,24 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
       return;
     }
 
+    const isRadius = routerRow.auth_mode === 'radius';
+    const rProfileId = radiusProfileId ? parseInt(radiusProfileId) : null;
+
+    let radiusProfileName = 'default';
+    if (isRadius && rProfileId) {
+      const rp = db.prepare('SELECT name FROM radius_profiles WHERE id = ?').get(rProfileId) as any;
+      if (rp) radiusProfileName = rp.name;
+    }
+
     const vouchers: any[] = [];
     const insertStmt = db.prepare(
-      `INSERT INTO vouchers (router_id, code, username, password, profile, duration_minutes, data_limit_mb, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO vouchers (router_id, code, username, password, profile, duration_minutes, data_limit_mb, expires_at, radius_profile_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    const insertHotspotUserStmt = db.prepare(
+      `INSERT INTO hotspot_users (router_id, username, password, comment, radius_profile_id, disabled)
+       VALUES (?, ?, ?, ?, ?, 0)`
     );
 
     const insertMany = db.transaction(() => {
@@ -131,19 +154,31 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           code,
           username,
           null,
-          profile || 'default',
+          isRadius ? radiusProfileName : (profile || 'default'),
           durationMinutes || null,
           dataLimitMb || null,
-          expiresAt
+          expiresAt,
+          isRadius ? rProfileId : null
         );
+
+        if (isRadius) {
+          insertHotspotUserStmt.run(
+            routerId,
+            username,
+            null,
+            `Voucher: ${code}`,
+            rProfileId
+          );
+        }
 
         vouchers.push({
           code,
           username,
           password: null,
-          profile: profile || 'default',
+          profile: isRadius ? radiusProfileName : (profile || 'default'),
           durationMinutes,
           dataLimitMb,
+          radiusProfileId: isRadius ? rProfileId : null,
         });
       }
     });
@@ -153,7 +188,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
     let mikrotikSuccess = 0;
     let mikrotikFailed = 0;
 
-    if (mikroTikService.isConnected(routerId) && routerRow.auth_mode !== 'radius') {
+    if (mikroTikService.isConnected(routerId) && !isRadius) {
       for (const v of vouchers) {
         try {
           const hours = v.durationMinutes ? Math.floor(v.durationMinutes / 60) : 0;
@@ -227,6 +262,10 @@ router.delete('/router/:routerId/:voucherId', async (req: Request, res: Response
       } catch (err) {
         console.error('Failed to delete user from router:', (err as Error).message);
       }
+    }
+
+    if (routerRow?.auth_mode === 'radius') {
+      db.prepare('DELETE FROM hotspot_users WHERE router_id = ? AND username = ?').run(routerId, voucher.username);
     }
 
     db.prepare('DELETE FROM vouchers WHERE id = ?').run(voucherId);

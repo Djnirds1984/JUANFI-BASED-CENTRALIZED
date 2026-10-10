@@ -156,7 +156,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         if (durationMinutes) {
           const expiry = new Date();
           expiry.setMinutes(expiry.getMinutes() + durationMinutes);
-          expiresAt = expiry.toISOString();
+          expiresAt = expiry.toISOString().replace('T', ' ').slice(0, 19);
         }
 
         insertStmt.run(

@@ -1,35 +1,15 @@
 //this is to enable multi vendo setup, set to true when multi vendo is supported
-var isMultiVendo = false;
+var isMultiVendo = true;
 // 0 = traditional (client choose a vendo) , 1 = auto select vendo base on hotspot address, 2 = interface name ( this will preserve one hotspot server ip only)
 var multiVendoOption = 0;
 
 //list here all node mcu address for multi vendo setup
 var multiVendoAddresses = [
 	{
-		vendoName: "TEST1", //change accordingly to your vendo name
-		vendoIp: "10.0.0.243", //change accordingly to your vendo ip
-		chargingEnable: true,  //change true if you want to enable charging station
-		eloadEnable: true, //change true if you want to enable eloading station
-		hotspotAddress: "10.0.0.1", // use for multi vendo option = 1, means your vendo map to this hotspot and autoselect it when client connected to this
-		interfaceName: "bridge-HS" // hotspot interface name preser
-	},
-	{
-		vendoName: "Vendo 2", //change accordingly to your vendo name
-		vendoIp: "10.10.10.251", //change accordingly to your vendo ip
-		chargingEnable: false,  //change true if you want to enable charging station
-		eloadEnable: true //change true if you want to enable eloading station
-	},
-	{
-		vendoName: "Vendo 3", //change accordingly to your vendo name
-		vendoIp: "10.10.10.253", //change accordingly to your vendo ip
-		chargingEnable: false,  //change true if you want to enable charging station
-		eloadEnable: false //change true if you want to enable eloading station
-	},
-	{
-		vendoName: "Vendo 4", //change accordingly to your vendo name
-		vendoIp: "10.10.10.254", //change accordingly to your vendo ip
-		chargingEnable: true,  //change true if you want to enable charging station
-		eloadEnable: false //change true if you want to enable eloading station
+		vendoName: "TEST1",
+		vendoIp: "10.0.0.243",
+		chargingEnable: false,
+		eloadEnable: false
 	}
 ];
 
@@ -58,12 +38,10 @@ var showExtendTimeButton = true;
 var disableVoucherInput = false;
 
 //enable mac address as voucher code
-var macAsVoucherCode = false;
+var macAsVoucherCode = true;
 
 var qrCodeVoucherPurchase = false;
 
 // JuanFi centralized roaming session token support.
-// URL of this controller as seen from the hotspot LAN (must be walled-garden allowed).
 var controllerApiUrl = "http://10.0.0.243:3000/api";
-// First-party cookie holding the permanent per-device session token (no expiry).
 var sessionCookieName = "juanfi_sid";

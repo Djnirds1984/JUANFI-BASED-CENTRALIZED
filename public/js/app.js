@@ -3960,6 +3960,7 @@ const App = {
               <th>Code</th>
               <th>Username</th>
               <th>RADIUS Profile</th>
+              <th>Duration</th>
               <th>Status</th>
               <th>Created</th>
               <th>Actions</th>
@@ -3969,6 +3970,7 @@ const App = {
             ${vouchers.map((v) => {
               const created = v.created_at ? new Date(v.created_at).toLocaleDateString() : '';
               const profileName = v.radius_profile_name || '-';
+              const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 1440)}d ${Math.floor((v.duration_minutes % 1440) / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
               let statusBadge;
               if (!v.is_used) {
                 statusBadge = '<span class="status-badge voucher-available">Available</span>';
@@ -3980,6 +3982,7 @@ const App = {
                   <td><strong>${this.escapeHtml(v.code)}</strong></td>
                   <td>${this.escapeHtml(v.username)}</td>
                   <td>${this.escapeHtml(profileName)}</td>
+                  <td>${dur}</td>
                   <td>${statusBadge}</td>
                   <td>${created}</td>
                   <td>
@@ -4015,6 +4018,23 @@ const App = {
           </select>
         </div>
         <div class="form-group">
+          <label>Uptime Limit (optional)</label>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <div style="flex:1">
+              <input type="number" name="durationDays" placeholder="Days" min="0" class="form-control">
+              <small style="color:var(--text-muted)">Days</small>
+            </div>
+            <div style="flex:1">
+              <input type="number" name="durationHours" placeholder="Hours" min="0" max="23" class="form-control">
+              <small style="color:var(--text-muted)">Hours</small>
+            </div>
+            <div style="flex:1">
+              <input type="number" name="durationMins" placeholder="Minutes" min="0" max="59" class="form-control">
+              <small style="color:var(--text-muted)">Minutes</small>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
           <label>Code Prefix (optional)</label>
           <input type="text" name="prefix" placeholder="e.g. WIFI">
         </div>
@@ -4028,10 +4048,16 @@ const App = {
   async submitGenerateRadiusVouchers() {
     const form = document.getElementById('generate-radius-vouchers-form');
     try {
+      const days = parseInt(form.durationDays.value) || 0;
+      const hours = parseInt(form.durationHours.value) || 0;
+      const mins = parseInt(form.durationMins.value) || 0;
+      const totalMinutes = days * 24 * 60 + hours * 60 + mins;
+
       const result = await api.generateVouchers(this.selectedRouterId, {
         count: parseInt(form.count.value),
         codeLength: parseInt(form.codeLength.value) || 8,
         radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
+        durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         prefix: form.prefix.value || undefined,
       });
 

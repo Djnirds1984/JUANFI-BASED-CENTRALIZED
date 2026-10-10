@@ -43,5 +43,5 @@ var macAsVoucherCode = true;
 var qrCodeVoucherPurchase = false;
 
 // JuanFi centralized roaming session token support.
-var controllerApiUrl = "http://10.0.0.243:3000/api";
+var controllerApiUrl = "http://10.0.0.252:3000/api";
 var sessionCookieName = "juanfi_sid";

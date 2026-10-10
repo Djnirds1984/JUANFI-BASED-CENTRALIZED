@@ -849,13 +849,13 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
     }
 
     const users = db.prepare(
-      'SELECT username FROM hotspot_users WHERE router_id = ? AND disabled = 0 LIMIT 5'
+      'SELECT username FROM hotspot_users WHERE router_id = ? AND disabled = 0 LIMIT 10'
     ).all(routerId) as any[];
 
     const vouchers = db.prepare(
       `SELECT code AS username FROM vouchers
        WHERE router_id = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))
-       LIMIT 5`
+       LIMIT 10`
     ).all(routerId) as any[];
 
     const testCandidates = [...users, ...vouchers];
@@ -863,18 +863,19 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
     result.hasUsers = testCandidates.length > 0;
 
     if (testCandidates.length > 0) {
-      const testUser = testCandidates[0].username;
-      result.authTestUser = testUser;
-      const authResult = authenticateUser(routerId, testUser);
-      if (authResult.accept) {
-        const parts = [`PASS — user "${testUser}" would be accepted`];
-        if (authResult.profileId) parts.push(`profile #${authResult.profileId}`);
-        parts.push(`${authResult.replyAttributes.length} reply attributes`);
-        if (authResult.sessionTimeout) parts.push(`timeout: ${authResult.sessionTimeout}s`);
-        result.authTestResult = parts.join(', ');
-      } else {
-        result.authTestResult = `FAIL — user "${testUser}" would be rejected (expired, disabled, or not found)`;
+      const testResults: string[] = [];
+      let passCount = 0;
+      for (const c of testCandidates) {
+        const authResult = authenticateUser(routerId, c.username);
+        if (authResult.accept) {
+          passCount++;
+          testResults.push(`"${c.username}" PASS`);
+        } else {
+          testResults.push(`"${c.username}" FAIL`);
+        }
       }
+      result.authTestUser = testCandidates[0].username;
+      result.authTestResult = `${passCount}/${testCandidates.length} passed: ${testResults.join(', ')}`;
     } else {
       result.authTestResult = 'No enabled hotspot users or vouchers to test with';
     }
@@ -903,7 +904,7 @@ function checkPort(port: number): Promise<boolean> {
       try { sock.close(); } catch {}
       resolve(err.code === 'EADDRINUSE');
     });
-    sock.bind(port, '127.0.0.1', () => {
+    sock.bind(port, '0.0.0.0', () => {
       try { sock.close(); } catch {}
       resolve(false);
     });

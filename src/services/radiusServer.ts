@@ -899,14 +899,14 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
 
 function checkPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const sock = dgram.createSocket({ type: 'udp4', reuseAddr: false });
-    sock.once('error', (err: NodeJS.ErrnoException) => {
-      try { sock.close(); } catch {}
-      resolve(err.code === 'EADDRINUSE');
-    });
-    sock.bind(port, '0.0.0.0', () => {
-      try { sock.close(); } catch {}
+    if (!running) {
       resolve(false);
-    });
+      return;
+    }
+    if (port === config.radiusAuthPort || port === config.radiusAcctPort) {
+      resolve(true);
+    } else {
+      resolve(false);
+    }
   });
 }

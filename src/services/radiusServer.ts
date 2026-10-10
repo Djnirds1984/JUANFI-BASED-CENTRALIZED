@@ -372,6 +372,17 @@ function authenticateUser(routerId: number, username: string): AuthResult {
         }
       }
 
+      const voucher = db.prepare(
+        `SELECT duration_minutes FROM vouchers
+         WHERE router_id = ? AND code = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))`
+      ).get(routerId, username) as any;
+
+      if (voucher?.duration_minutes) {
+        profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
+        profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
+        console.log(`[RADIUS] Hotspot user ${username} matched voucher: duration=${voucher.duration_minutes}min, Session-Timeout=${voucher.duration_minutes * 60}s`);
+      }
+
       if (!user.first_login_at) {
         const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
         db.prepare('UPDATE hotspot_users SET first_login_at = ? WHERE id = ?').run(now, user.id);
@@ -416,6 +427,9 @@ function authenticateUser(routerId: number, username: string): AuthResult {
       if (voucher.duration_minutes) {
         profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
         profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
+        console.log(`[RADIUS] Voucher ${username}: duration=${voucher.duration_minutes}min, Session-Timeout=${voucher.duration_minutes * 60}s, total attrs=${profileAttrs.length}`);
+      } else {
+        console.log(`[RADIUS] Voucher ${username}: no duration_minutes, attrs=${profileAttrs.length}`);
       }
 
       return { accept: true, replyAttributes: profileAttrs, profileId };

@@ -177,8 +177,60 @@ export function initializeDatabase(): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS radius_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      rate_rx INTEGER NOT NULL DEFAULT 0,
+      rate_tx INTEGER NOT NULL DEFAULT 0,
+      burst_rx INTEGER NOT NULL DEFAULT 0,
+      burst_tx INTEGER NOT NULL DEFAULT 0,
+      burst_threshold_rx INTEGER NOT NULL DEFAULT 0,
+      burst_threshold_tx INTEGER NOT NULL DEFAULT 0,
+      burst_time_rx INTEGER NOT NULL DEFAULT 0,
+      burst_time_tx INTEGER NOT NULL DEFAULT 0,
+      session_timeout INTEGER NOT NULL DEFAULT 0,
+      idle_timeout INTEGER NOT NULL DEFAULT 0,
+      quota_rx INTEGER NOT NULL DEFAULT 0,
+      quota_tx INTEGER NOT NULL DEFAULT 0,
+      quota_total INTEGER NOT NULL DEFAULT 0,
+      validity_period INTEGER NOT NULL DEFAULT 0,
+      validity_fixed_expiry TEXT,
+      shared_users INTEGER NOT NULL DEFAULT 1,
+      price REAL NOT NULL DEFAULT 0,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS radius_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      nas_ip TEXT,
+      profile_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      stopped_at TEXT,
+      input_octets INTEGER NOT NULL DEFAULT 0,
+      output_octets INTEGER NOT NULL DEFAULT 0,
+      input_packets INTEGER NOT NULL DEFAULT 0,
+      output_packets INTEGER NOT NULL DEFAULT 0,
+      session_time INTEGER NOT NULL DEFAULT 0,
+      terminate_cause TEXT,
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_radius_logs_router ON radius_logs(router_id);
     CREATE INDEX IF NOT EXISTS idx_radius_logs_created ON radius_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_radius_profiles_router ON radius_profiles(router_id);
+    CREATE INDEX IF NOT EXISTS idx_radius_sessions_router ON radius_sessions(router_id, status);
+    CREATE INDEX IF NOT EXISTS idx_radius_sessions_user ON radius_sessions(username);
+    CREATE INDEX IF NOT EXISTS idx_radius_sessions_sid ON radius_sessions(session_id);
 
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
@@ -237,6 +289,44 @@ export function initializeDatabase(): void {
   if (!hotspotUserCols.some((c: any) => c.name === 'source')) {
     db.exec("ALTER TABLE hotspot_users ADD COLUMN source TEXT NOT NULL DEFAULT 'api'");
     db.exec("UPDATE hotspot_users SET source = 'api' WHERE source = ''");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'radius_profile_id')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN radius_profile_id INTEGER");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'total_bytes_in')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN total_bytes_in INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'total_bytes_out')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN total_bytes_out INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'total_session_time')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN total_session_time INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'last_login_at')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN last_login_at TEXT");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'last_logout_at')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN last_logout_at TEXT");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'first_login_at')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN first_login_at TEXT");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'expiry_at')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN expiry_at TEXT");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'price')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN price REAL NOT NULL DEFAULT 0");
+  }
+  if (!hotspotUserCols.some((c: any) => c.name === 'shared_users')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN shared_users INTEGER NOT NULL DEFAULT 1");
+  }
+
+  const voucherCols2 = db.prepare("PRAGMA table_info('vouchers')").all() as any[];
+  if (!voucherCols2.some((c: any) => c.name === 'radius_profile_id')) {
+    db.exec("ALTER TABLE vouchers ADD COLUMN radius_profile_id INTEGER");
+  }
+  if (!voucherCols2.some((c: any) => c.name === 'price')) {
+    db.exec("ALTER TABLE vouchers ADD COLUMN price REAL NOT NULL DEFAULT 0");
   }
 
   const allFiles = listHotspotFiles();

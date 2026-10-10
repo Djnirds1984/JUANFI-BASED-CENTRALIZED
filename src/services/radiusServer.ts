@@ -9,6 +9,7 @@ const RADIUS_CODES = {
   ACCESS_REJECT: 3,
   ACCOUNTING_REQUEST: 4,
   ACCOUNTING_RESPONSE: 5,
+  DISCONNECT_REQUEST: 40,
 } as const;
 
 const RADIUS_ATTR = {
@@ -30,8 +31,18 @@ const RADIUS_ATTR = {
   ACCT_AUTHENTIC: 45,
   ACCT_INPUT_PACKETS: 46,
   ACCT_OUTPUT_PACKETS: 47,
+  ACCT_SESSION_TIME: 48,
+  ACCT_TERMINATE_CAUSE: 49,
   NAS_PORT_TYPE: 61,
   NAS_IDENTIFIER: 87,
+  VENDOR_SPECIFIC: 26,
+} as const;
+
+const MIKROTIK_VENDOR_ID = 14988;
+
+const MIKROTIK_VSA = {
+  RATE_LIMIT: 8,
+  IDLE_TIMEOUT: 10,
 } as const;
 
 const ACCT_STATUS = {
@@ -120,6 +131,43 @@ function encodeAttributes(attrs: RadiusAttribute[]): Buffer {
   return Buffer.concat(buffers);
 }
 
+function encodeVsa(vendorId: number, vendorType: number, value: Buffer): RadiusAttribute {
+  const vendorIdBuf = Buffer.alloc(4);
+  vendorIdBuf.writeUInt32BE(vendorId, 0);
+  const vendorHeader = Buffer.alloc(2);
+  vendorHeader.writeUInt8(vendorType, 0);
+  vendorHeader.writeUInt8(value.length + 2, 1);
+  const fullValue = Buffer.concat([vendorIdBuf, vendorHeader, value]);
+  return { type: RADIUS_ATTR.VENDOR_SPECIFIC, value: fullValue };
+}
+
+function formatMikrotikRateLimit(
+  rateRx: number, rateTx: number,
+  burstRx: number, burstTx: number,
+  burstThresholdRx: number, burstThresholdTx: number,
+  burstTimeRx: number, burstTimeTx: number,
+): string {
+  const fmt = (bps: number) => {
+    if (bps <= 0) return '0';
+    if (bps >= 1000000) return `${Math.round(bps / 1000000)}M`;
+    if (bps >= 1000) return `${Math.round(bps / 1000)}K`;
+    return `${bps}`;
+  };
+
+  let result = `${fmt(rateRx)}/${fmt(rateTx)}`;
+
+  if (burstRx > 0 || burstTx > 0) {
+    result += ` ${fmt(burstRx)}/${fmt(burstTx)}`;
+    if (burstThresholdRx > 0 || burstThresholdTx > 0) {
+      result += ` ${fmt(burstThresholdRx)}/${fmt(burstThresholdTx)}`;
+      if (burstTimeRx > 0 || burstTimeTx > 0) {
+        result += ` ${burstTimeRx}s/${burstTimeTx}s`;
+      }
+    }
+  }
+  return result;
+}
+
 function decodeAttributes(buf: Buffer, offset: number): RadiusAttribute[] {
   const attrs: RadiusAttribute[] = [];
   while (offset < buf.length) {
@@ -141,7 +189,9 @@ function decodeAttributes(buf: Buffer, offset: number): RadiusAttribute[] {
         type === RADIUS_ATTR.SERVICE_TYPE ||
         type === RADIUS_ATTR.NAS_PORT_TYPE ||
         type === RADIUS_ATTR.ACCT_AUTHENTIC ||
-        type === RADIUS_ATTR.ACCT_DELAY_TIME)) {
+        type === RADIUS_ATTR.ACCT_DELAY_TIME ||
+        type === RADIUS_ATTR.ACCT_SESSION_TIME ||
+        type === RADIUS_ATTR.ACCT_TERMINATE_CAUSE)) {
       value = valueBuf.readUInt32BE(0);
     } else if (type === RADIUS_ATTR.NAS_IP_ADDRESS || type === RADIUS_ATTR.FRAMED_IP_ADDRESS) {
       value = `${valueBuf[0]}.${valueBuf[1]}.${valueBuf[2]}.${valueBuf[3]}`;
@@ -251,44 +301,129 @@ function findClientByIp(ip: string): RadiusClient | null {
   return null;
 }
 
-function authenticateUser(routerId: number, username: string): { accept: boolean; sessionTimeout?: number } {
+interface AuthResult {
+  accept: boolean;
+  replyAttributes: RadiusAttribute[];
+  profileId?: number;
+  sessionTimeout?: number;
+}
+
+function buildProfileAttributes(profile: any): RadiusAttribute[] {
+  const attrs: RadiusAttribute[] = [];
+
+  if (profile.rate_rx > 0 || profile.rate_tx > 0) {
+    const rateLimitStr = formatMikrotikRateLimit(
+      profile.rate_rx, profile.rate_tx,
+      profile.burst_rx, profile.burst_tx,
+      profile.burst_threshold_rx, profile.burst_threshold_tx,
+      profile.burst_time_rx, profile.burst_time_tx,
+    );
+    attrs.push(encodeVsa(MIKROTIK_VENDOR_ID, MIKROTIK_VSA.RATE_LIMIT, encodeString(rateLimitStr)));
+  }
+
+  if (profile.session_timeout > 0) {
+    attrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: profile.session_timeout });
+  }
+
+  if (profile.idle_timeout > 0) {
+    attrs.push(encodeVsa(MIKROTIK_VENDOR_ID, MIKROTIK_VSA.IDLE_TIMEOUT, encodeInteger(profile.idle_timeout)));
+  }
+
+  return attrs;
+}
+
+function authenticateUser(routerId: number, username: string): AuthResult {
   try {
     const db = getDb();
     const user = db.prepare(
-      `SELECT id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled
+      `SELECT id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled,
+              radius_profile_id, first_login_at, expiry_at, shared_users
        FROM hotspot_users
        WHERE router_id = ? AND username = ? AND disabled = 0`
     ).get(routerId, username) as any;
 
     if (user) {
-      let sessionTimeout: number | undefined;
-      if (user.uptime_limit && user.uptime_limit !== '00:00:00') {
-        const parts = user.uptime_limit.split(':').map(Number);
-        if (parts.length === 3) {
-          sessionTimeout = parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (user.expiry_at) {
+        const now = new Date().toISOString();
+        if (user.expiry_at < now) {
+          return { accept: false, replyAttributes: [] };
         }
       }
-      return { accept: true, sessionTimeout };
+
+      let profileAttrs: RadiusAttribute[] = [];
+      let profileId: number | undefined;
+
+      if (user.radius_profile_id) {
+        const profile = db.prepare('SELECT * FROM radius_profiles WHERE id = ? AND router_id = ?')
+          .get(user.radius_profile_id, routerId) as any;
+        if (profile) {
+          profileAttrs = buildProfileAttributes(profile);
+          profileId = profile.id;
+        }
+      }
+
+      if (profileAttrs.length === 0) {
+        if (user.uptime_limit && user.uptime_limit !== '00:00:00') {
+          const parts = user.uptime_limit.split(':').map(Number);
+          if (parts.length === 3) {
+            const timeout = parts[0] * 3600 + parts[1] * 60 + parts[2];
+            profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: timeout });
+          }
+        }
+      }
+
+      if (!user.first_login_at) {
+        const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        db.prepare('UPDATE hotspot_users SET first_login_at = ? WHERE id = ?').run(now, user.id);
+
+        if (user.radius_profile_id) {
+          const profile = db.prepare('SELECT validity_period, validity_fixed_expiry FROM radius_profiles WHERE id = ?')
+            .get(user.radius_profile_id) as any;
+          if (profile?.validity_fixed_expiry) {
+            db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(profile.validity_fixed_expiry, user.id);
+          } else if (profile?.validity_period && profile.validity_period > 0) {
+            const expiryMs = Date.now() + profile.validity_period * 1000;
+            const expiryStr = new Date(expiryMs).toISOString().replace('T', ' ').slice(0, 19);
+            db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(expiryStr, user.id);
+          }
+        }
+      }
+
+      db.prepare('UPDATE hotspot_users SET last_login_at = datetime(\'now\') WHERE id = ?').run(user.id);
+
+      return { accept: true, replyAttributes: profileAttrs, profileId, sessionTimeout: profileAttrs.find(a => a.type === RADIUS_ATTR.SESSION_TIMEOUT)?.value as number | undefined };
     }
 
     const voucher = db.prepare(
-      `SELECT id, duration_minutes, expires_at
+      `SELECT id, duration_minutes, expires_at, radius_profile_id
        FROM vouchers
        WHERE router_id = ? AND code = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))`
     ).get(routerId, username) as any;
 
     if (voucher) {
-      let sessionTimeout: number | undefined;
-      if (voucher.duration_minutes) {
-        sessionTimeout = voucher.duration_minutes * 60;
+      let profileAttrs: RadiusAttribute[] = [];
+      let profileId: number | undefined;
+
+      if (voucher.radius_profile_id) {
+        const profile = db.prepare('SELECT * FROM radius_profiles WHERE id = ? AND router_id = ?')
+          .get(voucher.radius_profile_id, routerId) as any;
+        if (profile) {
+          profileAttrs = buildProfileAttributes(profile);
+          profileId = profile.id;
+        }
       }
-      return { accept: true, sessionTimeout };
+
+      if (profileAttrs.length === 0 && voucher.duration_minutes) {
+        profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
+      }
+
+      return { accept: true, replyAttributes: profileAttrs, profileId };
     }
 
-    return { accept: false };
+    return { accept: false, replyAttributes: [] };
   } catch (err) {
     console.error('[RADIUS] Auth error:', err);
-    return { accept: false };
+    return { accept: false, replyAttributes: [] };
   }
 }
 
@@ -318,26 +453,21 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
 
   const result = authenticateUser(client.router_id, username);
 
-  const responseAttrs: RadiusAttribute[] = [];
-  if (result.accept && result.sessionTimeout) {
-    responseAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: result.sessionTimeout });
-  }
-
   const responseCode = result.accept ? RADIUS_CODES.ACCESS_ACCEPT : RADIUS_CODES.ACCESS_REJECT;
   const response = buildResponsePacket(
     responseCode,
     packet.identifier,
     packet.authenticator,
     client.shared_secret,
-    responseAttrs
+    result.replyAttributes
   );
 
-  (result.accept ? authSocket : authSocket)?.send(response, 0, response.length, rinfo.port, rinfo.address);
+  authSocket?.send(response, 0, response.length, rinfo.port, rinfo.address);
 
   const logType = result.accept ? 'accept' : 'reject';
   const msg = result.accept
-    ? `Access-Accept${result.sessionTimeout ? ` (session timeout: ${result.sessionTimeout}s)` : ''}`
-    : 'Access-Reject (user not found or disabled)';
+    ? `Access-Accept (${result.replyAttributes.length} reply attributes${result.profileId ? `, profile #${result.profileId}` : ''})`
+    : 'Access-Reject (user not found, disabled, or expired)';
   console.log(`[RADIUS] Auth ${result.accept ? 'ACCEPT' : 'REJECT'}: user=${username} router=${client.router_id} from=${rinfo.address}`);
   logRadiusEvent(logType, msg, client.router_id, username, rinfo.address, responseCode);
 }
@@ -355,37 +485,81 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
   const userName = getAttr(packet.attributes, RADIUS_ATTR.USER_NAME);
   const inputOctets = getAttr(packet.attributes, RADIUS_ATTR.ACCT_INPUT_OCTETS);
   const outputOctets = getAttr(packet.attributes, RADIUS_ATTR.ACCT_OUTPUT_OCTETS);
+  const inputPackets = getAttr(packet.attributes, RADIUS_ATTR.ACCT_INPUT_PACKETS);
+  const outputPackets = getAttr(packet.attributes, RADIUS_ATTR.ACCT_OUTPUT_PACKETS);
+  const sessionTime = getAttr(packet.attributes, RADIUS_ATTR.ACCT_SESSION_TIME);
+  const nasIp = getAttr(packet.attributes, RADIUS_ATTR.NAS_IP_ADDRESS);
 
   const status = typeof statusType?.value === 'number' ? statusType.value : 0;
   const session = typeof sessionId?.value === 'string' ? sessionId.value : '';
   const user = typeof userName?.value === 'string' ? userName.value : '';
   const bytesIn = typeof inputOctets?.value === 'number' ? inputOctets.value : 0;
   const bytesOut = typeof outputOctets?.value === 'number' ? outputOctets.value : 0;
-
-  const statusLabels: Record<number, string> = { 1: 'Start', 2: 'Stop', 3: 'Interim-Update' };
-  const statusLabel = statusLabels[status] || `Unknown(${status})`;
+  const pktsIn = typeof inputPackets?.value === 'number' ? inputPackets.value : 0;
+  const pktsOut = typeof outputPackets?.value === 'number' ? outputPackets.value : 0;
+  const sessTime = typeof sessionTime?.value === 'number' ? sessionTime.value : 0;
+  const nasIpStr = typeof nasIp?.value === 'string' ? nasIp.value : rinfo.address;
 
   try {
     const db = getDb();
     if (status === ACCT_STATUS.START) {
+      const profileRow = db.prepare(
+        `SELECT hu.radius_profile_id FROM hotspot_users hu
+         WHERE hu.router_id = ? AND hu.username = ? AND hu.disabled = 0
+         LIMIT 1`
+      ).get(client.router_id, user) as any;
+
       db.prepare(
-        `INSERT OR REPLACE INTO active_devices (router_id, user, mac_address, ip_address, status, bytes_in, bytes_out, last_seen)
-         VALUES (?, ?, '', '', 'active', ?, ?, datetime('now'))`
-      ).run(client.router_id, user, bytesIn, bytesOut);
+        `INSERT OR REPLACE INTO radius_sessions
+         (router_id, username, session_id, nas_ip, profile_id, status, started_at, updated_at,
+          input_octets, output_octets, input_packets, output_packets, session_time)
+         VALUES (?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, ?, ?, ?, ?)`
+      ).run(client.router_id, user, session, nasIpStr, profileRow?.radius_profile_id ?? null,
+        bytesIn, bytesOut, pktsIn, pktsOut, sessTime);
+
+      db.prepare(
+        `UPDATE active_devices SET status = 'active', bytes_in = ?, bytes_out = ?, last_seen = datetime('now')
+         WHERE router_id = ? AND user = ?`
+      ).run(bytesIn, bytesOut, client.router_id, user);
+
       console.log(`[RADIUS] Acct START: user=${user} session=${session} router=${client.router_id}`);
       logRadiusEvent('accounting', `Accounting-Start: session=${session} in=${bytesIn} out=${bytesOut}`, client.router_id, user, rinfo.address);
     } else if (status === ACCT_STATUS.STOP) {
       db.prepare(
+        `UPDATE radius_sessions
+         SET status = 'stopped', stopped_at = datetime('now'), updated_at = datetime('now'),
+             input_octets = ?, output_octets = ?, input_packets = ?, output_packets = ?,
+             session_time = ?, terminate_cause = 'User-Request'
+         WHERE router_id = ? AND session_id = ? AND status = 'active'`
+      ).run(bytesIn, bytesOut, pktsIn, pktsOut, sessTime, client.router_id, session);
+
+      db.prepare(
         `UPDATE active_devices SET status = 'inactive', bytes_in = ?, bytes_out = ?, ended_at = datetime('now'), last_seen = datetime('now')
          WHERE router_id = ? AND user = ? AND status = 'active'`
       ).run(bytesIn, bytesOut, client.router_id, user);
+
+      db.prepare(
+        `UPDATE hotspot_users SET total_bytes_in = total_bytes_in + ?, total_bytes_out = total_bytes_out + ?,
+             total_session_time = total_session_time + ?, last_logout_at = datetime('now')
+         WHERE router_id = ? AND username = ?`
+      ).run(bytesIn, bytesOut, sessTime, client.router_id, user);
+
       console.log(`[RADIUS] Acct STOP: user=${user} session=${session} router=${client.router_id}`);
-      logRadiusEvent('accounting', `Accounting-Stop: session=${session} in=${bytesIn} out=${bytesOut}`, client.router_id, user, rinfo.address);
+      logRadiusEvent('accounting', `Accounting-Stop: session=${session} in=${bytesIn} out=${bytesOut} time=${sessTime}s`, client.router_id, user, rinfo.address);
     } else if (status === ACCT_STATUS.INTERIM_UPDATE) {
+      db.prepare(
+        `UPDATE radius_sessions
+         SET updated_at = datetime('now'), input_octets = ?, output_octets = ?,
+             input_packets = ?, output_packets = ?, session_time = ?
+         WHERE router_id = ? AND session_id = ? AND status = 'active'`
+      ).run(bytesIn, bytesOut, pktsIn, pktsOut, sessTime, client.router_id, session);
+
       db.prepare(
         `UPDATE active_devices SET bytes_in = ?, bytes_out = ?, last_seen = datetime('now')
          WHERE router_id = ? AND user = ? AND status = 'active'`
       ).run(bytesIn, bytesOut, client.router_id, user);
+
+      checkQuotaEnforcement(client.router_id, user, bytesIn, bytesOut, session, nasIpStr, rinfo);
     }
   } catch (err) {
     console.error('[RADIUS] Accounting error:', err);
@@ -400,6 +574,82 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
     []
   );
   acctSocket?.send(response, 0, response.length, rinfo.port, rinfo.address);
+}
+
+function checkQuotaEnforcement(
+  routerId: number, username: string,
+  bytesIn: number, bytesOut: number,
+  sessionId: string, nasIp: string,
+  rinfo: dgram.RemoteInfo
+): void {
+  try {
+    const db = getDb();
+    const user = db.prepare(
+      `SELECT id, bytes_in_quota, bytes_out_quota FROM hotspot_users
+       WHERE router_id = ? AND username = ? AND disabled = 0`
+    ).get(routerId, username) as any;
+
+    if (!user) return;
+
+    let quotaExceeded = false;
+    if (user.bytes_in_quota && user.bytes_in_quota > 0 && bytesIn >= user.bytes_in_quota) {
+      quotaExceeded = true;
+    }
+    if (user.bytes_out_quota && user.bytes_out_quota > 0 && bytesOut >= user.bytes_out_quota) {
+      quotaExceeded = true;
+    }
+
+    if (quotaExceeded) {
+      console.log(`[RADIUS] Quota exceeded for user=${username} router=${routerId} — sending Disconnect-Request`);
+      logRadiusEvent('accounting', `Quota exceeded: in=${bytesIn}/${user.bytes_in_quota} out=${bytesOut}/${user.bytes_out_quota}`, routerId, username, rinfo.address);
+      sendDisconnectRequest(routerId, sessionId, nasIp);
+    }
+  } catch (err) {
+    console.error('[RADIUS] Quota check error:', err);
+  }
+}
+
+export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp: string): void {
+  try {
+    const db = getDb();
+    const radiusClient = db.prepare(
+      `SELECT rc.shared_secret FROM radius_clients rc
+       JOIN routers r ON r.id = rc.router_id
+       WHERE rc.router_id = ? AND rc.is_active = 1`
+    ).get(routerId) as any;
+
+    if (!radiusClient) {
+      console.error(`[RADIUS] No active client config for router ${routerId} — cannot send Disconnect`);
+      return;
+    }
+
+    const sharedSecret = radiusClient.shared_secret;
+    const identifier = Math.floor(Math.random() * 256);
+    const authenticator = crypto.randomBytes(16);
+
+    const attrs: RadiusAttribute[] = [
+      { type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId },
+    ];
+
+    const packet = buildResponsePacket(
+      RADIUS_CODES.DISCONNECT_REQUEST,
+      identifier,
+      authenticator,
+      sharedSecret,
+      attrs
+    );
+
+    const port = config.radiusAuthPort;
+    acctSocket?.send(packet, 0, packet.length, port, nasIp, (err) => {
+      if (err) {
+        console.error(`[RADIUS] Disconnect-Request send error: ${err.message}`);
+      } else {
+        console.log(`[RADIUS] Disconnect-Request sent to ${nasIp}:${port} for session=${sessionId}`);
+      }
+    });
+  } catch (err) {
+    console.error('[RADIUS] Disconnect error:', err);
+  }
 }
 
 function onAuthMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
@@ -616,9 +866,15 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
       const testUser = testCandidates[0].username;
       result.authTestUser = testUser;
       const authResult = authenticateUser(routerId, testUser);
-      result.authTestResult = authResult.accept
-        ? `PASS — user "${testUser}" would be accepted${authResult.sessionTimeout ? ` (timeout: ${authResult.sessionTimeout}s)` : ''}`
-        : `FAIL — user "${testUser}" would be rejected`;
+      if (authResult.accept) {
+        const parts = [`PASS — user "${testUser}" would be accepted`];
+        if (authResult.profileId) parts.push(`profile #${authResult.profileId}`);
+        parts.push(`${authResult.replyAttributes.length} reply attributes`);
+        if (authResult.sessionTimeout) parts.push(`timeout: ${authResult.sessionTimeout}s`);
+        result.authTestResult = parts.join(', ');
+      } else {
+        result.authTestResult = `FAIL — user "${testUser}" would be rejected (expired, disabled, or not found)`;
+      }
     } else {
       result.authTestResult = 'No enabled hotspot users or vouchers to test with';
     }

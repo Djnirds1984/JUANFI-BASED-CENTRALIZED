@@ -23,6 +23,8 @@ import subvendoRoutes from './api/subvendo';
 import nodemcuRoutes from './api/nodemcu';
 import interfaceRoutes from './api/interfaces';
 import sessionRoutes from './api/session';
+import radiusProfileRoutes from './api/radiusProfiles';
+import radiusSessionRoutes from './api/radiusSessions';
 
 const app = express();
 const server = http.createServer(app);
@@ -52,6 +54,8 @@ app.use('/api/subvendo', subvendoRoutes);
 app.use('/api/nodemcu', nodemcuRoutes);
 app.use('/api/interfaces', interfaceRoutes);
 app.use('/api/session', sessionRoutes);
+app.use('/api/radius-profiles', radiusProfileRoutes);
+app.use('/api/radius-sessions', radiusSessionRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

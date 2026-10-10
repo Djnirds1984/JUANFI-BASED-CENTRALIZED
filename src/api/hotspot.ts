@@ -59,7 +59,7 @@ router.get('/router/:routerId/local', (req: Request, res: Response) => {
 router.post('/router/:routerId', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { username, password, profile, uptimeLimit, bytesInQuota, bytesOutQuota, comment } = req.body;
+    const { username, password, profile, uptimeLimit, bytesInQuota, bytesOutQuota, comment, radiusProfileId } = req.body;
 
     if (!username || !password || !profile) {
       res.status(400).json({ error: 'Username, password, and profile are required' });
@@ -88,13 +88,66 @@ router.post('/router/:routerId', async (req: Request, res: Response) => {
     const source = routerRow.auth_mode === 'radius' ? 'radius' : 'api';
 
     db.prepare(
-      `INSERT INTO hotspot_users (router_id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, comment, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(routerId, username, password, profile, uptimeLimit || '00:00:00', bytesInQuota || 0, bytesOutQuota || 0, comment || null, source);
+      `INSERT INTO hotspot_users (router_id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, comment, source, radius_profile_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(routerId, username, password, profile, uptimeLimit || '00:00:00', bytesInQuota || 0, bytesOutQuota || 0, comment || null, source, radiusProfileId || null);
 
     res.status(201).json({ message: 'Hotspot user created successfully' });
   } catch (error: any) {
     console.error('Create hotspot user error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/:userId', (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const userId = parseInt(req.params.userId);
+    const db = getDb();
+
+    const user = db.prepare('SELECT * FROM hotspot_users WHERE id = ? AND router_id = ?').get(userId, routerId) as any;
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const { radiusProfileId, disabled, comment, bytesInQuota, bytesOutQuota } = req.body;
+
+    const updates: string[] = [];
+    const params: any[] = [];
+
+    if (radiusProfileId !== undefined) {
+      updates.push('radius_profile_id = ?');
+      params.push(radiusProfileId || null);
+    }
+    if (disabled !== undefined) {
+      updates.push('disabled = ?');
+      params.push(disabled ? 1 : 0);
+    }
+    if (comment !== undefined) {
+      updates.push('comment = ?');
+      params.push(comment);
+    }
+    if (bytesInQuota !== undefined) {
+      updates.push('bytes_in_quota = ?');
+      params.push(bytesInQuota);
+    }
+    if (bytesOutQuota !== undefined) {
+      updates.push('bytes_out_quota = ?');
+      params.push(bytesOutQuota);
+    }
+
+    if (updates.length === 0) {
+      res.status(400).json({ error: 'No fields to update' });
+      return;
+    }
+
+    params.push(userId, routerId);
+    db.prepare(`UPDATE hotspot_users SET ${updates.join(', ')} WHERE id = ? AND router_id = ?`).run(...params);
+
+    res.json({ message: 'User updated' });
+  } catch (error: any) {
+    console.error('Update hotspot user error:', error);
     res.status(500).json({ error: error.message });
   }
 });

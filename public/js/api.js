@@ -562,6 +562,54 @@ class ApiClient {
     if (routerId) params.set('router_id', routerId);
     return this.delete(`/routers/radius/logs?${params.toString()}`);
   }
+
+  // --- RADIUS Profiles ---
+  async getRadiusProfiles(routerId) {
+    return this.get(`/radius-profiles/router/${routerId}`);
+  }
+
+  async getRadiusProfile(routerId, profileId) {
+    return this.get(`/radius-profiles/router/${routerId}/${profileId}`);
+  }
+
+  async createRadiusProfile(routerId, data) {
+    return this.post(`/radius-profiles/router/${routerId}`, data);
+  }
+
+  async updateRadiusProfile(routerId, profileId, data) {
+    return this.put(`/radius-profiles/router/${routerId}/${profileId}`, data);
+  }
+
+  async deleteRadiusProfile(routerId, profileId) {
+    return this.delete(`/radius-profiles/router/${routerId}/${profileId}`);
+  }
+
+  // --- RADIUS Sessions ---
+  async getRadiusSessions(routerId, params = {}) {
+    const query = new URLSearchParams(params).toString();
+    return this.get(`/radius-sessions/router/${routerId}${query ? '?' + query : ''}`);
+  }
+
+  async getActiveRadiusSessions(routerId) {
+    return this.get(`/radius-sessions/router/${routerId}/active`);
+  }
+
+  async terminateRadiusSession(routerId, sessionId) {
+    return this.post(`/radius-sessions/router/${routerId}/${sessionId}/terminate`);
+  }
+
+  async deleteRadiusSession(routerId, sessionId) {
+    return this.delete(`/radius-sessions/router/${routerId}/${sessionId}`);
+  }
+
+  async getRadiusSessionStats(routerId) {
+    return this.get(`/radius-sessions/router/${routerId}/stats`);
+  }
+
+  // --- Hotspot User Update ---
+  async updateHotspotUser(routerId, userId, data) {
+    return this.put(`/hotspot/router/${routerId}/${userId}`, data);
+  }
 }
 
 window.api = new ApiClient();

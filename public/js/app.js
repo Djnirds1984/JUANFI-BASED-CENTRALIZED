@@ -11,6 +11,7 @@ const App = {
   _portalPreviewTheme: null,
   hotspotTab: 'hosts',
   voucherTab: 'vouchers',
+  radiusTab: 'profiles',
 
   init() {
     if (window.AdminThemes) {
@@ -112,6 +113,7 @@ const App = {
       'hotspot-settings': 'Hotspot Settings',
       interfaces: 'Interfaces',
       vouchers: 'Vouchers',
+      radius: 'RADIUS',
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
@@ -135,6 +137,7 @@ const App = {
         case 'hotspot-settings': await this.renderHotspotSettings(); break;
         case 'interfaces': await this.renderInterfaces(); break;
         case 'vouchers': await this.renderVouchers(); break;
+        case 'radius': await this.renderRadius(); break;
         case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
@@ -3910,7 +3913,15 @@ const App = {
   },
 
   async loadRadiusUsers(container) {
-    const users = await api.getHotspotUsers(this.selectedRouterId);
+    const [users, radiusProfiles] = await Promise.all([
+      api.getHotspotUsers(this.selectedRouterId),
+      api.getRadiusProfiles(this.selectedRouterId),
+    ]);
+
+    const profileMap = {};
+    for (const p of radiusProfiles) {
+      profileMap[p.id] = p.name;
+    }
 
     let headerHtml = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
@@ -3930,8 +3941,8 @@ const App = {
           <thead>
             <tr>
               <th>Username</th>
-              <th>Profile</th>
-              <th>Uptime Limit</th>
+              <th>RADIUS Profile</th>
+              <th>Status</th>
               <th>Comment</th>
               <th>Created</th>
               <th>Actions</th>
@@ -3939,21 +3950,23 @@ const App = {
           </thead>
           <tbody>
             ${users.map((u) => {
-              const uptime = u.uptime_limit || u['limit-uptime'] || 'Unlimited';
               const comment = u.comment || '';
               const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '';
               const userId = u.id || u['.id'] || '';
               const disabled = u.disabled === 'true' || u.disabled === 1;
+              const rpName = u.radius_profile_id ? (profileMap[u.radius_profile_id] || 'Unknown') : '-';
               return `
                 <tr>
                   <td><strong>${this.escapeHtml(u.username || u.name || '')}</strong></td>
-                  <td>${this.escapeHtml(u.profile || '')}</td>
-                  <td>${this.escapeHtml(uptime)}</td>
+                  <td>${this.escapeHtml(rpName)}</td>
+                  <td>
+                    ${disabled ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}
+                  </td>
                   <td>${this.escapeHtml(comment)}</td>
                   <td>${created}</td>
                   <td>
-                    ${disabled ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}
-                    <button class="btn btn-sm btn-danger" style="margin-left:0.5rem" onclick="App.deleteRadiusUser(${userId})">Delete</button>
+                    <button class="btn btn-sm btn-outline" onclick="App.showEditRadiusUserModal(${userId})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteRadiusUser(${userId})">Delete</button>
                   </td>
                 </tr>
               `;
@@ -3965,12 +3978,9 @@ const App = {
   },
 
   async showAddRadiusUserModal() {
-    let profiles = [];
-    try {
-      profiles = await api.getUserProfiles(this.selectedRouterId);
-    } catch (err) {
-      // fallback to default
-    }
+    const [radiusProfiles] = await Promise.all([
+      api.getRadiusProfiles(this.selectedRouterId),
+    ]);
 
     this.openModal('Add RADIUS User', `
       <form id="add-radius-user-form">
@@ -3983,11 +3993,10 @@ const App = {
           <input type="text" name="password" required>
         </div>
         <div class="form-group">
-          <label>Profile</label>
-          <select name="profile">
-            ${profiles.length > 0
-              ? profiles.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')
-              : '<option value="default">default</option>'}
+          <label>RADIUS Profile</label>
+          <select name="radiusProfileId">
+            <option value="">-- No profile --</option>
+            ${radiusProfiles.map((p) => `<option value="${p.id}" ${p.is_default ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
@@ -4007,11 +4016,72 @@ const App = {
       await api.createHotspotUser(this.selectedRouterId, {
         username: form.username.value,
         password: form.password.value,
-        profile: form.profile.value,
+        profile: 'default',
         comment: form.comment.value,
+        radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
       });
       this.closeModal();
       this.toast('User added', 'success');
+      this.loadVoucherTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async showEditRadiusUserModal(userId) {
+    const [users, radiusProfiles] = await Promise.all([
+      api.getHotspotUsers(this.selectedRouterId),
+      api.getRadiusProfiles(this.selectedRouterId),
+    ]);
+
+    const user = users.find((u) => (u.id || u['.id']) == userId);
+    if (!user) {
+      this.toast('User not found', 'error');
+      return;
+    }
+
+    const disabled = user.disabled === 'true' || user.disabled === 1;
+
+    this.openModal('Edit RADIUS User', `
+      <form id="edit-radius-user-form">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" value="${this.escapeHtml(user.username || '')}" disabled>
+        </div>
+        <div class="form-group">
+          <label>RADIUS Profile</label>
+          <select name="radiusProfileId">
+            <option value="">-- No profile --</option>
+            ${radiusProfiles.map((p) => `<option value="${p.id}" ${p.id === user.radius_profile_id ? 'selected' : ''}>${this.escapeHtml(p.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comment</label>
+          <input type="text" name="comment" value="${this.escapeHtml(user.comment || '')}">
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="checkbox" name="disabled" ${disabled ? 'checked' : ''}>
+            Disabled
+          </label>
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save Changes', class: 'btn btn-primary', action: () => this.submitEditRadiusUser(userId) },
+    ]);
+  },
+
+  async submitEditRadiusUser(userId) {
+    const form = document.getElementById('edit-radius-user-form');
+    try {
+      await api.updateHotspotUser(this.selectedRouterId, userId, {
+        radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
+        comment: form.comment.value,
+        disabled: form.disabled.checked ? 1 : 0,
+      });
+      this.closeModal();
+      this.toast('User updated', 'success');
       this.loadVoucherTab();
     } catch (err) {
       this.toast(err.message, 'error');
@@ -4335,6 +4405,569 @@ const App = {
         </div>
       </div>
     `;
+  },
+
+  async renderRadius() {
+    const content = document.getElementById('page-content');
+    const routers = await api.getRouters();
+    const radiusRouters = routers.filter((r) => r.auth_mode === 'radius');
+
+    if (radiusRouters.length === 0) {
+      content.innerHTML = `
+        <div class="empty-state">
+          <h3>No RADIUS routers configured</h3>
+          <p>Set a router's auth mode to RADIUS in the Routers page to manage RADIUS profiles and sessions.</p>
+        </div>`;
+      return;
+    }
+
+    if (!this.selectedRouterId || !radiusRouters.find((r) => r.id === this.selectedRouterId)) {
+      this.selectedRouterId = radiusRouters[0].id;
+    }
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>RADIUS Management</h3>
+          <select id="radius-router-select" class="btn btn-outline">
+            ${radiusRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="tabs">
+          <button class="tab ${this.radiusTab === 'profiles' ? 'active' : ''}" data-tab="profiles">Profiles</button>
+          <button class="tab ${this.radiusTab === 'sessions' ? 'active' : ''}" data-tab="sessions">Sessions</button>
+          <button class="tab ${this.radiusTab === 'active' ? 'active' : ''}" data-tab="active">Active</button>
+        </div>
+        <div id="radius-tab-content">Loading...</div>
+      </div>
+    `;
+
+    document.getElementById('radius-router-select').addEventListener('change', (e) => {
+      this.selectedRouterId = parseInt(e.target.value);
+      this.loadRadiusTab();
+    });
+
+    document.querySelectorAll('#radius-tab-content').forEach(() => {});
+    content.querySelectorAll('.tabs .tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.radiusTab = tab.dataset.tab;
+        content.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadRadiusTab();
+      });
+    });
+
+    this.loadRadiusTab();
+  },
+
+  async loadRadiusTab() {
+    const container = document.getElementById('radius-tab-content');
+    if (!container) return;
+    container.innerHTML = 'Loading...';
+
+    try {
+      if (this.radiusTab === 'profiles') {
+        await this.loadRadiusProfiles(container);
+      } else if (this.radiusTab === 'sessions') {
+        await this.loadRadiusSessions(container);
+      } else if (this.radiusTab === 'active') {
+        await this.loadRadiusActiveSessions(container);
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadRadiusProfiles(container) {
+    const profiles = await api.getRadiusProfiles(this.selectedRouterId);
+
+    const fmtBps = (bps) => {
+      if (!bps || bps === 0) return 'Unlimited';
+      if (bps >= 1000000) return `${Math.round(bps / 1000000)} Mbps`;
+      if (bps >= 1000) return `${Math.round(bps / 1000)} Kbps`;
+      return `${bps} bps`;
+    };
+
+    const fmtBytes = (bytes) => {
+      if (!bytes || bytes === 0) return 'Unlimited';
+      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(0)} MB`;
+      if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+      return `${bytes} B`;
+    };
+
+    const fmtTime = (seconds) => {
+      if (!seconds || seconds === 0) return 'Unlimited';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    };
+
+    const fmtValidity = (p) => {
+      if (p.validity_fixed_expiry) return `Until ${p.validity_fixed_expiry}`;
+      if (p.validity_period && p.validity_period > 0) {
+        const secs = p.validity_period;
+        if (secs >= 86400) return `${Math.round(secs / 86400)} days`;
+        if (secs >= 3600) return `${Math.round(secs / 3600)} hours`;
+        return `${Math.round(secs / 60)} minutes`;
+      }
+      return 'No expiry';
+    };
+
+    let headerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">RADIUS Profiles (${profiles.length})</h4>
+        <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusProfileModal()">Add Profile</button>
+      </div>
+    `;
+
+    if (!profiles || profiles.length === 0) {
+      container.innerHTML = headerHtml + '<div class="empty-state"><p>No RADIUS profiles yet. Create profiles to define speed limits, quotas, and session settings for your users.</p></div>';
+      return;
+    }
+
+    container.innerHTML = headerHtml + `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Speed (Rx/Tx)</th>
+              <th>Burst</th>
+              <th>Session Timeout</th>
+              <th>Quota (In/Out)</th>
+              <th>Validity</th>
+              <th>Price</th>
+              <th>Users</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${profiles.map((p) => `
+              <tr>
+                <td>
+                  <strong>${this.escapeHtml(p.name)}</strong>
+                  ${p.is_default ? '<span class="status-badge connected" style="margin-left:0.3rem;font-size:0.7rem">Default</span>' : ''}
+                  ${p.description ? `<br><small style="color:var(--text-muted)">${this.escapeHtml(p.description)}</small>` : ''}
+                </td>
+                <td>${fmtBps(p.rate_rx)} / ${fmtBps(p.rate_tx)}</td>
+                <td>${(p.burst_rx || p.burst_tx) ? fmtBps(p.burst_rx) + ' / ' + fmtBps(p.burst_tx) : '-'}</td>
+                <td>${fmtTime(p.session_timeout)}</td>
+                <td>${fmtBytes(p.quota_rx)} / ${fmtBytes(p.quota_tx)}${p.quota_total ? '<br>Total: ' + fmtBytes(p.quota_total) : ''}</td>
+                <td>${fmtValidity(p)}</td>
+                <td>${p.price ? '$' + p.price.toFixed(2) : '-'}</td>
+                <td>${p.user_count || 0}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditRadiusProfileModal(${p.id})">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteRadiusProfile(${p.id})">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async showAddRadiusProfileModal() {
+    this.openModal('Add RADIUS Profile', this.radiusProfileFormHtml(), [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Create Profile', class: 'btn btn-primary', action: () => this.submitRadiusProfile() },
+    ]);
+  },
+
+  async showEditRadiusProfileModal(profileId) {
+    const profile = await api.getRadiusProfile(this.selectedRouterId, profileId);
+    this.openModal('Edit RADIUS Profile', this.radiusProfileFormHtml(profile), [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Save Changes', class: 'btn btn-primary', action: () => this.submitRadiusProfile(profileId) },
+    ]);
+  },
+
+  radiusProfileFormHtml(p = {}) {
+    const fmtSecs = (s) => {
+      if (!s) return '';
+      if (s >= 86400) return (s / 86400).toString();
+      if (s >= 3600) return (s / 3600).toString();
+      if (s >= 60) return (s / 60).toString();
+      return s.toString();
+    };
+    const validityUnit = (s) => {
+      if (!s) return 'hours';
+      if (s >= 86400) return 'days';
+      if (s >= 3600) return 'hours';
+      return 'minutes';
+    };
+
+    return `
+      <form id="radius-profile-form">
+        <div class="form-group">
+          <label>Profile Name</label>
+          <input type="text" name="name" value="${this.escapeHtml(p.name || '')}" required>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group">
+            <label>Download Speed (bps)</label>
+            <input type="number" name="rate_rx" value="${p.rate_rx || 0}" min="0" placeholder="e.g. 5000000 for 5Mbps">
+          </div>
+          <div class="form-group">
+            <label>Upload Speed (bps)</label>
+            <input type="number" name="rate_tx" value="${p.rate_tx || 0}" min="0" placeholder="e.g. 1000000 for 1Mbps">
+          </div>
+          <div class="form-group">
+            <label>Burst Download (bps)</label>
+            <input type="number" name="burst_rx" value="${p.burst_rx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Burst Upload (bps)</label>
+            <input type="number" name="burst_tx" value="${p.burst_tx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Burst Threshold Down (bps)</label>
+            <input type="number" name="burst_threshold_rx" value="${p.burst_threshold_rx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Burst Threshold Up (bps)</label>
+            <input type="number" name="burst_threshold_tx" value="${p.burst_threshold_tx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Burst Time Down (seconds)</label>
+            <input type="number" name="burst_time_rx" value="${p.burst_time_rx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Burst Time Up (seconds)</label>
+            <input type="number" name="burst_time_tx" value="${p.burst_time_tx || 0}" min="0">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group">
+            <label>Session Timeout</label>
+            <div style="display:flex;gap:0.5rem">
+              <input type="number" name="session_timeout_val" value="${fmtSecs(p.session_timeout)}" min="0" style="flex:1">
+              <select name="session_timeout_unit" style="width:80px">
+                <option value="hours" ${validityUnit(p.session_timeout) === 'hours' ? 'selected' : ''}>Hours</option>
+                <option value="minutes" ${validityUnit(p.session_timeout) === 'minutes' ? 'selected' : ''}>Min</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Idle Timeout (seconds)</label>
+            <input type="number" name="idle_timeout" value="${p.idle_timeout || 0}" min="0">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
+          <div class="form-group">
+            <label>Download Quota (bytes)</label>
+            <input type="number" name="quota_rx" value="${p.quota_rx || 0}" min="0" placeholder="0 = unlimited">
+          </div>
+          <div class="form-group">
+            <label>Upload Quota (bytes)</label>
+            <input type="number" name="quota_tx" value="${p.quota_tx || 0}" min="0">
+          </div>
+          <div class="form-group">
+            <label>Total Quota (bytes)</label>
+            <input type="number" name="quota_total" value="${p.quota_total || 0}" min="0">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group">
+            <label>Validity Period</label>
+            <div style="display:flex;gap:0.5rem">
+              <input type="number" name="validity_val" value="${fmtSecs(p.validity_period)}" min="0" style="flex:1" placeholder="0 = no expiry">
+              <select name="validity_unit" style="width:80px">
+                <option value="days" ${validityUnit(p.validity_period) === 'days' ? 'selected' : ''}>Days</option>
+                <option value="hours" ${validityUnit(p.validity_period) === 'hours' ? 'selected' : ''}>Hours</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Fixed Expiry Date (optional)</label>
+            <input type="datetime-local" name="validity_fixed_expiry" value="${p.validity_fixed_expiry ? p.validity_fixed_expiry.replace(' ', 'T') : ''}">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
+          <div class="form-group">
+            <label>Shared Users</label>
+            <input type="number" name="shared_users" value="${p.shared_users || 1}" min="1">
+          </div>
+          <div class="form-group">
+            <label>Price</label>
+            <input type="number" name="price" value="${p.price || 0}" min="0" step="0.01">
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-top:1.5rem">
+              <input type="checkbox" name="is_default" ${p.is_default ? 'checked' : ''}>
+              Default profile
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" name="description" value="${this.escapeHtml(p.description || '')}" placeholder="Optional description">
+        </div>
+      </form>
+    `;
+  },
+
+  async submitRadiusProfile(editId = null) {
+    const form = document.getElementById('radius-profile-form');
+    if (!form.name.value.trim()) {
+      this.toast('Profile name is required', 'error');
+      return;
+    }
+
+    const sessUnit = form.session_timeout_unit.value;
+    const sessVal = parseInt(form.session_timeout_val.value) || 0;
+    const sessionTimeout = sessUnit === 'hours' ? sessVal * 3600 : sessVal * 60;
+
+    const valUnit = form.validity_unit.value;
+    const valVal = parseInt(form.validity_val.value) || 0;
+    const validityPeriod = valUnit === 'days' ? valVal * 86400 : valVal * 3600;
+
+    const fixedExpiry = form.validity_fixed_expiry.value
+      ? form.validity_fixed_expiry.value.replace('T', ' ')
+      : null;
+
+    const data = {
+      name: form.name.value.trim(),
+      rate_rx: parseInt(form.rate_rx.value) || 0,
+      rate_tx: parseInt(form.rate_tx.value) || 0,
+      burst_rx: parseInt(form.burst_rx.value) || 0,
+      burst_tx: parseInt(form.burst_tx.value) || 0,
+      burst_threshold_rx: parseInt(form.burst_threshold_rx.value) || 0,
+      burst_threshold_tx: parseInt(form.burst_threshold_tx.value) || 0,
+      burst_time_rx: parseInt(form.burst_time_rx.value) || 0,
+      burst_time_tx: parseInt(form.burst_time_tx.value) || 0,
+      session_timeout: sessionTimeout,
+      idle_timeout: parseInt(form.idle_timeout.value) || 0,
+      quota_rx: parseInt(form.quota_rx.value) || 0,
+      quota_tx: parseInt(form.quota_tx.value) || 0,
+      quota_total: parseInt(form.quota_total.value) || 0,
+      validity_period: validityPeriod,
+      validity_fixed_expiry: fixedExpiry,
+      shared_users: parseInt(form.shared_users.value) || 1,
+      price: parseFloat(form.price.value) || 0,
+      is_default: form.is_default.checked ? 1 : 0,
+      description: form.description.value.trim() || null,
+    };
+
+    try {
+      if (editId) {
+        await api.updateRadiusProfile(this.selectedRouterId, editId, data);
+        this.toast('Profile updated', 'success');
+      } else {
+        await api.createRadiusProfile(this.selectedRouterId, data);
+        this.toast('Profile created', 'success');
+      }
+      this.closeModal();
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async deleteRadiusProfile(profileId) {
+    if (!confirm('Delete this RADIUS profile? Users assigned to it will lose their profile settings.')) return;
+    try {
+      await api.deleteRadiusProfile(this.selectedRouterId, profileId);
+      this.toast('Profile deleted', 'success');
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async loadRadiusSessions(container) {
+    const sessions = await api.getRadiusSessions(this.selectedRouterId, { limit: 200 });
+
+    const fmtBytes = (bytes) => {
+      if (!bytes || bytes === 0) return '0 B';
+      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+      if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+      return `${bytes} B`;
+    };
+
+    const fmtDuration = (secs) => {
+      if (!secs) return '0s';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    };
+
+    let headerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Session History (${sessions.length})</h4>
+      </div>
+    `;
+
+    if (!sessions || sessions.length === 0) {
+      container.innerHTML = headerHtml + '<div class="empty-state"><p>No session records yet. Sessions appear here when users connect via RADIUS.</p></div>';
+      return;
+    }
+
+    container.innerHTML = headerHtml + `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Profile</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th>Download</th>
+              <th>Upload</th>
+              <th>NAS IP</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sessions.map((s) => `
+              <tr>
+                <td><strong>${this.escapeHtml(s.username)}</strong></td>
+                <td>${this.escapeHtml(s.profile_name || '-')}</td>
+                <td>
+                  <span class="status-badge ${s.status === 'active' ? 'connected' : 'disconnected'}">
+                    ${s.status === 'active' ? 'Active' : 'Stopped'}
+                  </span>
+                  ${s.terminate_cause ? `<br><small style="color:var(--text-muted)">${this.escapeHtml(s.terminate_cause)}</small>` : ''}
+                </td>
+                <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
+                <td>${fmtDuration(s.session_time)}</td>
+                <td>${fmtBytes(s.input_octets)}</td>
+                <td>${fmtBytes(s.output_octets)}</td>
+                <td>${this.escapeHtml(s.nas_ip || '-')}</td>
+                <td>
+                  ${s.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="App.terminateRadiusSession(${s.id})">Disconnect</button>` : ''}
+                  <button class="btn btn-sm btn-outline" onclick="App.deleteRadiusSession(${s.id})">Remove</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async loadRadiusActiveSessions(container) {
+    const [sessions, stats] = await Promise.all([
+      api.getActiveRadiusSessions(this.selectedRouterId),
+      api.getRadiusSessionStats(this.selectedRouterId),
+    ]);
+
+    const fmtBytes = (bytes) => {
+      if (!bytes || bytes === 0) return '0 B';
+      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+      if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+      return `${bytes} B`;
+    };
+
+    const fmtDuration = (secs) => {
+      if (!secs) return '0s';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    };
+
+    const statsHtml = `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem">
+        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+          <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">${stats.activeSessions}</div>
+          <div style="font-size:0.8rem;color:var(--text-muted)">Active Sessions</div>
+        </div>
+        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+          <div style="font-size:1.5rem;font-weight:700">${stats.todaySessions}</div>
+          <div style="font-size:0.8rem;color:var(--text-muted)">Today's Sessions</div>
+        </div>
+        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+          <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesIn)}</div>
+          <div style="font-size:0.8rem;color:var(--text-muted)">Download Today</div>
+        </div>
+        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+          <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesOut)}</div>
+          <div style="font-size:0.8rem;color:var(--text-muted)">Upload Today</div>
+        </div>
+      </div>
+    `;
+
+    let headerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Active Sessions (${sessions.length})</h4>
+      </div>
+    `;
+
+    if (!sessions || sessions.length === 0) {
+      container.innerHTML = statsHtml + headerHtml + '<div class="empty-state"><p>No active sessions right now.</p></div>';
+      return;
+    }
+
+    container.innerHTML = statsHtml + headerHtml + `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Profile</th>
+              <th>Session ID</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th>Download</th>
+              <th>Upload</th>
+              <th>NAS IP</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sessions.map((s) => `
+              <tr>
+                <td><strong>${this.escapeHtml(s.username)}</strong></td>
+                <td>${this.escapeHtml(s.profile_name || '-')}</td>
+                <td><code style="font-size:0.75rem">${this.escapeHtml(s.session_id || '-')}</code></td>
+                <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
+                <td>${fmtDuration(s.session_time)}</td>
+                <td>${fmtBytes(s.input_octets)}</td>
+                <td>${fmtBytes(s.output_octets)}</td>
+                <td>${this.escapeHtml(s.nas_ip || '-')}</td>
+                <td>
+                  <button class="btn btn-sm btn-danger" onclick="App.terminateRadiusSession(${s.id})">Disconnect</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async terminateRadiusSession(sessionId) {
+    if (!confirm('Disconnect this session? The user will be immediately disconnected from the network.')) return;
+    try {
+      await api.terminateRadiusSession(this.selectedRouterId, sessionId);
+      this.toast('Session terminated', 'success');
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async deleteRadiusSession(sessionId) {
+    if (!confirm('Remove this session record?')) return;
+    try {
+      await api.deleteRadiusSession(this.selectedRouterId, sessionId);
+      this.toast('Session removed', 'success');
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async renderPortal() {

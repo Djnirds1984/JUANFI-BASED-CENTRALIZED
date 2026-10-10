@@ -24,8 +24,11 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
 
     const { status, limit, offset } = req.query;
 
+    const routerRow = db.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
+    const isRadius = routerRow?.auth_mode === 'radius';
+
     let routerUsers: any[] = [];
-    if (mikroTikService.isConnected(routerId)) {
+    if (!isRadius && mikroTikService.isConnected(routerId)) {
       try {
         routerUsers = await mikroTikService.getHotspotUsers(routerId);
       } catch (err) {
@@ -39,20 +42,22 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
         .map((u: any) => u.name)
     );
 
-    if (activeUsernames.size > 0) {
-      const placeholders = Array.from(activeUsernames).map(() => '?').join(',');
-      const syncStmt = db.prepare(
-        `UPDATE vouchers SET is_used = 1, used_at = datetime('now')
-         WHERE router_id = ? AND username IN (${placeholders}) AND is_used = 0`
-      );
-      syncStmt.run(routerId, ...Array.from(activeUsernames));
+    if (!isRadius) {
+      if (activeUsernames.size > 0) {
+        const placeholders = Array.from(activeUsernames).map(() => '?').join(',');
+        const syncStmt = db.prepare(
+          `UPDATE vouchers SET is_used = 1, used_at = datetime('now')
+           WHERE router_id = ? AND username IN (${placeholders}) AND is_used = 0`
+        );
+        syncStmt.run(routerId, ...Array.from(activeUsernames));
 
-      const deleteStmt = db.prepare(
-        `DELETE FROM vouchers WHERE router_id = ? AND is_used = 1 AND username NOT IN (${placeholders})`
-      );
-      deleteStmt.run(routerId, ...Array.from(activeUsernames));
-    } else {
-      db.prepare('DELETE FROM vouchers WHERE router_id = ? AND is_used = 1').run(routerId);
+        const deleteStmt = db.prepare(
+          `DELETE FROM vouchers WHERE router_id = ? AND is_used = 1 AND username NOT IN (${placeholders})`
+        );
+        deleteStmt.run(routerId, ...Array.from(activeUsernames));
+      } else {
+        db.prepare('DELETE FROM vouchers WHERE router_id = ? AND is_used = 1').run(routerId);
+      }
     }
 
     let query = 'SELECT * FROM vouchers WHERE router_id = ?';
@@ -148,7 +153,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
     let mikrotikSuccess = 0;
     let mikrotikFailed = 0;
 
-    if (mikroTikService.isConnected(routerId)) {
+    if (mikroTikService.isConnected(routerId) && routerRow.auth_mode !== 'radius') {
       for (const v of vouchers) {
         try {
           const hours = v.durationMinutes ? Math.floor(v.durationMinutes / 60) : 0;
@@ -210,7 +215,9 @@ router.delete('/router/:routerId/:voucherId', async (req: Request, res: Response
       return;
     }
 
-    if (mikroTikService.isConnected(routerId)) {
+    const routerRow = db.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
+
+    if (mikroTikService.isConnected(routerId) && routerRow?.auth_mode !== 'radius') {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
         const routerUser = routerUsers.find((u: any) => u.name === voucher.username);

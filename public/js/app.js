@@ -10,6 +10,7 @@ const App = {
   _portalPreviewTimer: null,
   _portalPreviewTheme: null,
   hotspotTab: 'hosts',
+  voucherTab: 'vouchers',
 
   init() {
     if (window.AdminThemes) {
@@ -3850,6 +3851,13 @@ const App = {
       this.selectedRouterId = routers[0].id;
     }
 
+    const currentRouter = routers.find((r) => r.id === this.selectedRouterId);
+    const isRadiusMode = currentRouter?.auth_mode === 'radius';
+
+    if (!isRadiusMode && this.voucherTab === 'radius') {
+      this.voucherTab = 'vouchers';
+    }
+
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
@@ -3858,23 +3866,170 @@ const App = {
             <select id="voucher-router-select" class="btn btn-outline">
               ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
             </select>
-            <button class="btn btn-primary btn-sm" onclick="App.showGenerateVouchersModal()">Generate Vouchers</button>
           </div>
         </div>
-        <div id="vouchers-table">Loading...</div>
+        <div class="tabs">
+          <button class="tab ${this.voucherTab === 'vouchers' ? 'active' : ''}" data-tab="vouchers">Vouchers</button>
+          ${isRadiusMode ? `<button class="tab ${this.voucherTab === 'radius' ? 'active' : ''}" data-tab="radius">RADIUS Users</button>` : ''}
+        </div>
+        <div id="voucher-tab-content">Loading...</div>
       </div>
     `;
 
     document.getElementById('voucher-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
-      this.loadVouchers();
+      this.loadVoucherTab();
     });
 
-    this.loadVouchers();
+    document.querySelectorAll('.tabs .tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.voucherTab = tab.dataset.tab;
+        document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadVoucherTab();
+      });
+    });
+
+    this.loadVoucherTab();
   },
 
-  async loadVouchers() {
-    const container = document.getElementById('vouchers-table');
+  async loadVoucherTab() {
+    const container = document.getElementById('voucher-tab-content');
+    if (!container) return;
+    container.innerHTML = 'Loading...';
+
+    try {
+      if (this.voucherTab === 'radius') {
+        await this.loadRadiusUsers(container);
+      } else {
+        await this.loadVouchersContent(container);
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  async loadRadiusUsers(container) {
+    const users = await api.getHotspotUsers(this.selectedRouterId);
+
+    let headerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">RADIUS Users (${users.length})</h4>
+        <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
+      </div>
+    `;
+
+    if (!users || users.length === 0) {
+      container.innerHTML = headerHtml + '<div class="empty-state"><p>No RADIUS users. Add users that will be authenticated via RADIUS.</p></div>';
+      return;
+    }
+
+    container.innerHTML = headerHtml + `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Profile</th>
+              <th>Uptime Limit</th>
+              <th>Comment</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${users.map((u) => {
+              const uptime = u.uptime_limit || u['limit-uptime'] || 'Unlimited';
+              const comment = u.comment || '';
+              const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '';
+              const userId = u.id || u['.id'] || '';
+              const disabled = u.disabled === 'true' || u.disabled === 1;
+              return `
+                <tr>
+                  <td><strong>${this.escapeHtml(u.username || u.name || '')}</strong></td>
+                  <td>${this.escapeHtml(u.profile || '')}</td>
+                  <td>${this.escapeHtml(uptime)}</td>
+                  <td>${this.escapeHtml(comment)}</td>
+                  <td>${created}</td>
+                  <td>
+                    ${disabled ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}
+                    <button class="btn btn-sm btn-danger" style="margin-left:0.5rem" onclick="App.deleteRadiusUser(${userId})">Delete</button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async showAddRadiusUserModal() {
+    let profiles = [];
+    try {
+      profiles = await api.getUserProfiles(this.selectedRouterId);
+    } catch (err) {
+      // fallback to default
+    }
+
+    this.openModal('Add RADIUS User', `
+      <form id="add-radius-user-form">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" name="username" required>
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="text" name="password" required>
+        </div>
+        <div class="form-group">
+          <label>Profile</label>
+          <select name="profile">
+            ${profiles.length > 0
+              ? profiles.map((p) => `<option value="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}</option>`).join('')
+              : '<option value="default">default</option>'}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comment (optional)</label>
+          <input type="text" name="comment">
+        </div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Add User', class: 'btn btn-primary', action: () => this.submitAddRadiusUser() },
+    ]);
+  },
+
+  async submitAddRadiusUser() {
+    const form = document.getElementById('add-radius-user-form');
+    try {
+      await api.createHotspotUser(this.selectedRouterId, {
+        username: form.username.value,
+        password: form.password.value,
+        profile: form.profile.value,
+        comment: form.comment.value,
+      });
+      this.closeModal();
+      this.toast('User added', 'success');
+      this.loadVoucherTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async deleteRadiusUser(userId) {
+    if (!confirm('Delete this RADIUS user?')) return;
+    try {
+      await api.deleteHotspotUser(this.selectedRouterId, userId);
+      this.toast('User deleted', 'success');
+      this.loadVoucherTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async loadVouchersContent(container) {
     try {
       const data = await api.getVouchers(this.selectedRouterId);
       const vouchers = data.vouchers || [];
@@ -3890,6 +4045,12 @@ const App = {
       const usedCount = vouchers.filter(v => v.is_used && !activeUsernames.has(v.username)).length;
 
       let html = '';
+
+      html += `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:1rem">
+          <button class="btn btn-primary btn-sm" onclick="App.showGenerateVouchersModal()">Generate Vouchers</button>
+        </div>
+      `;
 
       html += `
         <div class="voucher-summary" style="margin-bottom:1.5rem">
@@ -3978,46 +4139,6 @@ const App = {
                   </tr>
                 `;
                 }).join('')}
-              </tbody>
-            </table>
-          </div>
-        `;
-      }
-
-      html += `</div>`;
-
-      html += `
-        <div>
-          <h4 style="margin-bottom:0.75rem;font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Router Hotspot Users (${routerUsers.length})</h4>
-      `;
-
-      if (routerUsers.length === 0) {
-        html += '<div class="empty-state"><p>No hotspot users found on router.</p></div>';
-      } else {
-        html += `
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Profile</th>
-                  <th>Uptime Limit</th>
-                  <th>Bytes In/Out</th>
-                  <th>Comment</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${routerUsers.map((u) => `
-                  <tr>
-                    <td><strong>${this.escapeHtml(u.name || '')}</strong></td>
-                    <td>${this.escapeHtml(u.profile || '')}</td>
-                    <td>${this.escapeHtml(u['limit-uptime'] || 'Unlimited')}</td>
-                    <td>${u['bytes-in-quota'] || 0} / ${u['bytes-out-quota'] || 0}</td>
-                    <td>${this.escapeHtml(u.comment || '')}</td>
-                    <td>${u.disabled === 'true' ? '<span class="status-badge disconnected">Disabled</span>' : '<span class="status-badge connected">Active</span>'}</td>
-                  </tr>
-                `).join('')}
               </tbody>
             </table>
           </div>
@@ -4128,7 +4249,7 @@ const App = {
       }
 
       this.toast(message, 'success');
-      this.loadVouchers();
+      this.loadVoucherTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -4139,7 +4260,7 @@ const App = {
     try {
       await api.deleteVoucher(this.selectedRouterId, voucherId);
       this.toast('Voucher deleted', 'success');
-      this.loadVouchers();
+      this.loadVoucherTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }

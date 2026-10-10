@@ -20,6 +20,14 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
+    if (routerRow.auth_mode === 'radius') {
+      const users = db
+        .prepare('SELECT * FROM hotspot_users WHERE router_id = ? AND source = ? ORDER BY created_at DESC')
+        .all(routerId, 'radius');
+      res.json(users);
+      return;
+    }
+
     if (!mikroTikService.isConnected(routerId)) {
       res.status(400).json({ error: 'Router is not connected' });
       return;
@@ -65,7 +73,7 @@ router.post('/router/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
-    if (mikroTikService.isConnected(routerId)) {
+    if (mikroTikService.isConnected(routerId) && routerRow.auth_mode !== 'radius') {
       await mikroTikService.createHotspotUser(routerId, {
         username,
         password,
@@ -77,10 +85,12 @@ router.post('/router/:routerId', async (req: Request, res: Response) => {
       });
     }
 
+    const source = routerRow.auth_mode === 'radius' ? 'radius' : 'api';
+
     db.prepare(
-      `INSERT INTO hotspot_users (router_id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, comment)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(routerId, username, password, profile, uptimeLimit || '00:00:00', bytesInQuota || 0, bytesOutQuota || 0, comment || null);
+      `INSERT INTO hotspot_users (router_id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, comment, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(routerId, username, password, profile, uptimeLimit || '00:00:00', bytesInQuota || 0, bytesOutQuota || 0, comment || null, source);
 
     res.status(201).json({ message: 'Hotspot user created successfully' });
   } catch (error: any) {
@@ -93,6 +103,15 @@ router.delete('/router/:routerId/:mikrotikUserId', async (req: Request, res: Res
   try {
     const routerId = parseInt(req.params.routerId);
     const mikrotikUserId = req.params.mikrotikUserId;
+    const db = getDb();
+
+    const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+
+    if (routerRow?.auth_mode === 'radius') {
+      db.prepare('DELETE FROM hotspot_users WHERE id = ? AND router_id = ?').run(mikrotikUserId, routerId);
+      res.json({ message: 'Hotspot user removed successfully' });
+      return;
+    }
 
     if (!mikroTikService.isConnected(routerId)) {
       res.status(400).json({ error: 'Router is not connected' });

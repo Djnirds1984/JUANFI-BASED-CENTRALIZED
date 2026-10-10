@@ -260,19 +260,32 @@ function authenticateUser(routerId: number, username: string): { accept: boolean
        WHERE router_id = ? AND username = ? AND disabled = 0`
     ).get(routerId, username) as any;
 
-    if (!user) {
-      return { accept: false };
-    }
-
-    let sessionTimeout: number | undefined;
-    if (user.uptime_limit && user.uptime_limit !== '00:00:00') {
-      const parts = user.uptime_limit.split(':').map(Number);
-      if (parts.length === 3) {
-        sessionTimeout = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (user) {
+      let sessionTimeout: number | undefined;
+      if (user.uptime_limit && user.uptime_limit !== '00:00:00') {
+        const parts = user.uptime_limit.split(':').map(Number);
+        if (parts.length === 3) {
+          sessionTimeout = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        }
       }
+      return { accept: true, sessionTimeout };
     }
 
-    return { accept: true, sessionTimeout };
+    const voucher = db.prepare(
+      `SELECT id, duration_minutes, expires_at
+       FROM vouchers
+       WHERE router_id = ? AND code = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))`
+    ).get(routerId, username) as any;
+
+    if (voucher) {
+      let sessionTimeout: number | undefined;
+      if (voucher.duration_minutes) {
+        sessionTimeout = voucher.duration_minutes * 60;
+      }
+      return { accept: true, sessionTimeout };
+    }
+
+    return { accept: false };
   } catch (err) {
     console.error('[RADIUS] Auth error:', err);
     return { accept: false };
@@ -589,18 +602,25 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
       'SELECT username FROM hotspot_users WHERE router_id = ? AND disabled = 0 LIMIT 5'
     ).all(routerId) as any[];
 
-    result.userCount = users.length;
-    result.hasUsers = users.length > 0;
+    const vouchers = db.prepare(
+      `SELECT code AS username FROM vouchers
+       WHERE router_id = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))
+       LIMIT 5`
+    ).all(routerId) as any[];
 
-    if (users.length > 0) {
-      const testUser = users[0].username;
+    const testCandidates = [...users, ...vouchers];
+    result.userCount = testCandidates.length;
+    result.hasUsers = testCandidates.length > 0;
+
+    if (testCandidates.length > 0) {
+      const testUser = testCandidates[0].username;
       result.authTestUser = testUser;
       const authResult = authenticateUser(routerId, testUser);
       result.authTestResult = authResult.accept
         ? `PASS — user "${testUser}" would be accepted${authResult.sessionTimeout ? ` (timeout: ${authResult.sessionTimeout}s)` : ''}`
         : `FAIL — user "${testUser}" would be rejected`;
     } else {
-      result.authTestResult = 'No enabled hotspot users to test with';
+      result.authTestResult = 'No enabled hotspot users or vouchers to test with';
     }
 
     const portOpen = await checkPort(config.radiusAuthPort);

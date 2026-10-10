@@ -233,6 +233,12 @@ export function initializeDatabase(): void {
     `);
   }
 
+  const hotspotUserCols = db.prepare("PRAGMA table_info('hotspot_users')").all() as any[];
+  if (!hotspotUserCols.some((c: any) => c.name === 'source')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN source TEXT NOT NULL DEFAULT 'api'");
+    db.exec("UPDATE hotspot_users SET source = 'api' WHERE source = ''");
+  }
+
   const allFiles = listHotspotFiles();
   const seedStmt = db.prepare('INSERT OR IGNORE INTO portal_files (path, content) VALUES (?, ?)');
   for (const f of allFiles) {

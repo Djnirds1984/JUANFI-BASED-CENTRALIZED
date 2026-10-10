@@ -622,28 +622,14 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
 
 function checkPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const sock = dgram.createSocket('udp4');
-    const packet = Buffer.alloc(20);
-    packet.writeUInt8(0, 0);
-    packet.writeUInt8(0, 1);
-    packet.writeUInt16BE(20, 2);
-    crypto.randomBytes(16).copy(packet, 4);
-
-    let responded = false;
-    sock.on('message', () => {
-      responded = true;
+    const sock = dgram.createSocket({ type: 'udp4', reuseAddr: false });
+    sock.once('error', (err: NodeJS.ErrnoException) => {
+      try { sock.close(); } catch {}
+      resolve(err.code === 'EADDRINUSE');
     });
-
-    sock.send(packet, 0, 20, port, '127.0.0.1', (err) => {
-      if (err) {
-        try { sock.close(); } catch {}
-        resolve(false);
-        return;
-      }
-      setTimeout(() => {
-        try { sock.close(); } catch {}
-        resolve(responded);
-      }, 1500);
+    sock.bind(port, '127.0.0.1', () => {
+      try { sock.close(); } catch {}
+      resolve(false);
     });
   });
 }

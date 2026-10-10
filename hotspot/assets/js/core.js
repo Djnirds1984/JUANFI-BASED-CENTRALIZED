@@ -603,7 +603,21 @@ function saveVoucherBtnAction(){
 							 });
 					}else{
 						setTimeout(function (){
-							newLogin();
+							if(typeof controllerApiUrl !== 'undefined' && typeof mac !== 'undefined'){
+								var macNoColon = replaceAll(mac, ":");
+								$.ajax({
+									type: "POST",
+									url: controllerApiUrl.replace('/api','') + "/api/vouchers/coin-auth",
+									data: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity, serverAddress: hotspotAddress }),
+									contentType: "application/json",
+									timeout: 5000,
+									complete: function(){
+										newLogin();
+									}
+								});
+							} else {
+								newLogin();
+							}
 						}, 3000);
 					}
 				}

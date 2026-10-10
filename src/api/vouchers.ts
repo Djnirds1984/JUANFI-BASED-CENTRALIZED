@@ -6,6 +6,71 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
+// Public endpoint for coin-insert flow — creates a voucher + hotspot_user in the
+// RADIUS DB so the upcoming auto-login authenticates via RADIUS instead of local.
+router.post('/coin-auth', (req: Request, res: Response) => {
+  const { mac, durationMinutes, serverAddress } = req.body;
+
+  if (!mac || !durationMinutes || !serverAddress) {
+    res.status(400).json({ error: 'mac, durationMinutes, and serverAddress are required' });
+    return;
+  }
+
+  const db = getDb();
+  const routerRow = db.prepare(
+    "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1 AND auth_mode = 'radius'"
+  ).get(serverAddress) as any;
+
+  if (!routerRow) {
+    res.status(404).json({ error: 'Router not found or not in RADIUS mode' });
+    return;
+  }
+
+  const routerId = routerRow.id;
+  const duration = parseInt(durationMinutes) || 0;
+
+  const upsert = db.transaction(() => {
+    const existing = db.prepare(
+      'SELECT id FROM hotspot_users WHERE router_id = ? AND username = ?'
+    ).get(routerId, mac) as any;
+
+    if (existing) {
+      db.prepare(
+        'UPDATE hotspot_users SET disabled = 0, updated_at = datetime(\'now\') WHERE id = ?'
+      ).run(existing.id);
+    } else {
+      db.prepare(
+        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled)
+         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0)`
+      ).run(routerId, mac);
+    }
+
+    const existingVoucher = db.prepare(
+      'SELECT id FROM vouchers WHERE router_id = ? AND code = ?'
+    ).get(routerId, mac) as any;
+
+    if (existingVoucher) {
+      db.prepare(
+        `UPDATE vouchers SET is_used = 0, used_at = NULL, duration_minutes = ?, expires_at = NULL WHERE id = ?`
+      ).run(duration, existingVoucher.id);
+    } else {
+      db.prepare(
+        `INSERT INTO vouchers (router_id, code, username, profile, duration_minutes, is_used)
+         VALUES (?, ?, ?, 'default', ?, 0)`
+      ).run(routerId, mac, mac, duration);
+    }
+  });
+
+  try {
+    upsert();
+    console.log(`[coin-auth] Created voucher for MAC ${mac}, duration=${duration}min, router=${routerId}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[coin-auth] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.use(authMiddleware);
 
 function generateCode(length: number = 8): string {

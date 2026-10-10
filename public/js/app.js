@@ -441,6 +441,7 @@ const App = {
                     <td>
                       <strong>${this.escapeHtml(r.name)}</strong>
                       ${r.use_rest_api ? '<span class="status-badge" style="background:#6366f1;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">REST</span>' : ''}
+                      ${r.auth_mode === 'radius' ? '<span class="status-badge" style="background:#059669;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">RADIUS</span>' : ''}
                     </td>
                     <td>${this.escapeHtml(r.host)}</td>
                     <td>${r.port}</td>
@@ -504,6 +505,28 @@ const App = {
             Use REST API (port 80/443, RouterOS v7+)
           </label>
         </div>
+        <div class="form-group">
+          <label>Auth Mode</label>
+          <div style="display:flex;gap:1rem;align-items:center">
+            <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+              <input type="radio" name="auth_mode" value="api" checked style="width:auto;margin:0">
+              API Mode
+            </label>
+            <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+              <input type="radio" name="auth_mode" value="radius" style="width:auto;margin:0">
+              RADIUS Mode
+            </label>
+          </div>
+          <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
+        </div>
+        <div id="radius-secret-group" class="form-group" style="display:none">
+          <label>RADIUS Shared Secret</label>
+          <div style="display:flex;gap:0.5rem">
+            <input type="text" name="radius_shared_secret" placeholder="Auto-generated if empty" style="flex:1">
+            <button type="button" class="btn btn-sm btn-outline" onclick="document.querySelector('#add-router-form [name=radius_shared_secret]').value=crypto.getRandomValues(new Uint8Array(16)).reduce((s,b)=>s+b.toString(16).padStart(2,'0'),'')">Generate</button>
+          </div>
+          <small style="color:var(--text-secondary);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
+        </div>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
@@ -515,6 +538,14 @@ const App = {
     checkbox.addEventListener('change', () => {
       if (checkbox.checked && portInput.value === '8728') portInput.value = '80';
       if (!checkbox.checked && portInput.value === '80') portInput.value = '8728';
+    });
+
+    const authRadios = document.querySelectorAll('#add-router-form [name="auth_mode"]');
+    const secretGroup = document.getElementById('radius-secret-group');
+    authRadios.forEach((radio) => {
+      radio.addEventListener('change', () => {
+        secretGroup.style.display = document.querySelector('#add-router-form [name="auth_mode"]:checked').value === 'radius' ? '' : 'none';
+      });
     });
   },
 
@@ -528,7 +559,12 @@ const App = {
       password: form.password.value,
       description: form.description.value,
       use_rest_api: form.use_rest_api.checked,
+      auth_mode: document.querySelector('#add-router-form [name="auth_mode"]:checked').value,
     };
+
+    if (form.radius_shared_secret && form.radius_shared_secret.value) {
+      data.radius_shared_secret = form.radius_shared_secret.value;
+    }
 
     if (data.use_rest_api && data.port === 8728) {
       data.port = 80;
@@ -547,6 +583,7 @@ const App = {
   async showEditRouterModal(routerId) {
     try {
       const router = await api.getRouter(routerId);
+      const currentMode = router.auth_mode || 'api';
       this.openModal('Edit Router', `
         <form id="edit-router-form">
           <div class="form-group">
@@ -580,6 +617,28 @@ const App = {
               Use REST API (port 80/443, RouterOS v7+)
             </label>
           </div>
+          <div class="form-group">
+            <label>Auth Mode</label>
+            <div style="display:flex;gap:1rem;align-items:center">
+              <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+                <input type="radio" name="auth_mode" value="api" ${currentMode === 'api' ? 'checked' : ''} style="width:auto;margin:0">
+                API Mode
+              </label>
+              <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+                <input type="radio" name="auth_mode" value="radius" ${currentMode === 'radius' ? 'checked' : ''} style="width:auto;margin:0">
+                RADIUS Mode
+              </label>
+            </div>
+            <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
+          </div>
+          <div id="radius-secret-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
+            <label>RADIUS Shared Secret</label>
+            <div style="display:flex;gap:0.5rem">
+              <input type="text" name="radius_shared_secret" value="${this.escapeHtml(router.radius_shared_secret || '')}" placeholder="Leave blank to keep current" style="flex:1">
+              <button type="button" class="btn btn-sm btn-outline" id="regen-secret-btn">Regenerate</button>
+            </div>
+            <small style="color:var(--text-secondary);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
+          </div>
         </form>
       `, [
         { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
@@ -591,6 +650,24 @@ const App = {
       checkbox.addEventListener('change', () => {
         if (checkbox.checked && portInput.value === '8728') portInput.value = '80';
         if (!checkbox.checked && portInput.value === '80') portInput.value = '8728';
+      });
+
+      const authRadios = document.querySelectorAll('#edit-router-form [name="auth_mode"]');
+      const secretGroup = document.getElementById('radius-secret-group');
+      authRadios.forEach((radio) => {
+        radio.addEventListener('change', () => {
+          secretGroup.style.display = document.querySelector('#edit-router-form [name="auth_mode"]:checked').value === 'radius' ? '' : 'none';
+        });
+      });
+
+      document.getElementById('regen-secret-btn').addEventListener('click', async () => {
+        try {
+          const result = await api.regenerateRadiusSecret(routerId);
+          document.querySelector('#edit-router-form [name="radius_shared_secret"]').value = result.shared_secret;
+          this.toast('New secret generated — save changes to apply', 'info');
+        } catch (err) {
+          this.toast(err.message, 'error');
+        }
       });
     } catch (err) {
       this.toast(err.message, 'error');
@@ -606,10 +683,15 @@ const App = {
       username: form.username.value,
       description: form.description.value,
       use_rest_api: form.use_rest_api.checked,
+      auth_mode: document.querySelector('#edit-router-form [name="auth_mode"]:checked').value,
     };
 
     if (form.password.value) {
       data.password = form.password.value;
+    }
+
+    if (form.radius_shared_secret && form.radius_shared_secret.value) {
+      data.radius_shared_secret = form.radius_shared_secret.value;
     }
 
     if (data.use_rest_api && data.port === 8728) {

@@ -14,4 +14,6 @@ export const config = {
   controllerLanIp: (process.env.CONTROLLER_LAN_IP || '').trim(),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
+  radiusAuthPort: Math.max(1, parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10)),
+  radiusAcctPort: Math.max(1, parseInt(process.env.RADIUS_ACCT_PORT || '1813', 10)),
 };

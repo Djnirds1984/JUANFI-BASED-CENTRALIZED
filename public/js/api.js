@@ -536,6 +536,15 @@ class ApiClient {
   async deleteMACsec(routerId, id) {
     return this.delete(`/interfaces/router/${routerId}/macsec/${id}`);
   }
+
+  // --- RADIUS ---
+  async getRadiusStatus() {
+    return this.get('/routers/radius/status');
+  }
+
+  async regenerateRadiusSecret(routerId) {
+    return this.post(`/routers/${routerId}/radius/regenerate-secret`);
+  }
 }
 
 window.api = new ApiClient();

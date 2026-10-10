@@ -156,6 +156,16 @@ export function initializeDatabase(): void {
       FOREIGN KEY (session_id) REFERENCES device_sessions(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS radius_clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL UNIQUE,
+      shared_secret TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
@@ -166,11 +176,15 @@ export function initializeDatabase(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_sessions_mac ON device_sessions(router_id, mac_address) WHERE mac_address <> '';
     CREATE INDEX IF NOT EXISTS idx_device_sessions_username ON device_sessions(username);
     CREATE INDEX IF NOT EXISTS idx_session_bindings_session ON session_bindings(session_id);
+    CREATE INDEX IF NOT EXISTS idx_radius_clients_router ON radius_clients(router_id);
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];
   if (!columns.some((c: any) => c.name === 'use_rest_api')) {
     db.exec("ALTER TABLE routers ADD COLUMN use_rest_api INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some((c: any) => c.name === 'auth_mode')) {
+    db.exec("ALTER TABLE routers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api'");
   }
 
   const portalCols = db.prepare("PRAGMA table_info('portal_files')").all() as any[];

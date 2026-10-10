@@ -11,6 +11,7 @@ import { initializeAdmin } from './services/auth';
 import { startMonitoring, stopMonitoring, reconnectRouters } from './services/monitor';
 import { startActiveDeviceSync, stopActiveDeviceSync } from './services/activeDevices';
 import { mikroTikService } from './services/mikrotik';
+import { startRadiusServer, stopRadiusServer, hasRadiusClients } from './services/radiusServer';
 
 import authRoutes from './api/auth';
 import routerRoutes from './api/routers';
@@ -83,6 +84,11 @@ async function bootstrap(): Promise<void> {
     console.log('Reconnecting to saved routers...');
     reconnectRouters();
 
+    if (hasRadiusClients()) {
+      console.log('Starting RADIUS server...');
+      startRadiusServer();
+    }
+
     console.log('Starting monitoring scheduler...');
     startMonitoring(5);
 
@@ -112,6 +118,7 @@ function shutdown(): void {
   console.log('\nShutting down...');
   stopMonitoring();
   stopActiveDeviceSync();
+  stopRadiusServer();
   mikroTikService.disconnectAll();
   closeDb();
   server.close(() => {

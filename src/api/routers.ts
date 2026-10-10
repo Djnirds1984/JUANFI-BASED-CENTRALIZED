@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { getDb } from '../database';
 import { mikroTikService, RouterConnection } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
+import { getRadiusStatus, hasRadiusClients, startRadiusServer, stopRadiusServer } from '../services/radiusServer';
 
 const router = Router();
 
@@ -12,10 +14,16 @@ router.get('/', (req: Request, res: Response) => {
     const db = getDb();
     const routers = db.prepare('SELECT * FROM routers ORDER BY name').all();
 
-    const routersWithStatus = (routers as any[]).map((r) => ({
-      ...r,
-      connected: mikroTikService.isConnected(r.id),
-    }));
+    const routersWithStatus = (routers as any[]).map((r) => {
+      const radiusClient = db.prepare('SELECT shared_secret, is_active FROM radius_clients WHERE router_id = ?').get(r.id) as any;
+      return {
+        ...r,
+        connected: mikroTikService.isConnected(r.id),
+        radius_enabled: radiusClient ? true : false,
+        radius_shared_secret: radiusClient ? radiusClient.shared_secret : null,
+        radius_active: radiusClient ? !!radiusClient.is_active : false,
+      };
+    });
 
     res.json(routersWithStatus);
   } catch (error) {
@@ -24,19 +32,33 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
+router.get('/radius/status', (req: Request, res: Response) => {
+  try {
+    res.json(getRadiusStatus());
+  } catch (error) {
+    console.error('Get RADIUS status error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/:id', (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+    const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id) as any;
 
-    if (!router) {
+    if (!routerRow) {
       res.status(404).json({ error: 'Router not found' });
       return;
     }
 
+    const radiusClient = db.prepare('SELECT shared_secret, is_active FROM radius_clients WHERE router_id = ?').get(routerRow.id) as any;
+
     res.json({
-      ...(router as any),
-      connected: mikroTikService.isConnected((router as any).id),
+      ...routerRow,
+      connected: mikroTikService.isConnected(routerRow.id),
+      radius_enabled: radiusClient ? true : false,
+      radius_shared_secret: radiusClient ? radiusClient.shared_secret : null,
+      radius_active: radiusClient ? !!radiusClient.is_active : false,
     });
   } catch (error) {
     console.error('Get router error:', error);
@@ -46,7 +68,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, use_rest_api } = req.body;
+    const { name, host, port, username, password, description, use_rest_api, auth_mode, radius_shared_secret } = req.body;
 
     if (!name || !host || !username || !password) {
       res.status(400).json({ error: 'Name, host, username, and password are required' });
@@ -54,14 +76,24 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
+    const mode = auth_mode === 'radius' ? 'radius' : 'api';
     const result = db
       .prepare(
-        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0);
+      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0, mode);
+
+    const routerId = result.lastInsertRowid as number;
+
+    if (mode === 'radius') {
+      const secret = radius_shared_secret || crypto.randomBytes(16).toString('hex');
+      db.prepare(
+        'INSERT INTO radius_clients (router_id, shared_secret, is_active) VALUES (?, ?, 1)'
+      ).run(routerId, secret);
+    }
 
     const routerConn: RouterConnection = {
-      id: result.lastInsertRowid as number,
+      id: routerId,
       name,
       host,
       port: port || 8728,
@@ -78,14 +110,19 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('Could not connect to router:', err);
     }
 
+    if (mode === 'radius' && hasRadiusClients()) {
+      startRadiusServer();
+    }
+
     res.status(201).json({
-      id: result.lastInsertRowid,
+      id: routerId,
       name,
       host,
       port: port || 8728,
       username,
       description,
       use_rest_api: use_rest_api ? 1 : 0,
+      auth_mode: mode,
       connected,
     });
   } catch (error) {
@@ -96,28 +133,58 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, is_active, use_rest_api } = req.body;
+    const { name, host, port, username, password, description, is_active, use_rest_api, auth_mode, radius_shared_secret } = req.body;
     const db = getDb();
 
-    const existing = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+    const existing = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id) as any;
     if (!existing) {
       res.status(404).json({ error: 'Router not found' });
       return;
     }
 
+    const newMode = auth_mode !== undefined ? (auth_mode === 'radius' ? 'radius' : 'api') : existing.auth_mode;
+
     db.prepare(
-      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
-      name || (existing as any).name,
-      host || (existing as any).host,
-      port || (existing as any).port,
-      username || (existing as any).username,
-      password || (existing as any).password,
-      description !== undefined ? description : (existing as any).description,
-      is_active !== undefined ? is_active : (existing as any).is_active,
-      use_rest_api !== undefined ? (use_rest_api ? 1 : 0) : (existing as any).use_rest_api,
+      name || existing.name,
+      host || existing.host,
+      port || existing.port,
+      username || existing.username,
+      password || existing.password,
+      description !== undefined ? description : existing.description,
+      is_active !== undefined ? is_active : existing.is_active,
+      use_rest_api !== undefined ? (use_rest_api ? 1 : 0) : existing.use_rest_api,
+      newMode,
       req.params.id
     );
+
+    const existingRadius = db.prepare('SELECT * FROM radius_clients WHERE router_id = ?').get(req.params.id) as any;
+
+    if (newMode === 'radius') {
+      if (!existingRadius) {
+        const secret = radius_shared_secret || crypto.randomBytes(16).toString('hex');
+        db.prepare(
+          'INSERT INTO radius_clients (router_id, shared_secret, is_active) VALUES (?, ?, 1)'
+        ).run(req.params.id, secret);
+      } else if (radius_shared_secret) {
+        db.prepare(
+          `UPDATE radius_clients SET shared_secret = ?, is_active = 1, updated_at = datetime('now') WHERE router_id = ?`
+        ).run(radius_shared_secret, req.params.id);
+      } else {
+        db.prepare(
+          `UPDATE radius_clients SET is_active = 1, updated_at = datetime('now') WHERE router_id = ?`
+        ).run(req.params.id);
+      }
+    } else if (existingRadius) {
+      db.prepare('UPDATE radius_clients SET is_active = 0, updated_at = datetime(\'now\') WHERE router_id = ?').run(req.params.id);
+    }
+
+    if (hasRadiusClients()) {
+      startRadiusServer();
+    } else {
+      stopRadiusServer();
+    }
 
     res.json({ message: 'Router updated successfully' });
   } catch (error) {
@@ -137,7 +204,12 @@ router.delete('/:id', async (req: Request, res: Response) => {
     }
 
     await mikroTikService.disconnect(parseInt(req.params.id));
+    db.prepare('DELETE FROM radius_clients WHERE router_id = ?').run(req.params.id);
     db.prepare('DELETE FROM routers WHERE id = ?').run(req.params.id);
+
+    if (!hasRadiusClients()) {
+      stopRadiusServer();
+    }
 
     res.json({ message: 'Router deleted successfully' });
   } catch (error) {
@@ -196,6 +268,37 @@ router.get('/:id/status', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Get status error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/radius/regenerate-secret', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id) as any;
+
+    if (!routerRow) {
+      res.status(404).json({ error: 'Router not found' });
+      return;
+    }
+
+    const newSecret = crypto.randomBytes(16).toString('hex');
+    const existing = db.prepare('SELECT * FROM radius_clients WHERE router_id = ?').get(req.params.id) as any;
+
+    if (existing) {
+      db.prepare(
+        `UPDATE radius_clients SET shared_secret = ?, updated_at = datetime('now') WHERE router_id = ?`
+      ).run(newSecret, req.params.id);
+    } else {
+      db.prepare(
+        'INSERT INTO radius_clients (router_id, shared_secret, is_active) VALUES (?, ?, 1)'
+      ).run(req.params.id, newSecret);
+      db.prepare(`UPDATE routers SET auth_mode = 'radius' WHERE id = ?`).run(req.params.id);
+    }
+
+    res.json({ shared_secret: newSecret });
+  } catch (error) {
+    console.error('Regenerate RADIUS secret error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

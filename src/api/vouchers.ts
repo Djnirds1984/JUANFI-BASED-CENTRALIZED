@@ -131,10 +131,18 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
     const rProfileId = radiusProfileId ? parseInt(radiusProfileId) : null;
 
     let radiusProfileName = 'default';
+    let radiusSessionTimeout = 0;
     if (isRadius && rProfileId) {
-      const rp = db.prepare('SELECT name FROM radius_profiles WHERE id = ?').get(rProfileId) as any;
-      if (rp) radiusProfileName = rp.name;
+      const rp = db.prepare('SELECT name, session_timeout FROM radius_profiles WHERE id = ?').get(rProfileId) as any;
+      if (rp) {
+        radiusProfileName = rp.name;
+        radiusSessionTimeout = rp.session_timeout || 0;
+      }
     }
+
+    const effectiveDuration = (isRadius && rProfileId)
+      ? (radiusSessionTimeout > 0 ? Math.floor(radiusSessionTimeout / 60) : null)
+      : (durationMinutes || null);
 
     const vouchers: any[] = [];
     const insertStmt = db.prepare(
@@ -153,9 +161,9 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         const username = code;
 
         let expiresAt: string | null = null;
-        if (durationMinutes) {
+        if (effectiveDuration) {
           const expiry = new Date();
-          expiry.setMinutes(expiry.getMinutes() + durationMinutes);
+          expiry.setMinutes(expiry.getMinutes() + effectiveDuration);
           expiresAt = expiry.toISOString();
         }
 
@@ -165,7 +173,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           username,
           null,
           isRadius ? radiusProfileName : (profile || 'default'),
-          durationMinutes || null,
+          effectiveDuration,
           dataLimitMb || null,
           expiresAt,
           isRadius ? rProfileId : null
@@ -187,7 +195,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           username,
           password: null,
           profile: isRadius ? radiusProfileName : (profile || 'default'),
-          durationMinutes,
+          durationMinutes: effectiveDuration,
           dataLimitMb,
           radiusProfileId: isRadius ? rProfileId : null,
         });

@@ -653,6 +653,7 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
 }
 
 function onAuthMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
+  console.log(`[RADIUS] Packet received from ${rinfo.address}:${rinfo.port} (${msg.length} bytes)`);
   try {
     const packet = decodePacket(msg);
     if (!packet) {

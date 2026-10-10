@@ -413,7 +413,8 @@ function authenticateUser(routerId: number, username: string): AuthResult {
         }
       }
 
-      if (profileAttrs.length === 0 && voucher.duration_minutes) {
+      if (voucher.duration_minutes) {
+        profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
         profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
       }
 

@@ -364,9 +364,54 @@ body#loginBody {
 	margin: 10px 0;
 	box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
+
+/* Loading overlay splash screen */
+#loadingOverlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%);
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	z-index: 9999;
+	transition: opacity 0.5s ease;
+}
+#loadingOverlay.fade-out {
+	opacity: 0;
+	pointer-events: none;
+}
+.loading-spinner {
+	width: 60px;
+	height: 60px;
+	border: 4px solid rgba(255, 255, 255, 0.1);
+	border-top: 4px solid #6366f1;
+	border-radius: 50%;
+	animation: spin 1s linear infinite;
+	margin-bottom: 20px;
+}
+@keyframes spin {
+	0% { transform: rotate(0deg); }
+	100% { transform: rotate(360deg); }
+}
+.loading-text {
+	color: #a5b4fc;
+	font-size: 16px;
+	font-weight: 600;
+	letter-spacing: 1px;
+}
 </style></head>
 
 <body id="loginBody">
+
+	<!-- Loading overlay splash screen - gives backend time to process session -->
+	<div id="loadingOverlay">
+		<div class="loading-spinner"></div>
+		<div class="loading-text">Connecting...</div>
+	</div>
 
 	$(if chap-id)
     <form name="sendin" action="$(link-login-only)" method="post" style="display:none">
@@ -742,6 +787,15 @@ body#loginBody {
 				// Delay to ensure MikroTik and backend API have time to process the MAC address
 				// 2000ms gives enough time for the captive portal to fully initialize
 				setTimeout(function() {
+					// Hide the loading overlay after 2 seconds
+					var overlay = document.getElementById('loadingOverlay');
+					if (overlay) {
+						overlay.classList.add('fade-out');
+						setTimeout(function() {
+							overlay.style.display = 'none';
+						}, 500);
+					}
+
 					if(reLogin == '1'){
 						setStorageValue('reLogin', '0');
 						doLogin();

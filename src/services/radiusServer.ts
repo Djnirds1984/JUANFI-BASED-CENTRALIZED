@@ -62,6 +62,34 @@ let authSocket: dgram.Socket | null = null;
 let acctSocket: dgram.Socket | null = null;
 let running = false;
 
+const MAX_LOG_ENTRIES = 500;
+
+function logRadiusEvent(
+  logType: string,
+  message: string,
+  routerId?: number,
+  username?: string,
+  sourceIp?: string,
+  responseCode?: number
+): void {
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO radius_logs (router_id, log_type, username, source_ip, response_code, message)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(routerId ?? null, logType, username ?? '', sourceIp ?? '', responseCode ?? null, message);
+
+    const count = (db.prepare('SELECT COUNT(*) as c FROM radius_logs').get() as any)?.c || 0;
+    if (count > MAX_LOG_ENTRIES) {
+      db.prepare(
+        `DELETE FROM radius_logs WHERE id IN (SELECT id FROM radius_logs ORDER BY created_at ASC LIMIT ?)`
+      ).run(count - MAX_LOG_ENTRIES);
+    }
+  } catch (err) {
+    console.error('[RADIUS] Log write error:', err);
+  }
+}
+
 function encodeString(s: string): Buffer {
   return Buffer.from(s, 'utf8');
 }
@@ -255,6 +283,7 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
   const client = findClientByIp(rinfo.address);
   if (!client) {
     console.warn(`[RADIUS] Access-Request from unknown client: ${rinfo.address}`);
+    logRadiusEvent('warning', `Access-Request from unknown client ${rinfo.address}`, undefined, '', rinfo.address);
     return;
   }
 
@@ -270,6 +299,7 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
       []
     );
     acctSocket?.send(reject, 0, reject.length, rinfo.port, rinfo.address);
+    logRadiusEvent('reject', 'Access-Request with no username', client.router_id, '', rinfo.address, RADIUS_CODES.ACCESS_REJECT);
     return;
   }
 
@@ -291,15 +321,19 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
 
   (result.accept ? authSocket : authSocket)?.send(response, 0, response.length, rinfo.port, rinfo.address);
 
-  console.log(
-    `[RADIUS] Auth ${result.accept ? 'ACCEPT' : 'REJECT'}: user=${username} router=${client.router_id} from=${rinfo.address}`
-  );
+  const logType = result.accept ? 'accept' : 'reject';
+  const msg = result.accept
+    ? `Access-Accept${result.sessionTimeout ? ` (session timeout: ${result.sessionTimeout}s)` : ''}`
+    : 'Access-Reject (user not found or disabled)';
+  console.log(`[RADIUS] Auth ${result.accept ? 'ACCEPT' : 'REJECT'}: user=${username} router=${client.router_id} from=${rinfo.address}`);
+  logRadiusEvent(logType, msg, client.router_id, username, rinfo.address, responseCode);
 }
 
 function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): void {
   const client = findClientByIp(rinfo.address);
   if (!client) {
     console.warn(`[RADIUS] Accounting-Request from unknown client: ${rinfo.address}`);
+    logRadiusEvent('warning', `Accounting-Request from unknown client ${rinfo.address}`, undefined, '', rinfo.address);
     return;
   }
 
@@ -315,6 +349,9 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
   const bytesIn = typeof inputOctets?.value === 'number' ? inputOctets.value : 0;
   const bytesOut = typeof outputOctets?.value === 'number' ? outputOctets.value : 0;
 
+  const statusLabels: Record<number, string> = { 1: 'Start', 2: 'Stop', 3: 'Interim-Update' };
+  const statusLabel = statusLabels[status] || `Unknown(${status})`;
+
   try {
     const db = getDb();
     if (status === ACCT_STATUS.START) {
@@ -323,12 +360,14 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
          VALUES (?, ?, '', '', 'active', ?, ?, datetime('now'))`
       ).run(client.router_id, user, bytesIn, bytesOut);
       console.log(`[RADIUS] Acct START: user=${user} session=${session} router=${client.router_id}`);
+      logRadiusEvent('accounting', `Accounting-Start: session=${session} in=${bytesIn} out=${bytesOut}`, client.router_id, user, rinfo.address);
     } else if (status === ACCT_STATUS.STOP) {
       db.prepare(
         `UPDATE active_devices SET status = 'inactive', bytes_in = ?, bytes_out = ?, ended_at = datetime('now'), last_seen = datetime('now')
          WHERE router_id = ? AND user = ? AND status = 'active'`
       ).run(bytesIn, bytesOut, client.router_id, user);
       console.log(`[RADIUS] Acct STOP: user=${user} session=${session} router=${client.router_id}`);
+      logRadiusEvent('accounting', `Accounting-Stop: session=${session} in=${bytesIn} out=${bytesOut}`, client.router_id, user, rinfo.address);
     } else if (status === ACCT_STATUS.INTERIM_UPDATE) {
       db.prepare(
         `UPDATE active_devices SET bytes_in = ?, bytes_out = ?, last_seen = datetime('now')
@@ -337,6 +376,7 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
     }
   } catch (err) {
     console.error('[RADIUS] Accounting error:', err);
+    logRadiusEvent('error', `Accounting error: ${err}`, client.router_id, user, rinfo.address);
   }
 
   const response = buildResponsePacket(
@@ -402,10 +442,12 @@ export function startRadiusServer(): boolean {
 
     authSocket.bind(config.radiusAuthPort, () => {
       console.log(`[RADIUS] Auth server listening on UDP ${config.radiusAuthPort}`);
+      logRadiusEvent('info', `Auth server listening on UDP ${config.radiusAuthPort}`);
     });
 
     acctSocket.bind(config.radiusAcctPort, () => {
       console.log(`[RADIUS] Acct server listening on UDP ${config.radiusAcctPort}`);
+      logRadiusEvent('info', `Acct server listening on UDP ${config.radiusAcctPort}`);
     });
 
     running = true;
@@ -428,6 +470,7 @@ export function stopRadiusServer(): void {
   }
   running = false;
   console.log('[RADIUS] Server stopped');
+  logRadiusEvent('info', 'RADIUS server stopped');
 }
 
 export function isRadiusRunning(): boolean {
@@ -457,4 +500,150 @@ export function hasRadiusClients(): boolean {
   } catch {
     return false;
   }
+}
+
+export function getRadiusLogs(routerId?: number, limit: number = 100): any[] {
+  try {
+    const db = getDb();
+    if (routerId) {
+      return db.prepare(
+        `SELECT rl.*, r.name as router_name FROM radius_logs rl
+         LEFT JOIN routers r ON r.id = rl.router_id
+         WHERE rl.router_id = ? ORDER BY rl.created_at DESC LIMIT ?`
+      ).all(routerId, limit);
+    }
+    return db.prepare(
+      `SELECT rl.*, r.name as router_name FROM radius_logs rl
+       LEFT JOIN routers r ON r.id = rl.router_id
+       ORDER BY rl.created_at DESC LIMIT ?`
+    ).all(limit);
+  } catch (err) {
+    console.error('[RADIUS] Error reading logs:', err);
+    return [];
+  }
+}
+
+export function clearRadiusLogs(routerId?: number): void {
+  try {
+    const db = getDb();
+    if (routerId) {
+      db.prepare('DELETE FROM radius_logs WHERE router_id = ?').run(routerId);
+    } else {
+      db.prepare('DELETE FROM radius_logs').run();
+    }
+  } catch (err) {
+    console.error('[RADIUS] Error clearing logs:', err);
+  }
+}
+
+export async function testRadiusConnectivity(routerId: number): Promise<{
+  serverRunning: boolean;
+  routerConfigured: boolean;
+  sharedSecret: string | null;
+  hasUsers: boolean;
+  userCount: number;
+  authTestUser: string | null;
+  authTestResult: string;
+  portCheck: string;
+}> {
+  const result = {
+    serverRunning: false,
+    routerConfigured: false,
+    sharedSecret: null as string | null,
+    hasUsers: false,
+    userCount: 0,
+    authTestUser: null as string | null,
+    authTestResult: 'not tested',
+    portCheck: 'unknown',
+  };
+
+  result.serverRunning = running;
+
+  try {
+    const db = getDb();
+
+    const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+    if (!routerRow) {
+      result.authTestResult = 'Router not found';
+      return result;
+    }
+
+    const radiusClient = db.prepare(
+      'SELECT * FROM radius_clients WHERE router_id = ? AND is_active = 1'
+    ).get(routerId) as any;
+
+    result.routerConfigured = !!radiusClient;
+    result.sharedSecret = radiusClient ? radiusClient.shared_secret : null;
+
+    if (routerRow.auth_mode !== 'radius') {
+      result.authTestResult = 'Router auth_mode is not set to RADIUS';
+      return result;
+    }
+
+    if (!radiusClient) {
+      result.authTestResult = 'No active RADIUS client config for this router';
+      return result;
+    }
+
+    const users = db.prepare(
+      'SELECT username FROM hotspot_users WHERE router_id = ? AND disabled = 0 LIMIT 5'
+    ).all(routerId) as any[];
+
+    result.userCount = users.length;
+    result.hasUsers = users.length > 0;
+
+    if (users.length > 0) {
+      const testUser = users[0].username;
+      result.authTestUser = testUser;
+      const authResult = authenticateUser(routerId, testUser);
+      result.authTestResult = authResult.accept
+        ? `PASS — user "${testUser}" would be accepted${authResult.sessionTimeout ? ` (timeout: ${authResult.sessionTimeout}s)` : ''}`
+        : `FAIL — user "${testUser}" would be rejected`;
+    } else {
+      result.authTestResult = 'No enabled hotspot users to test with';
+    }
+
+    const portOpen = await checkPort(config.radiusAuthPort);
+    result.portCheck = portOpen
+      ? `Auth port ${config.radiusAuthPort} is listening`
+      : `Auth port ${config.radiusAuthPort} is NOT listening`;
+
+    logRadiusEvent(
+      'info',
+      `Connectivity test: server=${result.serverRunning}, configured=${result.routerConfigured}, users=${result.userCount}, port=${portOpen ? 'open' : 'closed'}`,
+      routerId
+    );
+  } catch (err: any) {
+    result.authTestResult = `Error: ${err.message}`;
+  }
+
+  return result;
+}
+
+function checkPort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket('udp4');
+    const packet = Buffer.alloc(20);
+    packet.writeUInt8(0, 0);
+    packet.writeUInt8(0, 1);
+    packet.writeUInt16BE(20, 2);
+    crypto.randomBytes(16).copy(packet, 4);
+
+    let responded = false;
+    sock.on('message', () => {
+      responded = true;
+    });
+
+    sock.send(packet, 0, 20, port, '127.0.0.1', (err) => {
+      if (err) {
+        try { sock.close(); } catch {}
+        resolve(false);
+        return;
+      }
+      setTimeout(() => {
+        try { sock.close(); } catch {}
+        resolve(responded);
+      }, 1500);
+    });
+  });
 }

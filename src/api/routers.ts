@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getDb } from '../database';
 import { mikroTikService, RouterConnection } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
-import { getRadiusStatus, hasRadiusClients, startRadiusServer, stopRadiusServer } from '../services/radiusServer';
+import { getRadiusStatus, hasRadiusClients, startRadiusServer, stopRadiusServer, testRadiusConnectivity, getRadiusLogs, clearRadiusLogs } from '../services/radiusServer';
 
 const router = Router();
 
@@ -37,6 +37,29 @@ router.get('/radius/status', (req: Request, res: Response) => {
     res.json(getRadiusStatus());
   } catch (error) {
     console.error('Get RADIUS status error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/radius/logs', (req: Request, res: Response) => {
+  try {
+    const routerId = req.query.router_id ? parseInt(req.query.router_id as string) : undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+    const logs = getRadiusLogs(routerId, Math.min(limit, 500));
+    res.json(logs);
+  } catch (error) {
+    console.error('Get RADIUS logs error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/radius/logs', (req: Request, res: Response) => {
+  try {
+    const routerId = req.query.router_id ? parseInt(req.query.router_id as string) : undefined;
+    clearRadiusLogs(routerId);
+    res.json({ message: 'Logs cleared' });
+  } catch (error) {
+    console.error('Clear RADIUS logs error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -298,6 +321,17 @@ router.post('/:id/radius/regenerate-secret', (req: Request, res: Response) => {
     res.json({ shared_secret: newSecret });
   } catch (error) {
     console.error('Regenerate RADIUS secret error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:id/radius/test', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.id);
+    const result = await testRadiusConnectivity(routerId);
+    res.json(result);
+  } catch (error) {
+    console.error('RADIUS test error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

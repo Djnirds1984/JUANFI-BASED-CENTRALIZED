@@ -545,6 +545,23 @@ class ApiClient {
   async regenerateRadiusSecret(routerId) {
     return this.post(`/routers/${routerId}/radius/regenerate-secret`);
   }
+
+  async testRadiusConnectivity(routerId) {
+    return this.post(`/routers/${routerId}/radius/test`);
+  }
+
+  async getRadiusLogs(routerId, limit = 100) {
+    const params = new URLSearchParams();
+    if (routerId) params.set('router_id', routerId);
+    if (limit) params.set('limit', limit);
+    return this.get(`/routers/radius/logs?${params.toString()}`);
+  }
+
+  async clearRadiusLogs(routerId) {
+    const params = new URLSearchParams();
+    if (routerId) params.set('router_id', routerId);
+    return this.delete(`/routers/radius/logs?${params.toString()}`);
+  }
 }
 
 window.api = new ApiClient();

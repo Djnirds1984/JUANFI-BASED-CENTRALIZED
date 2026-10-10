@@ -639,6 +639,15 @@ const App = {
             </div>
             <small style="color:var(--text-secondary);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
           </div>
+          <div id="radius-tools-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
+            <label>RADIUS Diagnostics</label>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button type="button" class="btn btn-sm btn-primary" id="test-radius-btn">Test Connectivity</button>
+              <button type="button" class="btn btn-sm btn-outline" id="view-radius-logs-btn">View Logs</button>
+              <button type="button" class="btn btn-sm btn-outline" id="clear-radius-logs-btn" style="color:var(--danger,#ef4444);border-color:var(--danger,#ef4444)">Clear Logs</button>
+            </div>
+            <div id="radius-test-results" style="display:none;margin-top:0.75rem"></div>
+          </div>
         </form>
       `, [
         { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
@@ -654,9 +663,12 @@ const App = {
 
       const authRadios = document.querySelectorAll('#edit-router-form [name="auth_mode"]');
       const secretGroup = document.getElementById('radius-secret-group');
+      const toolsGroup = document.getElementById('radius-tools-group');
       authRadios.forEach((radio) => {
         radio.addEventListener('change', () => {
-          secretGroup.style.display = document.querySelector('#edit-router-form [name="auth_mode"]:checked').value === 'radius' ? '' : 'none';
+          const isRadius = document.querySelector('#edit-router-form [name="auth_mode"]:checked').value === 'radius';
+          secretGroup.style.display = isRadius ? '' : 'none';
+          toolsGroup.style.display = isRadius ? '' : 'none';
         });
       });
 
@@ -665,6 +677,52 @@ const App = {
           const result = await api.regenerateRadiusSecret(routerId);
           document.querySelector('#edit-router-form [name="radius_shared_secret"]').value = result.shared_secret;
           this.toast('New secret generated — save changes to apply', 'info');
+        } catch (err) {
+          this.toast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('test-radius-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('test-radius-btn');
+        const resultsDiv = document.getElementById('radius-test-results');
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        resultsDiv.style.display = 'none';
+        try {
+          const result = await api.testRadiusConnectivity(routerId);
+          resultsDiv.style.display = '';
+          resultsDiv.innerHTML = `
+            <div style="background:var(--bg-secondary,#f1f5f9);border-radius:0.5rem;padding:0.75rem;font-size:0.8125rem;font-family:monospace">
+              <div style="margin-bottom:0.375rem"><strong>RADIUS Server:</strong> <span style="color:${result.serverRunning ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${result.serverRunning ? 'RUNNING' : 'NOT RUNNING'}</span></div>
+              <div style="margin-bottom:0.375rem"><strong>Port Check:</strong> <span style="color:${result.portCheck.includes('listening') ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${this.escapeHtml(result.portCheck)}</span></div>
+              <div style="margin-bottom:0.375rem"><strong>Router Config:</strong> <span style="color:${result.routerConfigured ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${result.routerConfigured ? 'RADIUS enabled' : 'NOT configured'}</span></div>
+              <div style="margin-bottom:0.375rem"><strong>Hotspot Users:</strong> ${result.userCount} available for auth</div>
+              <div style="margin-bottom:0.375rem"><strong>Auth Test:</strong> <span style="color:${result.authTestResult.startsWith('PASS') ? 'var(--success,#22c55e)' : result.authTestResult.startsWith('FAIL') ? 'var(--danger,#ef4444)' : 'var(--warning,#f59e0b)'}">${this.escapeHtml(result.authTestResult)}</span></div>
+              ${result.sharedSecret ? `<div><strong>Shared Secret:</strong> ${this.escapeHtml(result.sharedSecret.substring(0, 8))}...</div>` : ''}
+            </div>
+          `;
+        } catch (err) {
+          resultsDiv.style.display = '';
+          resultsDiv.innerHTML = `<div style="color:var(--danger,#ef4444);font-size:0.8125rem">Test failed: ${this.escapeHtml(err.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Test Connectivity';
+        }
+      });
+
+      document.getElementById('view-radius-logs-btn').addEventListener('click', async () => {
+        try {
+          await this.showRadiusLogsModal(routerId);
+        } catch (err) {
+          this.toast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('clear-radius-logs-btn').addEventListener('click', async () => {
+        if (!confirm('Clear all RADIUS logs for this router?')) return;
+        try {
+          await api.clearRadiusLogs(routerId);
+          this.toast('RADIUS logs cleared', 'success');
         } catch (err) {
           this.toast(err.message, 'error');
         }
@@ -706,6 +764,84 @@ const App = {
     } catch (err) {
       this.toast(err.message, 'error');
     }
+  },
+
+  async showRadiusLogsModal(routerId) {
+    let logs = [];
+    try {
+      logs = await api.getRadiusLogs(routerId, 200);
+    } catch (err) {
+      this.toast(err.message, 'error');
+      return;
+    }
+
+    const logTypeColor = (type) => {
+      switch (type) {
+        case 'accept': return 'var(--success,#22c55e)';
+        case 'reject': return 'var(--danger,#ef4444)';
+        case 'accounting': return 'var(--info,#3b82f6)';
+        case 'warning': return 'var(--warning,#f59e0b)';
+        case 'error': return 'var(--danger,#ef4444)';
+        default: return 'var(--text-secondary,#64748b)';
+      }
+    };
+
+    this.openModal('RADIUS Logs', `
+      <div style="max-height:60vh;overflow-y:auto">
+        ${logs.length === 0
+          ? '<div style="text-align:center;padding:2rem;color:var(--text-secondary)">No RADIUS events recorded yet</div>'
+          : `<table style="width:100%;font-size:0.8125rem">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border,#e2e8f0)">
+                <th style="text-align:left;padding:0.5rem">Time</th>
+                <th style="text-align:left;padding:0.5rem">Type</th>
+                <th style="text-align:left;padding:0.5rem">User</th>
+                <th style="text-align:left;padding:0.5rem">Source IP</th>
+                <th style="text-align:left;padding:0.5rem">Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${logs.map((log) => `
+                <tr style="border-bottom:1px solid var(--border,#e2e8f0)">
+                  <td style="padding:0.5rem;white-space:nowrap;font-family:monospace;font-size:0.75rem">${this.escapeHtml(log.created_at)}</td>
+                  <td style="padding:0.5rem"><span style="color:${logTypeColor(log.log_type)};font-weight:600;text-transform:uppercase;font-size:0.6875rem">${this.escapeHtml(log.log_type)}</span></td>
+                  <td style="padding:0.5rem;font-family:monospace">${this.escapeHtml(log.username || '-')}</td>
+                  <td style="padding:0.5rem;font-family:monospace">${this.escapeHtml(log.source_ip || '-')}</td>
+                  <td style="padding:0.5rem;word-break:break-all">${this.escapeHtml(log.message)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`
+        }
+      </div>
+      <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:0.75rem;color:var(--text-secondary)">${logs.length} event${logs.length !== 1 ? 's' : ''}</span>
+        <button type="button" class="btn btn-sm btn-outline" id="refresh-logs-btn">Refresh</button>
+      </div>
+    `, [
+      { label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() },
+    ]);
+
+    document.getElementById('refresh-logs-btn').addEventListener('click', async () => {
+      try {
+        const fresh = await api.getRadiusLogs(routerId, 200);
+        const tbody = document.querySelector('#modal-body tbody');
+        if (tbody) {
+          tbody.innerHTML = fresh.map((log) => `
+            <tr style="border-bottom:1px solid var(--border,#e2e8f0)">
+              <td style="padding:0.5rem;white-space:nowrap;font-family:monospace;font-size:0.75rem">${this.escapeHtml(log.created_at)}</td>
+              <td style="padding:0.5rem"><span style="color:${logTypeColor(log.log_type)};font-weight:600;text-transform:uppercase;font-size:0.6875rem">${this.escapeHtml(log.log_type)}</span></td>
+              <td style="padding:0.5rem;font-family:monospace">${this.escapeHtml(log.username || '-')}</td>
+              <td style="padding:0.5rem;font-family:monospace">${this.escapeHtml(log.source_ip || '-')}</td>
+              <td style="padding:0.5rem;word-break:break-all">${this.escapeHtml(log.message)}</td>
+            </tr>
+          `).join('');
+        }
+        this.toast('Logs refreshed', 'info');
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
+    });
   },
 
   async toggleRouter(id, connect) {

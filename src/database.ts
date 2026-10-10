@@ -166,6 +166,20 @@ export function initializeDatabase(): void {
       FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS radius_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER,
+      log_type TEXT NOT NULL DEFAULT 'info',
+      username TEXT DEFAULT '',
+      source_ip TEXT DEFAULT '',
+      response_code INTEGER,
+      message TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_radius_logs_router ON radius_logs(router_id);
+    CREATE INDEX IF NOT EXISTS idx_radius_logs_created ON radius_logs(created_at);
+
     CREATE INDEX IF NOT EXISTS idx_hotspot_users_router ON hotspot_users(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_router ON vouchers(router_id);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);

@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 
-# JuanFi Centralized Panel — Bootable ISO Builder
-# Produces a Debian-based live ISO with the panel pre-installed.
+# JuanFi Centralized Panel — Bootable Installer ISO Builder
+# Produces a Debian-based hybrid ISO that offers:
+#   1. "Live" — run the panel directly from USB
+#   2. "Install" — full Debian installer with disk selection,
+#      automatically installs the JuanFi panel after base OS setup
+#
 # Must run on a Debian/Ubuntu x86_64 host (or WSL2 with Ubuntu).
 #
 # Usage:
@@ -17,7 +21,7 @@ APP_NAME="mikrotik-controller"
 APP_DIR="/opt/$APP_NAME"
 
 echo "=========================================="
-echo "  JuanFi Panel — ISO Builder"
+echo "  JuanFi Panel — Installer ISO Builder"
 echo "=========================================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -33,11 +37,11 @@ fi
 
 # Install live-build if missing
 if ! command -v lb &>/dev/null; then
-    echo "[1/5] Installing live-build..."
+    echo "[1/6] Installing live-build..."
     apt-get update -qq
     apt-get install -y -qq live-build debootstrap > /dev/null 2>&1
 else
-    echo "[1/5] live-build already installed"
+    echo "[1/6] live-build already installed"
 fi
 
 # Clean previous build
@@ -52,7 +56,7 @@ fi
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-echo "[2/5] Configuring live-build..."
+echo "[2/6] Configuring live-build..."
 
 lb config \
     --distribution bookworm \
@@ -74,7 +78,7 @@ lb config \
     --iso-volume "JuanFi Panel" \
     --iso-publisher "JuanFi"
 
-# Package list — nodejs from Debian bookworm is v18 (meets minimum)
+# Package list — base packages (Node.js installed via hook from NodeSource)
 mkdir -p config/package-lists
 cat > config/package-lists/juanfi.list.chroot << 'PKGLIST'
 curl
@@ -88,23 +92,69 @@ openssh-server
 ufw
 ca-certificates
 gnupg
-nodejs
-npm
 PKGLIST
 
-# Copy application files into the chroot
-echo "[3/5] Copying application files..."
-mkdir -p "config/includes.chroot${APP_DIR}"
+# Node.js 20.x hook — runs inside chroot during live build
+mkdir -p config/hooks/live
+cat > config/hooks/live/01-install-nodejs.chroot << 'HOOK'
+#!/bin/bash
+set -e
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+HOOK
+chmod +x config/hooks/live/01-install-nodejs.chroot
+
+# -------------------------------------------------------------------
+# [3/6] Copy application files for the INSTALLER path
+# Files go to /opt/juanfi-installer/ on the ISO.
+# When user picks "Install", the preseed late_command copies them
+# into the target disk and runs post-install.sh.
+# -------------------------------------------------------------------
+echo "[3/6] Staging installer files..."
+
+INSTALLER_STAGING="config/includes.chroot/opt/juanfi-installer"
+mkdir -p "$INSTALLER_STAGING"
 
 if [ -d "$PROJECT_ROOT/dist" ]; then
-    cp -r "$PROJECT_ROOT/dist" "config/includes.chroot${APP_DIR}/"
+    cp -r "$PROJECT_ROOT/dist" "$INSTALLER_STAGING/"
 else
     echo "  No dist/ found — building first..."
     cd "$PROJECT_ROOT"
     npm install
     npm run build
     cd "$BUILD_DIR"
+    cp -r "$PROJECT_ROOT/dist" "$INSTALLER_STAGING/"
+fi
+
+cp -r "$PROJECT_ROOT/public" "$INSTALLER_STAGING/"
+cp "$PROJECT_ROOT/package.json" "$INSTALLER_STAGING/"
+cp -r "$PROJECT_ROOT/hotspot" "$INSTALLER_STAGING/"
+cp "$PROJECT_ROOT/deploy/mikrotik-controller.service" "$INSTALLER_STAGING/"
+cp "$PROJECT_ROOT/deploy/nginx.conf" "$INSTALLER_STAGING/"
+cp "$SCRIPT_DIR/post-install.sh" "$INSTALLER_STAGING/"
+chmod +x "$INSTALLER_STAGING/post-install.sh"
+
+# -------------------------------------------------------------------
+# [4/6] Embed preseed into the Debian Installer initrd
+# This makes the installer auto-run the JuanFi post-install after
+# the base OS is written to the selected disk.
+# -------------------------------------------------------------------
+echo "[4/6] Embedding preseed into installer..."
+
+mkdir -p config/includes.installer
+cp "$SCRIPT_DIR/preseed.cfg" config/includes.installer/
+
+# -------------------------------------------------------------------
+# [5/6] Set up the LIVE system (for "Live" boot option)
+# -------------------------------------------------------------------
+echo "[5/6] Configuring live system..."
+
+mkdir -p "config/includes.chroot${APP_DIR}"
+
+if [ -d "$PROJECT_ROOT/dist" ]; then
     cp -r "$PROJECT_ROOT/dist" "config/includes.chroot${APP_DIR}/"
+else
+    cp -r "$INSTALLER_STAGING/dist" "config/includes.chroot${APP_DIR}/"
 fi
 
 cp -r "$PROJECT_ROOT/public" "config/includes.chroot${APP_DIR}/"
@@ -113,10 +163,9 @@ cp -r "$PROJECT_ROOT/hotspot" "config/includes.chroot${APP_DIR}/"
 cp "$PROJECT_ROOT/deploy/mikrotik-controller.service" "config/includes.chroot${APP_DIR}/"
 cp "$PROJECT_ROOT/deploy/nginx.conf" "config/includes.chroot${APP_DIR}/"
 
-# Post-install hook — runs as root inside chroot during build.
+# Live-system setup hook — runs as root inside chroot during build.
 # Note: systemd is NOT running in the chroot, so we create symlinks manually.
-mkdir -p config/hooks/live
-cat > config/hooks/live/01-setup-juanfi.chroot << 'INSTALL'
+cat > config/hooks/live/02-setup-juanfi.chroot << 'INSTALL'
 #!/bin/bash
 set -e
 
@@ -124,7 +173,7 @@ APP_NAME="mikrotik-controller"
 APP_DIR="/opt/$APP_NAME"
 APP_USER="$APP_NAME"
 
-echo ">>> Setting up JuanFi Panel inside chroot..."
+echo ">>> Setting up JuanFi Panel inside live chroot..."
 
 # Create service user
 useradd -r -m -d "$APP_DIR" -s /usr/sbin/nologin "$APP_USER" 2>/dev/null || true
@@ -149,7 +198,7 @@ ADMIN_PASSWORD=admin123
 EOF
 chmod 600 "$APP_DIR/.env"
 
-# Enable systemd service (manual symlink — systemctl doesn't work in chroot)
+# Enable systemd services via symlinks (systemctl doesn't work in chroot)
 ln -sf /etc/systemd/system/${APP_NAME}.service \
     /etc/systemd/system/multi-user.target.wants/${APP_NAME}.service
 
@@ -157,7 +206,6 @@ ln -sf /etc/systemd/system/${APP_NAME}.service \
 cp "$APP_DIR/nginx.conf" /etc/nginx/sites-available/mikrotik-controller
 rm -f /etc/nginx/sites-enabled/default
 ln -sf /etc/nginx/sites-available/mikrotik-controller /etc/nginx/sites-enabled/mikrotik-controller
-# Enable nginx via symlink
 ln -sf /lib/systemd/system/nginx.service \
     /etc/systemd/system/multi-user.target.wants/nginx.service
 
@@ -171,7 +219,7 @@ mkdir -p "$APP_DIR/hotspot"
 setfacl -R -m u:"$APP_USER":rwx "$APP_DIR/hotspot" 2>/dev/null || true
 setfacl -R -d -m u:"$APP_USER":rwx "$APP_DIR/hotspot" 2>/dev/null || true
 
-# Pre-configure UFW rules (rules stored in /lib/ufw/user*.rules)
+# Pre-configure UFW rules
 ufw allow 'Nginx Full' 2>/dev/null || true
 ufw allow ssh 2>/dev/null || true
 ufw allow 1812/udp 2>/dev/null || true
@@ -203,11 +251,14 @@ BANNER
 rm -f "$APP_DIR/mikrotik-controller.service" "$APP_DIR/nginx.conf"
 apt-get clean
 
-echo ">>> JuanFi Panel setup complete"
+echo ">>> JuanFi Panel live setup complete"
 INSTALL
-chmod +x config/hooks/live/01-setup-juanfi.chroot
+chmod +x config/hooks/live/02-setup-juanfi.chroot
 
-echo "[4/5] Building ISO (this takes 10-30 minutes)..."
+# -------------------------------------------------------------------
+# [6/6] Build the ISO
+# -------------------------------------------------------------------
+echo "[6/6] Building ISO (this takes 10-30 minutes)..."
 lb build 2>&1 | tail -30
 
 if [ -f "live-image-amd64.hybrid.iso" ]; then
@@ -223,11 +274,14 @@ if [ -f "live-image-amd64.hybrid.iso" ]; then
     echo "    dd if=live-image-amd64.hybrid.iso of=/dev/sdX bs=4M status=progress"
     echo ""
     echo "  Boot the USB on any x86_64 machine."
-    echo "  Panel auto-starts on port 80 (nginx) and 3000 (direct)."
-    echo "  Default login: admin / admin123"
     echo ""
-    echo "  To install to disk from the live USB:"
-    echo "    Use the Debian installer (select 'Install' from boot menu)"
+    echo "  Boot menu options:"
+    echo "    Live    — Run panel directly from USB (no disk needed)"
+    echo "    Install — Full installer with disk selection"
+    echo "              JuanFi panel auto-installs after OS setup"
+    echo ""
+    echo "  Default login: admin / admin123"
+    echo "  Panel ports: 80 (nginx), 3000 (direct), 1812-1813/udp (RADIUS)"
     echo ""
     echo "=========================================="
 else

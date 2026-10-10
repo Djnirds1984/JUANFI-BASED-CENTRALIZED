@@ -1918,6 +1918,18 @@ tr:has(.voucher-disabled) .voucher-status-icon {
   opacity: 0.8;
 }
 
+.voucher-summary-available .voucher-summary-label {
+  color: #1e40af;
+}
+
+.voucher-summary-used .voucher-summary-label {
+  color: #166534;
+}
+
+.voucher-summary-disabled .voucher-summary-label {
+  color: #92400e;
+}
+
 /* Device session status badges */
 .badge-online {
   display: inline-block;

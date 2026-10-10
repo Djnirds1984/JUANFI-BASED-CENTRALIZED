@@ -4038,6 +4038,12 @@ const App = {
           <label>Code Prefix (optional)</label>
           <input type="text" name="prefix" placeholder="e.g. WIFI">
         </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" name="usePassword" style="width:auto;margin:0">
+            Use Password (auto-generated)
+          </label>
+        </div>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
@@ -4059,6 +4065,7 @@ const App = {
         radiusProfileId: form.radiusProfileId.value ? parseInt(form.radiusProfileId.value) : null,
         durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         prefix: form.prefix.value || undefined,
+        usePassword: form.usePassword.checked || false,
       });
 
       this.closeModal();

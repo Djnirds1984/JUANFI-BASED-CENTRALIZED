@@ -115,7 +115,7 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
 router.post('/router/:routerId/generate', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength, radiusProfileId } = req.body;
+    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength, radiusProfileId, usePassword } = req.body;
 
     const quantity = Math.min(count || 1, 100);
     const codeLen = Math.min(Math.max(parseInt(codeLength) || 8, 4), 20);
@@ -172,10 +172,11 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         );
 
         if (isRadius) {
+          const password = usePassword ? generateCode(8) : '';
           insertHotspotUserStmt.run(
             routerId,
             username,
-            null,
+            password,
             `Voucher: ${code}`,
             rProfileId
           );

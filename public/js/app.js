@@ -3913,7 +3913,7 @@ const App = {
   },
 
   async loadRadiusVouchers(container) {
-    const data = await api.getVouchers(this.selectedRouterId);
+    const data = await api.getVouchers(this.selectedRouterId, { type: 'radius' });
     const vouchers = data.vouchers || [];
 
     const availableCount = vouchers.filter(v => !v.is_used).length;
@@ -4045,7 +4045,7 @@ const App = {
 
   async loadVouchersContent(container) {
     try {
-      const data = await api.getVouchers(this.selectedRouterId);
+      const data = await api.getVouchers(this.selectedRouterId, { type: 'api' });
       const vouchers = data.vouchers || [];
       const routerUsers = data.routerUsers || [];
 

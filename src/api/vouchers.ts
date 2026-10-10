@@ -22,7 +22,7 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
     const routerId = parseInt(req.params.routerId);
     const db = getDb();
 
-    const { status, limit, offset } = req.query;
+    const { status, limit, offset, type } = req.query;
 
     const routerRow = db.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
     const isRadius = routerRow?.auth_mode === 'radius';
@@ -63,6 +63,12 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
     let query = 'SELECT * FROM vouchers WHERE router_id = ?';
     const params: any[] = [routerId];
 
+    if (type === 'radius') {
+      query += ' AND radius_profile_id IS NOT NULL';
+    } else if (type === 'api') {
+      query += ' AND (radius_profile_id IS NULL OR radius_profile_id = 0)';
+    }
+
     if (status === 'used') {
       query += ' AND is_used = 1';
     } else if (status === 'unused') {
@@ -82,9 +88,13 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
 
     const vouchers = db.prepare(query).all(...params);
 
-    const total = (db
-      .prepare('SELECT COUNT(*) as count FROM vouchers WHERE router_id = ?')
-      .get(routerId) as any).count;
+    const totalQuery = type === 'radius'
+      ? 'SELECT COUNT(*) as count FROM vouchers WHERE router_id = ? AND radius_profile_id IS NOT NULL'
+      : type === 'api'
+        ? 'SELECT COUNT(*) as count FROM vouchers WHERE router_id = ? AND (radius_profile_id IS NULL OR radius_profile_id = 0)'
+        : 'SELECT COUNT(*) as count FROM vouchers WHERE router_id = ?';
+
+    const total = (db.prepare(totalQuery).get(routerId) as any).count;
 
     if (isRadius) {
       const profiles = db.prepare('SELECT id, name FROM radius_profiles').all() as any[];

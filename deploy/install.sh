@@ -181,6 +181,11 @@ cp "$SCRIPT_DIR/deploy/mikrotik-controller.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "$APP_NAME"
 
+# Add sudoers rule for ZeroTier installation
+echo "  Configuring sudo permissions for ZeroTier..."
+echo "$APP_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get install -y zerotier-one, /bin/bash -c curl*" > /etc/sudoers.d/$APP_USER-zerotier
+chmod 440 /etc/sudoers.d/$APP_USER-zerotier
+
 # Start service
 echo "[7/9] Starting service..."
 systemctl start "$APP_NAME"

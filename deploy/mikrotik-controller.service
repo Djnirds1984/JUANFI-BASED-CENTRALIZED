@@ -22,7 +22,6 @@ Environment=PORT=3000
 Environment=DB_PATH=/opt/mikrotik-controller/data/mikrotik-controller.db
 
 # Security
-NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true

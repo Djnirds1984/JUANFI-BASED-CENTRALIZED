@@ -2034,6 +2034,90 @@ class MikroTikService {
     return { sentence: words, rest: buffer.subarray(pos) };
   }
 
+  async getRadiusEntries(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const entries = await this.restApiCall(config, 'GET', '/radius');
+      return Array.isArray(entries) ? entries : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/radius/print');
+    } catch (err) {
+      console.error(`getRadiusEntries failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async addRadiusEntry(routerId: number, address: string, secret: string, service: string = 'hotspot'): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/radius', {
+        address,
+        secret,
+        service,
+        timeout: '5s',
+      });
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/radius/add', [
+        `=service=${service}`,
+        `=address=${address}`,
+        `=secret=${secret}`,
+        '=timeout=5s',
+      ]);
+    } catch (err) {
+      console.error(`addRadiusEntry failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async removeRadiusEntry(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/radius/${id}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/radius/remove', `=.id=${id}`]);
+    } catch (err) {
+      console.error(`removeRadiusEntry failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async configureRadiusOnRouter(routerId: number, panelIp: string, sharedSecret: string): Promise<void> {
+    try {
+      const existing = await this.getRadiusEntries(routerId);
+      const hotspotEntry = existing.find((e: any) => e.service === 'hotspot' && e.address === panelIp);
+
+      if (hotspotEntry) {
+        console.log(`[MikroTik] RADIUS entry already exists on router ${routerId} for ${panelIp}`);
+        return;
+      }
+
+      const staleEntries = existing.filter((e: any) => e.service === 'hotspot');
+      for (const entry of staleEntries) {
+        await this.removeRadiusEntry(routerId, entry['.id']);
+        console.log(`[MikroTik] Removed stale RADIUS hotspot entry on router ${routerId}`);
+      }
+
+      await this.addRadiusEntry(routerId, panelIp, sharedSecret, 'hotspot');
+      console.log(`[MikroTik] RADIUS hotspot config pushed to router ${routerId} → ${panelIp}`);
+    } catch (err) {
+      console.error(`configureRadiusOnRouter failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   disconnectAll(): void {
     for (const [id, timer] of this.reconnectTimers) {
       clearTimeout(timer);

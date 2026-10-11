@@ -653,6 +653,27 @@ class ApiClient {
   async restoreDatabase(base64Data) {
     return this.post('/tools/database/restore', { data: base64Data });
   }
+
+  // --- Turso Cloud Database ---
+  async getTursoConfig() {
+    return this.get('/tools/turso/config');
+  }
+
+  async saveTursoConfig(url, authToken) {
+    return this.post('/tools/turso/config', { url, authToken });
+  }
+
+  async testTursoConnection() {
+    return this.post('/tools/turso/test');
+  }
+
+  async syncToTurso() {
+    return this.post('/tools/turso/sync');
+  }
+
+  async restoreFromTurso() {
+    return this.post('/tools/turso/restore');
+  }
 }
 
 window.api = new ApiClient();

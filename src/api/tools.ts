@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import * as zerotier from '../services/zerotier';
+import * as turso from '../services/turso';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
@@ -115,6 +116,67 @@ router.post('/database/restore', (req: Request, res: Response) => {
       message: 'Database restored successfully. Restart the panel to apply changes.',
       backupPath,
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Turso Cloud Database ---
+
+// Get Turso config
+router.get('/turso/config', (req: Request, res: Response) => {
+  try {
+    const cfg = turso.getConfig();
+    res.json({
+      url: cfg?.url || '',
+      authToken: cfg?.authToken ? cfg.authToken.slice(0, 8) + '...' : '',
+      configured: !!cfg?.url && !!cfg?.authToken,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save Turso config
+router.post('/turso/config', (req: Request, res: Response) => {
+  try {
+    const { url, authToken } = req.body;
+    if (!url || !authToken) {
+      res.status(400).json({ error: 'url and authToken are required' });
+      return;
+    }
+    turso.saveConfig(url, authToken);
+    res.json({ success: true, message: 'Turso configuration saved' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Test Turso connection
+router.post('/turso/test', async (req: Request, res: Response) => {
+  try {
+    const result = await turso.testConnection();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync to Turso cloud
+router.post('/turso/sync', async (req: Request, res: Response) => {
+  try {
+    const result = await turso.syncToCloud();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Restore from Turso cloud
+router.post('/turso/restore', async (req: Request, res: Response) => {
+  try {
+    const result = await turso.restoreFromCloud();
+    res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

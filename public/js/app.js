@@ -5373,6 +5373,7 @@ const App = {
         <div class="tab-bar">
           <button class="tab-btn active" data-toolstab="zerotier" onclick="App.switchToolsTab('zerotier')">ZeroTier</button>
           <button class="tab-btn" data-toolstab="database" onclick="App.switchToolsTab('database')">Database</button>
+          <button class="tab-btn" data-toolstab="cloud" onclick="App.switchToolsTab('cloud')">Cloud</button>
         </div>
         <div id="tools-tab-content"></div>
       </div>
@@ -5394,8 +5395,10 @@ const App = {
     if (!container) return;
     if (this._toolsTab === 'zerotier') {
       await this.loadZeroTierContent(container);
-    } else {
+    } else if (this._toolsTab === 'database') {
       this.renderDatabaseContent(container);
+    } else {
+      await this.renderCloudContent(container);
     }
   },
 
@@ -5583,6 +5586,161 @@ Then join your network:
       if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = 'Restore failed: ' + this.escapeHtml(err.message); }
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Restore from Backup'; }
+    }
+  },
+
+  async renderCloudContent(container) {
+    try {
+      const cfg = await api.getTursoConfig();
+      container.innerHTML = `
+        <div style="max-width:700px;margin:0 auto">
+          <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
+            <div style="padding:1.5rem">
+              <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
+                <span style="font-size:1.3rem">&#9729;</span> Turso Cloud Database
+              </h4>
+              <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+                Sync your devices, vouchers, and session tokens to Turso cloud database for backup and multi-panel access.
+              </p>
+
+              <div style="margin-bottom:1rem">
+                <label style="display:block;margin-bottom:0.25rem;font-weight:500;font-size:0.9rem">Turso Database URL</label>
+                <input type="text" id="turso-url" value="${this.escapeHtml(cfg.url || '')}" placeholder="libsql://your-db.turso.io" class="form-control">
+              </div>
+
+              <div style="margin-bottom:1rem">
+                <label style="display:block;margin-bottom:0.25rem;font-weight:500;font-size:0.9rem">Auth Token</label>
+                <input type="password" id="turso-token" value="" placeholder="Enter your Turso auth token" class="form-control">
+                ${cfg.configured ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.25rem">Current: ${this.escapeHtml(cfg.authToken)}</div>` : ''}
+              </div>
+
+              <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" onclick="App.saveTursoConfig()">Save Config</button>
+                <button class="btn btn-outline btn-sm" onclick="App.testTursoConnection()" id="turso-test-btn">Test Connection</button>
+              </div>
+              <div id="turso-config-status" style="margin-top:0.75rem;font-size:0.9rem"></div>
+            </div>
+          </div>
+
+          <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
+            <div style="padding:1.5rem">
+              <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
+                <span style="font-size:1.3rem">&#128228;</span> Sync & Restore
+              </h4>
+              <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+                Sync pushes local data to Turso. Restore pulls from Turso and replaces local data.
+              </p>
+              <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
+                <button class="btn btn-primary" onclick="App.syncToTurso()" id="turso-sync-btn">
+                  Sync to Cloud
+                </button>
+                <button class="btn btn-warning" onclick="App.restoreFromTurso()" id="turso-restore-btn">
+                  Restore from Cloud
+                </button>
+              </div>
+              <div id="turso-sync-status" style="margin-top:0.75rem;font-size:0.9rem"></div>
+            </div>
+          </div>
+
+          <div class="card" style="border:1px solid var(--border)">
+            <div style="padding:1.5rem">
+              <h4 style="margin-top:0;color:var(--text-secondary);font-size:1rem">What Gets Synced</h4>
+              <ul style="color:var(--text-secondary);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
+                <li><strong>hotspot_users</strong> — All device/user accounts</li>
+                <li><strong>vouchers</strong> — All voucher codes and status</li>
+                <li><strong>device_sessions</strong> — Active session tokens and roaming data</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      container.innerHTML = `<div style="color:var(--danger);text-align:center;padding:2rem">Error: ${this.escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  async saveTursoConfig() {
+    const url = document.getElementById('turso-url')?.value.trim();
+    const authToken = document.getElementById('turso-token')?.value.trim();
+    const statusEl = document.getElementById('turso-config-status');
+    if (!url || !authToken) {
+      this.toast('URL and auth token are required', 'error');
+      return;
+    }
+    try {
+      const res = await api.saveTursoConfig(url, authToken);
+      this.toast(res.message || 'Configuration saved', 'success');
+      if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = res.message; }
+      await this.loadToolsTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = err.message; }
+    }
+  },
+
+  async testTursoConnection() {
+    const btn = document.getElementById('turso-test-btn');
+    const statusEl = document.getElementById('turso-config-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+    try {
+      const res = await api.testTursoConnection();
+      if (res.success) {
+        this.toast(res.message, 'success');
+        if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = res.message; }
+      } else {
+        this.toast(res.message, 'error');
+        if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = res.message; }
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = err.message; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Test Connection'; }
+    }
+  },
+
+  async syncToTurso() {
+    const btn = document.getElementById('turso-sync-btn');
+    const statusEl = document.getElementById('turso-sync-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+    try {
+      const res = await api.syncToTurso();
+      if (res.success) {
+        const counts = Object.entries(res.counts || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        this.toast(`Synced to cloud (${counts})`, 'success');
+        if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = `${res.message} — ${counts}`; }
+      } else {
+        this.toast(res.message, 'error');
+        if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = res.message; }
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = err.message; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sync to Cloud'; }
+    }
+  },
+
+  async restoreFromTurso() {
+    if (!confirm('This will replace your local database with data from Turso cloud. All current local data will be lost. Continue?')) return;
+    const btn = document.getElementById('turso-restore-btn');
+    const statusEl = document.getElementById('turso-sync-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Restoring...'; }
+    try {
+      const res = await api.restoreFromTurso();
+      if (res.success) {
+        const counts = Object.entries(res.counts || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        this.toast(`Restored from cloud (${counts})`, 'success');
+        if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = `${res.message} — ${counts}`; }
+      } else {
+        this.toast(res.message, 'error');
+        if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = res.message; }
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = err.message; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Restore from Cloud'; }
     }
   },
 

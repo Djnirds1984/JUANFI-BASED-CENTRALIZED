@@ -25,7 +25,11 @@
 */
 
 //increase always when publishing a new version for tracking
-#define CURRENT_VERSION "2.4"
+#define CURRENT_VERSION "2.5-SAFEOTA"
+
+#define OTA_MAGIC_BYTE_ESP8266 0xE9
+#define OTA_MAGIC_BYTE_ESP32 0xE9
+#define OTA_PORT 3232
 
 #ifdef ESP32
   #include <TelnetClient.h>
@@ -33,6 +37,8 @@
   #include <SPIFFS.h>
   #include <Update.h>
   #include <WiFi.h>
+  #include <ArduinoOTA.h>
+  #include <HTTPClient.h>
 #else
   #include <ESP8266TelnetClient.h>
   #include <ESP8266WiFi.h>
@@ -40,6 +46,7 @@
   #include <ESP8266HTTPClient.h>
   #include <ESP8266mDNS.h>
   #include <DNSServer.h>
+  #include <ArduinoOTA.h>
   #include <Arduino.h>
   #include <flash_hal.h>
 #endif
@@ -109,6 +116,10 @@ const int COIN_COUNT_ADDRESS = 5;
 const int CUSTOMER_COUNT_ADDRESS = 10;
 const int RANDOM_MAC_ADDRESS = 15;
 const int BACKUP_CONFIG_LENGTH_INDEX = 20;
+const int BOOT_COUNTER_ADDRESS = 50;
+const int SAFE_MODE_FLAG_ADDRESS = 51;
+const int MAX_BOOT_ATTEMPTS = 3;
+const unsigned long STABLE_BOOT_TIME_MS = 15000;
 
 void ICACHE_RAM_ATTR coinInserted()    
 {
@@ -179,6 +190,11 @@ bool networkConnected = false;
 bool cableNotConnected = false;
 bool welcomePrinted = false;
 bool manualVoucher = false;
+bool safeMode = false;
+unsigned long bootTimeMs = 0;
+String PANEL_URL = "";
+int ROUTER_ID = 0;
+String PANEL_API_KEY = "";
 
 int lastSaleTime = 0;
 int thankyou_cooldown = 5000;
@@ -194,6 +210,13 @@ void setup () {
     Serial.println("An Error has occurred while mounting SPIFFS");
     return;
   }  
+  
+  // Check for boot loop - must be done before any other initialization
+  if (checkBootLoop()) {
+    enterSafeMode();
+    return;
+  }
+  
   populateSystemConfiguration(); 
   
   pinMode(COIN_SELECTOR_PIN, INPUT_PULLUP);
@@ -259,6 +282,7 @@ void setup () {
     Serial.print("Attaching interrupt ");
     attachInterrupt(COIN_SELECTOR_PIN, coinInserted, RISING);
     loginMirotik();
+    bootTimeMs = millis();
    
     #ifdef ESP32
       //nothing
@@ -347,6 +371,7 @@ void setup () {
   populateRates();
   
   server.begin();
+  initArduinoOTA();
   
   if(mikrotekConnectionSuccess){
     digitalWrite(SYSTEM_READY_LED, evaluateTriggerOutput(TURN_ON));
@@ -390,6 +415,20 @@ void handleFileUploadStream(){
            handleNotAuthorize();
            return;
         }
+        
+        // Pre-flight validation for sketch binaries
+        if (upload.name != "filesystem") {
+            if (upload.totalSize > 0) {
+                uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+                if (upload.totalSize > maxSketchSpace) {
+                    Serial.println("Upload rejected: Binary too large");
+                    server.send(400, "text/html", "Binary too large for available space");
+                    hasUploadError = true;
+                    return;
+                }
+            }
+        }
+        
         if (upload.name == "filesystem") {
             isFileSystem = true;
             backupSystemConfig();
@@ -425,6 +464,7 @@ void handleFileUploadStream(){
     else if (upload.status == UPLOAD_FILE_END && !hasUploadError) {
         if (Update.end(true)) { //true to set the size to the current progress
             Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+            clearBootCounter();
         }
         else {
             Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
@@ -651,6 +691,191 @@ int eeGetInt(int pos) {
   }else{
     return val;
   }
+}
+
+byte eeGetByte(int pos) {
+  return EEPROM.read(pos);
+}
+
+void eeWriteByte(int pos, byte val) {
+  EEPROM.write(pos, val);
+  EEPROM.commit();
+}
+
+bool checkBootLoop() {
+  byte bootCount = eeGetByte(BOOT_COUNTER_ADDRESS);
+  byte safeFlag = eeGetByte(SAFE_MODE_FLAG_ADDRESS);
+  
+  Serial.print("Boot counter: ");
+  Serial.println(bootCount);
+  Serial.print("Safe mode flag: ");
+  Serial.println(safeFlag);
+  
+  if (safeFlag == 1) {
+    Serial.println("SAFE MODE: Device is in safe mode");
+    return true;
+  }
+  
+  if (bootCount >= MAX_BOOT_ATTEMPTS) {
+    Serial.println("SAFE MODE: Too many failed boots detected");
+    eeWriteByte(SAFE_MODE_FLAG_ADDRESS, 1);
+    return true;
+  }
+  
+  bootCount++;
+  eeWriteByte(BOOT_COUNTER_ADDRESS, bootCount);
+  Serial.print("Boot counter incremented to: ");
+  Serial.println(bootCount);
+  
+  return false;
+}
+
+void clearBootCounter() {
+  Serial.println("Clearing boot counter - stable boot detected");
+  eeWriteByte(BOOT_COUNTER_ADDRESS, 0);
+  eeWriteByte(SAFE_MODE_FLAG_ADDRESS, 0);
+}
+
+void enterSafeMode() {
+  safeMode = true;
+  Serial.println("Entering SAFE MODE");
+  
+  #ifdef ESP32
+    // ESP32: Use static Ethernet IP for safe mode
+    byte mac[6];
+    WiFi.macAddress(mac);
+    Ethernet.init(5);
+    Ethernet.begin(mac, apIP, apIP, apIP, IPAddress(255, 255, 255, 0));
+    currentIpAddress = Ethernet.localIP().toString().c_str();
+  #else
+    // ESP8266: Start SoftAP for safe mode
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+    WiFi.softAP("JuanFi-SAFE");
+    dnsServer.start(DNS_PORT, "*", apIP);
+    currentIpAddress = apIP.toString().c_str();
+  #endif
+  
+  if(LCD_TYPE > 0){
+    if(LCD_TYPE == 1){
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("SAFE MODE");
+      lcd.setCursor(0, 1);
+      lcd.print("Re-flash FW");
+    }else if(LCD_TYPE == 2){
+      lcd20x4.clear();
+      lcd20x4.setCursor(0, 0);
+      lcd20x4.print("SAFE MODE");
+      lcd20x4.setCursor(0, 1);
+      lcd20x4.print("Firmware corrupted");
+      lcd20x4.setCursor(0, 2);
+      lcd20x4.print("Upload new .bin");
+      lcd20x4.setCursor(0, 3);
+      lcd20x4.print("IP: 172.217.28.1");
+    }
+  }
+  
+  // Setup minimal web server for safe mode OTA
+  server.on("/admin", handleSafeModePage);
+  server.on("/admin/updateMainBin", HTTP_POST, handleFileUploadRequest, handleFileUploadStream);
+  server.onNotFound([]() {
+    server.sendHeader("Location", String("/admin"), true);
+    server.send(302, "text/plain", "");
+  });
+  
+  initArduinoOTA();
+  server.begin();
+  
+  Serial.println("Safe mode web server started");
+  Serial.print("Safe mode IP: ");
+  Serial.println(currentIpAddress);
+}
+
+void handleSafeModePage() {
+  String html = "<!DOCTYPE html><html><head><title>JuanFi Safe Mode</title>";
+  html += "<style>body{font-family:Arial;margin:40px;background:#1a1a2e;color:#fff}";
+  html += ".banner{background:#e94560;padding:20px;border-radius:8px;margin-bottom:20px}";
+  html += ".info{background:#16213e;padding:20px;border-radius:8px}";
+  html += "input[type=file]{margin:10px 0;padding:10px}";
+  html += "button{background:#0f3460;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px}";
+  html += "button:hover{background:#e94560}</style></head><body>";
+  html += "<div class='banner'><h1>⚠ FIRMWARE SAFE MODE</h1>";
+  html += "<p>Boot-loop detected. Upload valid firmware to recover.</p></div>";
+  html += "<div class='info'>";
+  html += "<h2>Upload Firmware</h2>";
+  html += "<form method='POST' action='/admin/updateMainBin' enctype='multipart/form-data'>";
+  html += "<label>Bin Type:</label><br>";
+  html += "<select name='binType' style='padding:8px;margin:10px 0;width:100%'>";
+  html += "<option value='sketch'>Bin 1 (Sketch)</option>";
+  html += "<option value='filesystem'>Bin 2 (Filesystem)</option>";
+  html += "</select><br>";
+  html += "<input type='file' name='update' accept='.bin' required><br>";
+  html += "<button type='submit'>UPDATE FIRMWARE</button>";
+  html += "</form>";
+  html += "<p style='margin-top:20px;color:#aaa'>Update Bin 2 (Filesystem) FIRST, then Bin 1 (Sketch)</p>";
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+bool validateBinary(uint8_t* data, size_t size) {
+  // Check magic byte
+  if (data[0] != OTA_MAGIC_BYTE_ESP8266 && data[0] != OTA_MAGIC_BYTE_ESP32) {
+    Serial.println("OTA validation failed: Invalid magic byte");
+    return false;
+  }
+  
+  // Check size
+  uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+  if (size > maxSketchSpace) {
+    Serial.println("OTA validation failed: Binary too large");
+    Serial.print("Size: ");
+    Serial.print(size);
+    Serial.print(" Max: ");
+    Serial.println(maxSketchSpace);
+    return false;
+  }
+  
+  Serial.println("OTA validation passed");
+  return true;
+}
+
+void initArduinoOTA() {
+  ArduinoOTA.setPort(OTA_PORT);
+  ArduinoOTA.setHostname("JuanFi");
+  
+  if (ADMIN_PW != "") {
+    ArduinoOTA.setPassword(ADMIN_PW.c_str());
+  } else {
+    ArduinoOTA.setPassword("juanfi");
+  }
+  
+  ArduinoOTA.onStart([]() {
+    String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+    Serial.println("OTA Start: " + type);
+    backupSystemConfig();
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("OTA End");
+    clearBootCounter();
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("ArduinoOTA initialized on port " + String(OTA_PORT));
 }
 
 void handleJquerySript(){
@@ -1424,6 +1649,11 @@ void populateSystemConfiguration(){
     primaryDNS[2] = primaryDNSAddress[2].toInt();
     primaryDNS[3] = primaryDNSAddress[3].toInt();
   }
+  
+  // Parse panel connection fields (indices 30-32)
+  if (rowSize > 30) PANEL_URL = rows[30];
+  if (rowSize > 31) ROUTER_ID = rows[31].toInt();
+  if (rowSize > 32) PANEL_API_KEY = rows[32];
  
 
 }
@@ -1479,6 +1709,17 @@ int coinWaiting = 0;
 long lastLinkStatusCheck = 0;
 
 void loop () {
+   // Clear boot counter after stable boot
+   if (bootTimeMs > 0 && millis() - bootTimeMs > STABLE_BOOT_TIME_MS) {
+     if (eeGetByte(BOOT_COUNTER_ADDRESS) > 0) {
+       clearBootCounter();
+     }
+     bootTimeMs = 0;
+   }
+   
+   // Handle ArduinoOTA
+   ArduinoOTA.handle();
+   
    if(networkConnected){
     unsigned long currentMilis = millis();
 
@@ -1596,19 +1837,26 @@ void loop () {
       }
     }
   }else{
-    unsigned long currentMilis = millis();
-    if(SETUP_FINISH == 1){
-      //when setup is already finish and cannnot connect, wait for 10 mins to setup and will auto restart after that
-      //this is to cater slow boot AP
-      if(currentMilis >= 600000){
-        ESP.restart();
+    if (safeMode) {
+      // Safe mode: just handle client requests and OTA
+      #ifndef ESP32
+        dnsServer.processNextRequest();
+      #endif
+    } else {
+      unsigned long currentMilis = millis();
+      if(SETUP_FINISH == 1){
+        //when setup is already finish and cannnot connect, wait for 10 mins to setup and will auto restart after that
+        //this is to cater slow boot AP
+        if(currentMilis >= 600000){
+          ESP.restart();
+        }
       }
+      #ifdef ESP32
+        //nothing
+      #else
+       dnsServer.processNextRequest();
+      #endif
     }
-    #ifdef ESP32
-      //nothing
-    #else
-     dnsServer.processNextRequest();
-    #endif
   }
   
   server.handleClient();

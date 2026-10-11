@@ -1,10 +1,50 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import { getDb } from '../database';
 import { nodeMcuService, NodeMcuDevice } from '../services/nodemcu';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
+
+// Unauthenticated endpoint for NodeMCU coin-insert reporting
+// NodeMCU calls this after creating a user on MikroTik via local auth
+router.post('/coin-insert', (req: Request, res: Response) => {
+  try {
+    const { router_id, username, mac, ip, session_timeout } = req.body;
+
+    if (!router_id || !username) {
+      res.status(400).json({ error: 'router_id and username are required' });
+      return;
+    }
+
+    const db = getDb();
+
+    // Validate router exists and is active
+    const routerRow = db.prepare('SELECT id, name FROM routers WHERE id = ? AND is_active = 1').get(router_id) as any;
+    if (!routerRow) {
+      res.status(404).json({ error: 'Router not found or inactive' });
+      return;
+    }
+
+    // Generate unique session ID
+    const sessionId = 'coin_' + crypto.randomBytes(8).toString('hex');
+
+    // Create radius_sessions record
+    const sessionTimeout = parseInt(session_timeout || '28800', 10);
+    db.prepare(`
+      INSERT INTO radius_sessions (router_id, username, session_id, nas_ip, status, started_at, updated_at, mac_address, session_time)
+      VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, ?)
+    `).run(router_id, username, sessionId, ip || '', mac || '', sessionTimeout);
+
+    res.json({ success: true, session_id: sessionId });
+  } catch (error: any) {
+    console.error('Coin-insert endpoint error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.use(authMiddleware);
 
 const DEVICES_FILE = path.join(__dirname, '..', '..', 'data', 'nodemcu-devices.json');

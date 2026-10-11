@@ -2,13 +2,6 @@ import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
 import { syncSessionsWithDevices } from './deviceSessions';
 
-/**
- * Persistent store for hotspot active devices.
- *
- * Rows are upserted from the live MikroTik `/ip/hotspot/active` list on every
- * sync and are never deleted automatically, so a device keeps showing up in the
- * Active Devices tab after its session ends (it is simply flagged `offline`).
- */
 const nowStamp = (): string => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 const toInt = (value: any): number => {
@@ -17,6 +10,43 @@ const toInt = (value: any): number => {
 };
 
 const cleanIp = (raw: any): string => String(raw || '').split('/')[0].trim();
+
+/**
+ * Sync coin-insert sessions: mark as stopped when the user is no longer
+ * active on the MikroTik. Coin-insert sessions have session_id starting
+ * with 'coin_' and are created by the NodeMCU coin-insert flow.
+ */
+export function syncCoinInsertSessions(routerId: number, live: any[] | null): void {
+  if (!live) return;
+
+  const db = getDb();
+
+  // Get all active coin-insert sessions for this router
+  const coinSessions = db.prepare(
+    "SELECT id, username FROM radius_sessions WHERE router_id = ? AND status = 'active' AND session_id LIKE 'coin_%'"
+  ).all(routerId) as any[];
+
+  if (coinSessions.length === 0) return;
+
+  // Build a set of active usernames from the live connections
+  const activeUsernames = new Set<string>();
+  for (const conn of live) {
+    const user = String(conn.user || '');
+    if (user) activeUsernames.add(user.toLowerCase());
+  }
+
+  // Mark sessions as stopped if the user is no longer active
+  const now = nowStamp();
+  const update = db.prepare(
+    "UPDATE radius_sessions SET status = 'stopped', stopped_at = ?, updated_at = ?, terminate_cause = 'User-Request' WHERE id = ?"
+  );
+
+  for (const session of coinSessions) {
+    if (!activeUsernames.has(session.username.toLowerCase())) {
+      update.run(now, now, session.id);
+    }
+  }
+}
 
 /**
  * Upsert every live connection and flag rows whose session ended as `offline`.
@@ -245,6 +275,7 @@ export async function syncActiveDevicesOnce(): Promise<void> {
       const live = await mikroTikService.getActiveConnections(router.id);
       syncActiveDevices(router.id, live);
       syncSessionsWithDevices(router.id, live);
+      syncCoinInsertSessions(router.id, live);
     } catch (err) {
       console.error(`Active devices sync failed for router ${router.id}:`, (err as Error).message);
     }

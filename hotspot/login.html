@@ -701,6 +701,8 @@ body#loginBody {
 	    function doLoginMember() {
 		document.sendin.username.value = document.login.username.value;
 		document.sendin.password.value = hexMD5('$(chap-id)' + document.login.password.value + '$(chap-challenge)');
+		// Clear dst to prevent redirect to random IPs from $(link-orig)
+		document.sendin.dst.value = "$(link-redirect)";
 		document.sendin.submit();
 		return false;
 	    }

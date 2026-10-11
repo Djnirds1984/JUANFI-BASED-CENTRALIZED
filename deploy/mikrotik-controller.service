@@ -23,8 +23,6 @@ Environment=DB_PATH=/opt/mikrotik-controller/data/mikrotik-controller.db
 
 # Security
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 ReadWritePaths=/opt/mikrotik-controller/data /opt/mikrotik-controller/hotspot
 
 [Install]

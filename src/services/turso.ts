@@ -150,11 +150,14 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
       const rows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       counts[table] = rows.length;
 
+      // Delete all rows in Turso table, then re-insert from local
+      await client.execute(`DELETE FROM ${table}`);
+
       if (rows.length === 0) continue;
 
       const columns = Object.keys(rows[0]);
       const placeholders = columns.map(() => '?').join(', ');
-      const insertSql = `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
+      const insertSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
 
       for (const row of rows) {
         const values = columns.map(col => row[col]);

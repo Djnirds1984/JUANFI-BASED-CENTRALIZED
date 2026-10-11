@@ -598,7 +598,7 @@ function saveVoucherBtnAction(){
 							  data: "erase-cookie=true",
 							  success: function(data){
 								  setStorageValue('reLogin', '1');
-								  location.reload();
+								  window.location.href = "/login";
 							  }
 							 });
 					}else{

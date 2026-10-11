@@ -138,7 +138,6 @@ const App = {
         case 'interfaces': await this.renderInterfaces(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'radius': await this.renderRadius(); break;
-        case 'monitoring': await this.renderMonitoring(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
         case 'appearance': await this.renderAppearance(); break;
@@ -4351,77 +4350,6 @@ const App = {
     } catch (err) {
       this.toast(err.message, 'error');
     }
-  },
-
-  async renderMonitoring() {
-    const content = document.getElementById('page-content');
-    const summary = await api.getMonitoringSummary();
-
-    content.innerHTML = `
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total Routers</div>
-          <div class="stat-value">${summary.totalRouters}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Online</div>
-          <div class="stat-value" style="color: var(--success)">${summary.connectedRouters}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Offline</div>
-          <div class="stat-value" style="color: var(--danger)">${summary.totalRouters - summary.connectedRouters}</div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <h3>Router Health</h3>
-        </div>
-        <div class="router-grid">
-          ${summary.routers.map((r) => {
-            if (!r.connected || !r.systemInfo) {
-              return `
-                <div class="router-card offline">
-                  <div class="router-name">${this.escapeHtml(r.name)}</div>
-                  <div class="router-host">${this.escapeHtml(r.host)}</div>
-                  <div class="router-stats"><span style="color: var(--danger)">Offline - No data available</span></div>
-                </div>
-              `;
-            }
-
-            const memPercent = Math.round((r.systemInfo.memoryUsed / r.systemInfo.memoryTotal) * 100);
-            const memClass = memPercent > 80 ? 'fill-high' : memPercent > 50 ? 'fill-medium' : 'fill-low';
-            const uptimeHours = Math.round(r.systemInfo.uptime / 3600);
-
-            return `
-              <div class="router-card online">
-                <div class="router-name">${this.escapeHtml(r.name)}</div>
-                <div class="router-host">${this.escapeHtml(r.identity || r.host)} - v${r.systemInfo.version}</div>
-                <div style="margin-top:0.75rem">
-                  <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
-                    <span>CPU Load</span><span>${r.systemInfo.cpuLoad}%</span>
-                  </div>
-                  <div class="progress-bar">
-                    <div class="fill ${r.systemInfo.cpuLoad > 80 ? 'fill-high' : r.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'}" style="width:${r.systemInfo.cpuLoad}%"></div>
-                  </div>
-                </div>
-                <div style="margin-top:0.75rem">
-                  <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
-                    <span>Memory</span><span>${memPercent}%</span>
-                  </div>
-                  <div class="progress-bar">
-                    <div class="fill ${memClass}" style="width:${memPercent}%"></div>
-                  </div>
-                </div>
-                <div class="router-stats" style="margin-top:0.75rem">
-                  <span>Uptime: ${uptimeHours}h</span>
-                  <span>${r.systemInfo.boardName}</span>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-    `;
   },
 
   async renderRadius() {

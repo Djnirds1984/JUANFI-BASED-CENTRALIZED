@@ -5542,8 +5542,13 @@ Then join your network:
     `;
   },
 
-  downloadDatabaseBackup() {
-    api.downloadDatabaseBackup();
+  async downloadDatabaseBackup() {
+    try {
+      await api.downloadDatabaseBackup();
+      this.toast('Database backup downloaded', 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async restoreDatabase() {

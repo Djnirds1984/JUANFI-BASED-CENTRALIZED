@@ -629,8 +629,25 @@ class ApiClient {
   }
 
   // --- Database Backup ---
-  downloadDatabaseBackup() {
-    window.open('/api/tools/database/backup', '_blank');
+  async downloadDatabaseBackup() {
+    const res = await fetch('/api/tools/database/backup', {
+      headers: { 'Authorization': `Bearer ${this.token}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || 'Download failed');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    a.download = match ? match[1] : 'mikrotik-controller-backup.db';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   async restoreDatabase(base64Data) {

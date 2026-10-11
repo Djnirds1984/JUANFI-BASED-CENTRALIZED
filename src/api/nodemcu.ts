@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { getDb } from '../database';
 import { nodeMcuService, NodeMcuDevice } from '../services/nodemcu';
 import { authMiddleware } from '../middleware/auth';
+import { initSession } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -38,7 +39,20 @@ router.post('/coin-insert', (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, ?)
     `).run(router_id, username, sessionId, ip || '', mac || '', sessionTimeout);
 
-    res.json({ success: true, session_id: sessionId });
+    // Generate or reuse a permanent device session token for roaming support.
+    // When the device browser loads the portal on another SSID, the token cookie
+    // lets the panel restore the session even if the MAC has changed.
+    let token: string | null = null;
+    if (mac) {
+      try {
+        const result = initSession({ mac, ip: ip || '', server: '', routerId: router_id });
+        token = result.token;
+      } catch (err: any) {
+        console.error('Failed to init device session token:', err.message);
+      }
+    }
+
+    res.json({ success: true, session_id: sessionId, token });
   } catch (error: any) {
     console.error('Coin-insert endpoint error:', error);
     res.status(500).json({ error: error.message });

@@ -140,6 +140,7 @@ const App = {
         case 'radius': await this.renderRadius(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
       }
     } catch (err) {
@@ -5357,6 +5358,139 @@ const App = {
       this.closePortalThemes();
       await this.renderPortal();
       this.toast(`"${label}" theme applied`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async renderTools() {
+    const content = document.getElementById('page-content');
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Tools</h3>
+        </div>
+        <div id="tools-content" style="padding:1.5rem">
+          <div style="text-align:center;padding:2rem">Loading...</div>
+        </div>
+      </div>
+    `;
+    await this.loadToolsContent();
+  },
+
+  async loadToolsContent() {
+    const container = document.getElementById('tools-content');
+    if (!container) return;
+    try {
+      const status = await api.getZeroTierStatus();
+      if (!status.installed) {
+        container.innerHTML = `
+          <div style="text-align:center;padding:2rem 0">
+            <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
+            <h4>ZeroTier Not Installed</h4>
+            <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
+              Install ZeroTier to access this panel remotely from anywhere in the world.
+              ZeroTier creates a secure virtual network between your devices.
+            </p>
+            <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
+              Install ZeroTier
+            </button>
+            <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
+          </div>
+        `;
+        return;
+      }
+
+      const networksHtml = status.networks.length > 0
+        ? status.networks.map((n) => `
+          <div class="card" style="margin-bottom:0.75rem;border:1px solid var(--border)">
+            <div style="padding:1rem;display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-weight:600;font-size:1rem">${this.escapeHtml(n.name || 'Network')}</div>
+                <div style="font-size:0.85rem;color:var(--text-secondary)">
+                  ID: ${this.escapeHtml(n.nwid)} &middot;
+                  Status: <span style="color:${n.status === 'OK' ? 'var(--success)' : 'var(--warning)'}">${this.escapeHtml(n.status)}</span> &middot;
+                  Type: ${this.escapeHtml(n.type)}
+                </div>
+                ${n.assignedAddresses.length > 0 ? `
+                  <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.25rem">
+                    IPs: ${n.assignedAddresses.map((a) => this.escapeHtml(a)).join(', ')}
+                  </div>
+                ` : ''}
+              </div>
+              <button class="btn btn-sm btn-outline" onclick="App.leaveZeroTierNetwork('${this.escapeHtml(n.nwid)}')">Leave</button>
+            </div>
+          </div>
+        `).join('')
+        : '<p style="color:var(--text-secondary);text-align:center;padding:1rem 0">No networks joined yet.</p>';
+
+      container.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem">
+          <div class="card" style="border:1px solid var(--border)">
+            <div style="padding:1rem">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.25rem">ZeroTier Address</div>
+              <div style="font-weight:600;font-size:1.1rem;font-family:monospace">${this.escapeHtml(status.address || 'N/A')}</div>
+            </div>
+          </div>
+          <div class="card" style="border:1px solid var(--border)">
+            <div style="padding:1rem">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.25rem">Status</div>
+              <div style="font-weight:600;font-size:1.1rem">
+                <span class="status-badge ${status.online ? 'connected' : 'disconnected'}">${status.online ? 'Online' : 'Offline'}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center">
+          <h4 style="margin:0">Networks</h4>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <input type="text" id="zt-network-id" placeholder="Enter Network ID" class="form-control" style="width:220px;font-family:monospace">
+            <button class="btn btn-primary btn-sm" onclick="App.joinZeroTierNetwork()">Join Network</button>
+          </div>
+        </div>
+        ${networksHtml}
+      `;
+    } catch (err) {
+      container.innerHTML = `<div style="color:var(--danger);text-align:center;padding:2rem">Error: ${this.escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  async installZeroTier() {
+    const btn = document.getElementById('zt-install-btn');
+    const statusEl = document.getElementById('zt-install-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+    if (statusEl) statusEl.textContent = 'Downloading and installing ZeroTier. This may take a minute...';
+    try {
+      const res = await api.installZeroTier();
+      this.toast(res.message || 'ZeroTier installed successfully', 'success');
+      await this.loadToolsContent();
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Install ZeroTier'; }
+      if (statusEl) statusEl.textContent = 'Installation failed: ' + err.message;
+    }
+  },
+
+  async joinZeroTierNetwork() {
+    const input = document.getElementById('zt-network-id');
+    const networkId = input ? input.value.trim() : '';
+    if (!networkId) { this.toast('Enter a network ID', 'error'); return; }
+    try {
+      const res = await api.joinZeroTierNetwork(networkId);
+      this.toast(res.message || `Joined network ${networkId}`, 'success');
+      await this.loadToolsContent();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async leaveZeroTierNetwork(networkId) {
+    if (!confirm(`Leave network ${networkId}? You will lose remote access if this is your only network.`)) return;
+    try {
+      const res = await api.leaveZeroTierNetwork(networkId);
+      this.toast(res.message || `Left network ${networkId}`, 'success');
+      await this.loadToolsContent();
     } catch (err) {
       this.toast(err.message, 'error');
     }

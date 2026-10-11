@@ -610,6 +610,23 @@ class ApiClient {
   async updateHotspotUser(routerId, userId, data) {
     return this.put(`/hotspot/router/${routerId}/${userId}`, data);
   }
+
+  // --- ZeroTier Tools ---
+  async getZeroTierStatus() {
+    return this.get('/tools/zerotier/status');
+  }
+
+  async installZeroTier() {
+    return this.post('/tools/zerotier/install');
+  }
+
+  async joinZeroTierNetwork(networkId) {
+    return this.post('/tools/zerotier/join', { networkId });
+  }
+
+  async leaveZeroTierNetwork(networkId) {
+    return this.post('/tools/zerotier/leave', { networkId });
+  }
 }
 
 window.api = new ApiClient();

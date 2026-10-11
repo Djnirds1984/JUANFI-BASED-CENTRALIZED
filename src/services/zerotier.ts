@@ -155,14 +155,23 @@ export async function installZeroTier(): Promise<string> {
         });
       });
     } else {
-      // Linux installation
-      exec('curl -s https://install.zerotier.com | sudo bash', (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error('Failed to install ZeroTier'));
+      // Linux installation — try multiple methods
+      const methods = [
+        { cmd: 'curl -s https://install.zerotier.com | sudo bash', name: 'official installer' },
+        { cmd: 'sudo apt-get update && sudo apt-get install -y zerotier-one', name: 'apt-get' },
+      ];
+
+      let lastError = '';
+      for (const method of methods) {
+        try {
+          execSync(method.cmd, { encoding: 'utf8', timeout: 120000 });
+          resolve('ZeroTier installed successfully via ' + method.name);
           return;
+        } catch (err: any) {
+          lastError = err.stderr || err.message || 'unknown error';
         }
-        resolve('ZeroTier installed successfully');
-      });
+      }
+      reject(new Error('All installation methods failed. Last error: ' + lastError));
     }
   });
 }

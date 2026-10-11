@@ -688,6 +688,8 @@ body#loginBody {
 			}else{
 				document.sendin.password.value = hexMD5('$(chap-id)' + vc + '$(chap-challenge)');
 			}
+			// Clear dst to prevent redirect to random IPs from $(link-orig)
+			document.sendin.dst.value = "$(link-redirect)";
             document.sendin.submit();
             return false;
         }
@@ -1050,6 +1052,8 @@ body#loginBody {
 										} else {
 											document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
 										}
+										// Clear dst to prevent redirect to random IPs from $(link-orig)
+										document.sendin.dst.value = "$(link-redirect)";
 										document.sendin.submit();
 									} catch (e) {}
 								}, 400);

@@ -5614,6 +5614,18 @@ Then join your network:
                 ${cfg.configured ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.25rem">Current: ${this.escapeHtml(cfg.authToken)}</div>` : ''}
               </div>
 
+              <div style="margin-bottom:1rem;padding:1rem;background:var(--bg-secondary);border-radius:6px">
+                <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                  <input type="checkbox" id="turso-auto-sync" ${cfg.autoSync ? 'checked' : ''}>
+                  <span style="font-weight:500">Enable Auto-Sync</span>
+                </label>
+                <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.5rem">
+                  Automatically sync to cloud every
+                  <input type="number" id="turso-sync-interval" value="${cfg.autoSyncInterval || 10}" min="5" max="300" style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+                  seconds. New controllers with empty database will auto-pull from cloud on startup.
+                </div>
+              </div>
+
               <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" onclick="App.saveTursoConfig()">Save Config</button>
                 <button class="btn btn-outline btn-sm" onclick="App.testTursoConnection()" id="turso-test-btn">Test Connection</button>
@@ -5662,13 +5674,15 @@ Then join your network:
   async saveTursoConfig() {
     const url = document.getElementById('turso-url')?.value.trim();
     const authToken = document.getElementById('turso-token')?.value.trim();
+    const autoSync = document.getElementById('turso-auto-sync')?.checked || false;
+    const autoSyncInterval = parseInt(document.getElementById('turso-sync-interval')?.value || '10') * 1000;
     const statusEl = document.getElementById('turso-config-status');
     if (!url || !authToken) {
       this.toast('URL and auth token are required', 'error');
       return;
     }
     try {
-      const res = await api.saveTursoConfig(url, authToken);
+      const res = await api.saveTursoConfig(url, authToken, autoSync, autoSyncInterval);
       this.toast(res.message || 'Configuration saved', 'success');
       if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = res.message; }
       await this.loadToolsTab();

@@ -659,8 +659,8 @@ class ApiClient {
     return this.get('/tools/turso/config');
   }
 
-  async saveTursoConfig(url, authToken) {
-    return this.post('/tools/turso/config', { url, authToken });
+  async saveTursoConfig(url, authToken, autoSync = false, autoSyncInterval = 10000) {
+    return this.post('/tools/turso/config', { url, authToken, autoSync, autoSyncInterval });
   }
 
   async testTursoConnection() {

@@ -12,6 +12,7 @@ import { startMonitoring, stopMonitoring, reconnectRouters } from './services/mo
 import { startActiveDeviceSync, stopActiveDeviceSync } from './services/activeDevices';
 import { mikroTikService } from './services/mikrotik';
 import { startRadiusServer, stopRadiusServer, hasRadiusClients } from './services/radiusServer';
+import * as turso from './services/turso';
 
 import authRoutes from './api/auth';
 import routerRoutes from './api/routers';
@@ -100,6 +101,14 @@ async function bootstrap(): Promise<void> {
 
     console.log('Starting active devices sync...');
     startActiveDeviceSync(config.activeDevicesSyncSec);
+
+    console.log('Checking Turso cloud sync...');
+    const tursoPull = await turso.pullIfLocalEmpty();
+    console.log(`[Turso] ${tursoPull.message}`);
+    const tursoConfig = turso.getConfig();
+    if (tursoConfig?.autoSync) {
+      turso.startAutoSync(tursoConfig.autoSyncInterval || 10000);
+    }
 
     server.listen(config.port, config.host, () => {
       console.log('');

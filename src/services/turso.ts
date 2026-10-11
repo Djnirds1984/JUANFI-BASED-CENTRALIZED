@@ -8,7 +8,11 @@ const TURSO_CONFIG_PATH = path.join(__dirname, '..', 'data', 'turso-config.json'
 interface TursoConfig {
   url: string;
   authToken: string;
+  autoSync?: boolean;
+  autoSyncInterval?: number;
 }
+
+let autoSyncIntervalId: NodeJS.Timeout | null = null;
 
 export function getConfig(): TursoConfig | null {
   try {
@@ -20,12 +24,12 @@ export function getConfig(): TursoConfig | null {
   return null;
 }
 
-export function saveConfig(url: string, authToken: string): void {
+export function saveConfig(url: string, authToken: string, autoSync = false, autoSyncInterval = 10000): void {
   const dir = path.dirname(TURSO_CONFIG_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(TURSO_CONFIG_PATH, JSON.stringify({ url, authToken }, null, 2));
+  fs.writeFileSync(TURSO_CONFIG_PATH, JSON.stringify({ url, authToken, autoSync, autoSyncInterval }, null, 2));
 }
 
 export function getClient(): Client | null {
@@ -209,4 +213,62 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
   } catch (error: any) {
     return { success: false, message: error.message || 'Restore failed', counts: {} };
   }
+}
+
+export async function pullIfLocalEmpty(): Promise<{ pulled: boolean; message: string; counts?: Record<string, number> }> {
+  try {
+    const config = getConfig();
+    if (!config?.url || !config?.authToken) {
+      return { pulled: false, message: 'Turso not configured' };
+    }
+
+    const localDb = getDb();
+    let hasData = false;
+    for (const table of SYNC_TABLES) {
+      const count = localDb.prepare(`SELECT COUNT(*) as cnt FROM ${table}`).get() as any;
+      if (count.cnt > 0) {
+        hasData = true;
+        break;
+      }
+    }
+
+    if (hasData) {
+      return { pulled: false, message: 'Local database has data, skipping auto-pull' };
+    }
+
+    const result = await restoreFromCloud();
+    if (result.success) {
+      return { pulled: true, message: 'Auto-pulled from Turso (local was empty)', counts: result.counts };
+    }
+    return { pulled: false, message: result.message };
+  } catch (error: any) {
+    return { pulled: false, message: error.message || 'Auto-pull failed' };
+  }
+}
+
+export function startAutoSync(intervalMs = 10000): void {
+  stopAutoSync();
+  const config = getConfig();
+  if (!config?.url || !config?.authToken) return;
+
+  console.log(`[Turso] Auto-sync started (every ${intervalMs / 1000}s)`);
+  autoSyncIntervalId = setInterval(async () => {
+    try {
+      await syncToCloud();
+    } catch (err: any) {
+      console.error('[Turso] Auto-sync error:', err.message);
+    }
+  }, intervalMs);
+}
+
+export function stopAutoSync(): void {
+  if (autoSyncIntervalId) {
+    clearInterval(autoSyncIntervalId);
+    autoSyncIntervalId = null;
+    console.log('[Turso] Auto-sync stopped');
+  }
+}
+
+export function isAutoSyncRunning(): boolean {
+  return autoSyncIntervalId !== null;
 }

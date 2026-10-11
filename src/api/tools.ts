@@ -140,12 +140,12 @@ router.get('/turso/config', (req: Request, res: Response) => {
 // Save Turso config
 router.post('/turso/config', (req: Request, res: Response) => {
   try {
-    const { url, authToken } = req.body;
+    const { url, authToken, autoSync, autoSyncInterval } = req.body;
     if (!url || !authToken) {
       res.status(400).json({ error: 'url and authToken are required' });
       return;
     }
-    turso.saveConfig(url, authToken);
+    turso.saveConfig(url, authToken, autoSync || false, autoSyncInterval || 10000);
     res.json({ success: true, message: 'Turso configuration saved' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

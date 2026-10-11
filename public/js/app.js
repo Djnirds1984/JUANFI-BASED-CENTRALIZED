@@ -5384,20 +5384,51 @@ const App = {
     try {
       const status = await api.getZeroTierStatus();
       if (!status.installed) {
-        container.innerHTML = `
-          <div style="text-align:center;padding:2rem 0">
-            <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
-            <h4>ZeroTier Not Installed</h4>
-            <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
-              Install ZeroTier to access this panel remotely from anywhere in the world.
-              ZeroTier creates a secure virtual network between your devices.
-            </p>
-            <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
-              Install ZeroTier
-            </button>
-            <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
-          </div>
-        `;
+        if (status.container) {
+          container.innerHTML = `
+            <div style="text-align:center;padding:2rem 0">
+              <div style="font-size:3rem;margin-bottom:1rem">&#128230;</div>
+              <h4>Running in Container</h4>
+              <p style="color:var(--text-secondary);max-width:600px;margin:0.5rem auto 1.5rem">
+                ZeroTier cannot be installed from inside a container. You need to install it on the host system.
+              </p>
+              <div style="background:var(--bg-secondary);padding:1.5rem;border-radius:8px;max-width:600px;margin:0 auto;text-align:left">
+                <h5 style="margin-top:0">Manual Installation via SSH:</h5>
+                <pre style="background:var(--bg);padding:1rem;border-radius:4px;overflow-x:auto;font-size:0.9rem">
+SSH into your SBC and run:
+
+  sudo apt-get update
+  sudo apt-get install -y zerotier-one
+  sudo systemctl enable zerotier-one
+  sudo systemctl start zerotier-one
+
+Then get your ZeroTier address:
+  sudo zerotier-cli info
+
+Finally, join your network:
+  sudo zerotier-cli join &lt;NETWORK_ID&gt;</pre>
+              </div>
+              <button class="btn btn-primary" style="margin-top:1.5rem" onclick="App.loadToolsContent()">
+                Check Again
+              </button>
+            </div>
+          `;
+        } else {
+          container.innerHTML = `
+            <div style="text-align:center;padding:2rem 0">
+              <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
+              <h4>ZeroTier Not Installed</h4>
+              <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
+                Install ZeroTier to access this panel remotely from anywhere in the world.
+                ZeroTier creates a secure virtual network between your devices.
+              </p>
+              <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
+                Install ZeroTier
+              </button>
+              <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
+            </div>
+          `;
+        }
         return;
       }
 

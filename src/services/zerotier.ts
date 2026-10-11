@@ -8,6 +8,7 @@ export interface ZeroTierStatus {
   address?: string;
   online: boolean;
   networks: ZeroTierNetwork[];
+  container: boolean;
 }
 
 export interface ZeroTierNetwork {
@@ -43,6 +44,22 @@ export function checkInstalled(): boolean {
   }
 }
 
+export function isContainer(): boolean {
+  // Check common container indicators
+  try {
+    const hasCgroup = fs.existsSync('/.dockerenv') || 
+                      fs.existsSync('/run/.containerenv') ||
+                      process.env.container !== undefined;
+    if (hasCgroup) return true;
+    
+    // Check if running in a container by reading cgroup
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
+    return cgroup.includes('docker') || cgroup.includes('lxc') || cgroup.includes('kubepods');
+  } catch {
+    return false;
+  }
+}
+
 export function getVersion(): string {
   try {
     return runCommand(`${zerotierCli} version`);
@@ -53,12 +70,14 @@ export function getVersion(): string {
 
 export function getStatus(): ZeroTierStatus {
   const installed = checkInstalled();
+  const container = isContainer();
 
   if (!installed) {
     return {
       installed: false,
       online: false,
       networks: [],
+      container,
     };
   }
 

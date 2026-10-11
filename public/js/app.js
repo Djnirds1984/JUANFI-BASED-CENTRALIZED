@@ -5370,17 +5370,36 @@ const App = {
         <div class="card-header">
           <h3>Tools</h3>
         </div>
-        <div id="tools-content" style="padding:1.5rem">
-          <div style="text-align:center;padding:2rem">Loading...</div>
+        <div class="tab-bar">
+          <button class="tab-btn active" data-toolstab="zerotier" onclick="App.switchToolsTab('zerotier')">ZeroTier</button>
+          <button class="tab-btn" data-toolstab="database" onclick="App.switchToolsTab('database')">Database</button>
         </div>
+        <div id="tools-tab-content"></div>
       </div>
     `;
-    await this.loadToolsContent();
+    this._toolsTab = 'zerotier';
+    await this.loadToolsTab();
   },
 
-  async loadToolsContent() {
-    const container = document.getElementById('tools-content');
+  async switchToolsTab(tab) {
+    this._toolsTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.toolstab === tab);
+    });
+    await this.loadToolsTab();
+  },
+
+  async loadToolsTab() {
+    const container = document.getElementById('tools-tab-content');
     if (!container) return;
+    if (this._toolsTab === 'zerotier') {
+      await this.loadZeroTierContent(container);
+    } else {
+      this.renderDatabaseContent(container);
+    }
+  },
+
+  async loadZeroTierContent(container) {
     try {
       const status = await api.getZeroTierStatus();
       if (!status.installed) {
@@ -5469,6 +5488,99 @@ Then join your network:
     }
   },
 
+  renderDatabaseContent(container) {
+    container.innerHTML = `
+      <div style="max-width:700px;margin:0 auto">
+        <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
+          <div style="padding:1.5rem">
+            <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
+              <span style="font-size:1.3rem">&#128229;</span> Download Backup
+            </h4>
+            <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+              Download a copy of your database including all hotspot users, vouchers, sessions,
+              router configurations, and settings. Keep this file safe for disaster recovery.
+            </p>
+            <button class="btn btn-primary" onclick="App.downloadDatabaseBackup()">
+              Download Database Backup
+            </button>
+          </div>
+        </div>
+
+        <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
+          <div style="padding:1.5rem">
+            <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
+              <span style="font-size:1.3rem">&#128228;</span> Restore Database
+            </h4>
+            <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+              Upload a previously downloaded backup to restore your system. The current database
+              will be backed up automatically before restoring.
+            </p>
+            <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
+              <input type="file" id="db-restore-file" accept=".db,.sqlite,.bak" class="form-control" style="flex:1;min-width:200px">
+              <button class="btn btn-warning" onclick="App.restoreDatabase()" id="db-restore-btn">
+                Restore from Backup
+              </button>
+            </div>
+            <div id="db-restore-status" style="margin-top:0.75rem;font-size:0.9rem"></div>
+          </div>
+        </div>
+
+        <div class="card" style="border:1px solid var(--danger);background:rgba(220,53,69,0.05)">
+          <div style="padding:1.5rem">
+            <h4 style="margin-top:0;color:var(--danger);display:flex;align-items:center;gap:0.5rem">
+              <span style="font-size:1.3rem">&#9888;</span> Important Notes
+            </h4>
+            <ul style="color:var(--text-secondary);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
+              <li>After restoring, <strong>restart the panel</strong> for changes to take effect.</li>
+              <li>Restoring replaces all current data &mdash; users, vouchers, sessions, and settings.</li>
+              <li>A backup of the current database is created automatically before any restore.</li>
+              <li>Only restore backups from this same panel system.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  downloadDatabaseBackup() {
+    api.downloadDatabaseBackup();
+  },
+
+  async restoreDatabase() {
+    const fileInput = document.getElementById('db-restore-file');
+    const statusEl = document.getElementById('db-restore-status');
+    const btn = document.getElementById('db-restore-btn');
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+      this.toast('Please select a backup file first', 'error');
+      return;
+    }
+    if (!confirm('This will replace your current database. All existing data will be lost. Continue?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Restoring...'; }
+    if (statusEl) { statusEl.style.color = 'var(--text-secondary)'; statusEl.textContent = 'Reading file...'; }
+    try {
+      const file = fileInput.files[0];
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          const commaIndex = result.indexOf(',');
+          resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+      if (statusEl) statusEl.textContent = 'Uploading and restoring database...';
+      const res = await api.restoreDatabase(base64);
+      if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = res.message || 'Database restored successfully.'; }
+      this.toast('Database restored. Restart the panel to apply changes.', 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = 'Restore failed: ' + this.escapeHtml(err.message); }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Restore from Backup'; }
+    }
+  },
+
   async installZeroTier() {
     const btn = document.getElementById('zt-install-btn');
     const statusEl = document.getElementById('zt-install-status');
@@ -5479,7 +5591,7 @@ Then join your network:
     try {
       const res = await api.installZeroTier();
       this.toast(res.message || 'ZeroTier installed successfully', 'success');
-      await this.loadToolsContent();
+      await this.loadToolsTab();
     } catch (err) {
       const isPermissionError = err.message && err.message.includes('PERMISSION_DENIED');
       if (isPermissionError) {
@@ -5502,7 +5614,7 @@ Then join your network:
     try {
       const res = await api.joinZeroTierNetwork(networkId);
       this.toast(res.message || `Joined network ${networkId}`, 'success');
-      await this.loadToolsContent();
+      await this.loadToolsTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -5513,7 +5625,7 @@ Then join your network:
     try {
       const res = await api.leaveZeroTierNetwork(networkId);
       this.toast(res.message || `Left network ${networkId}`, 'success');
-      await this.loadToolsContent();
+      await this.loadToolsTab();
     } catch (err) {
       this.toast(err.message, 'error');
     }

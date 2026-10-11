@@ -627,6 +627,15 @@ class ApiClient {
   async leaveZeroTierNetwork(networkId) {
     return this.post('/tools/zerotier/leave', { networkId });
   }
+
+  // --- Database Backup ---
+  downloadDatabaseBackup() {
+    window.open('/api/tools/database/backup', '_blank');
+  }
+
+  async restoreDatabase(base64Data) {
+    return this.post('/tools/database/restore', { data: base64Data });
+  }
 }
 
 window.api = new ApiClient();

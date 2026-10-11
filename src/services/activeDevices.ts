@@ -1,6 +1,7 @@
 import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
 import { syncSessionsWithDevices } from './deviceSessions';
+import crypto from 'crypto';
 
 const nowStamp = (): string => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
@@ -12,37 +13,55 @@ const toInt = (value: any): number => {
 const cleanIp = (raw: any): string => String(raw || '').split('/')[0].trim();
 
 /**
- * Sync coin-insert sessions: mark as stopped when the user is no longer
- * active on the MikroTik. Coin-insert sessions have session_id starting
- * with 'coin_' and are created by the NodeMCU coin-insert flow.
+ * Sync coin-insert sessions: auto-create sessions for new users and mark
+ * as stopped when users disconnect. This detects all hotspot users from
+ * MikroTik polling, so no NodeMCU firmware changes are needed.
  */
 export function syncCoinInsertSessions(routerId: number, live: any[] | null): void {
   if (!live) return;
 
   const db = getDb();
+  const now = nowStamp();
+
+  // Build a map of active users from live connections
+  const activeUsers = new Map<string, any>();
+  for (const conn of live) {
+    const user = String(conn.user || '');
+    if (user) activeUsers.set(user.toLowerCase(), conn);
+  }
 
   // Get all active coin-insert sessions for this router
   const coinSessions = db.prepare(
-    "SELECT id, username FROM radius_sessions WHERE router_id = ? AND status = 'active' AND session_id LIKE 'coin_%'"
+    "SELECT id, username, session_id FROM radius_sessions WHERE router_id = ? AND status = 'active' AND session_id LIKE 'coin_%'"
   ).all(routerId) as any[];
 
-  if (coinSessions.length === 0) return;
+  const existingUsernames = new Set<string>();
+  for (const session of coinSessions) {
+    existingUsernames.add(session.username.toLowerCase());
+  }
 
-  // Build a set of active usernames from the live connections
-  const activeUsernames = new Set<string>();
-  for (const conn of live) {
-    const user = String(conn.user || '');
-    if (user) activeUsernames.add(user.toLowerCase());
+  // Create sessions for new users that don't have a session yet
+  const insert = db.prepare(`
+    INSERT INTO radius_sessions (router_id, username, session_id, nas_ip, status, started_at, updated_at, mac_address, session_time)
+    VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, 28800)
+  `);
+
+  for (const [username, conn] of activeUsers) {
+    if (!existingUsernames.has(username)) {
+      const sessionId = 'coin_' + crypto.randomBytes(8).toString('hex');
+      const mac = String(conn.mac || conn['mac-address'] || '');
+      const ip = cleanIp(conn.address);
+      insert.run(routerId, username, sessionId, ip, mac);
+    }
   }
 
   // Mark sessions as stopped if the user is no longer active
-  const now = nowStamp();
   const update = db.prepare(
     "UPDATE radius_sessions SET status = 'stopped', stopped_at = ?, updated_at = ?, terminate_cause = 'User-Request' WHERE id = ?"
   );
 
   for (const session of coinSessions) {
-    if (!activeUsernames.has(session.username.toLowerCase())) {
+    if (!activeUsers.has(session.username.toLowerCase())) {
       update.run(now, now, session.id);
     }
   }

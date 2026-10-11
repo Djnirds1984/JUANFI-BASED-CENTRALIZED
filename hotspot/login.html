@@ -622,6 +622,22 @@ body#loginBody {
 		<div class="loading-spinner"></div>
 		<div class="loading-text">Connecting...</div>
 	</div>
+	<script>
+	(function(){
+		var hide = function(){
+			var o = document.getElementById('loadingOverlay');
+			if(o){ o.classList.add('fade-out'); setTimeout(function(){ o.style.display='none'; },500); }
+		};
+		var done = false;
+		var force = setTimeout(function(){ if(!done){ done=true; hide(); } }, 4000);
+		window.addEventListener('load', function(){
+			if(done) return;
+			done = true;
+			clearTimeout(force);
+			setTimeout(hide, 2000);
+		});
+	})();
+	</script>
 
 	$(if chap-id)
     <form name="sendin" action="$(link-login-only)" method="post" style="display:none">
@@ -994,18 +1010,7 @@ body#loginBody {
 			// This ensures the backend API has time to process the MAC address
 			// and respond with the token, fixing issues with devices roaming between SSIDs
 			window.addEventListener('load', function() {
-				// Delay to ensure MikroTik and backend API have time to process the MAC address
-				// 2000ms gives enough time for the captive portal to fully initialize
 				setTimeout(function() {
-					// Hide the loading overlay after 2 seconds
-					var overlay = document.getElementById('loadingOverlay');
-					if (overlay) {
-						overlay.classList.add('fade-out');
-						setTimeout(function() {
-							overlay.style.display = 'none';
-						}, 500);
-					}
-
 					if(reLogin == '1'){
 						setStorageValue('reLogin', '0');
 						doLogin();

@@ -612,11 +612,11 @@ function saveVoucherBtnAction(){
 									contentType: "application/json",
 									timeout: 5000,
 									complete: function(){
-										newLogin();
+										doLogin();
 									}
 								});
 							} else {
-								newLogin();
+								doLogin();
 							}
 						}, 3000);
 					}

@@ -25,7 +25,7 @@
 */
 
 //increase always when publishing a new version for tracking
-#define CURRENT_VERSION "2.5-SAFEOTA"
+#define CURRENT_VERSION "4.5-SAFEOTA"
 
 #define OTA_MAGIC_BYTE_ESP8266 0xE9
 #define OTA_MAGIC_BYTE_ESP32 0xE9

@@ -52,12 +52,92 @@ export async function testConnection(): Promise<{ success: boolean; message: str
 
 const SYNC_TABLES = ['hotspot_users', 'vouchers', 'device_sessions'];
 
+const TABLE_SCHEMAS: Record<string, string> = {
+  hotspot_users: `
+    CREATE TABLE IF NOT EXISTS hotspot_users (
+      id INTEGER PRIMARY KEY,
+      router_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      password TEXT NOT NULL,
+      profile TEXT NOT NULL DEFAULT 'default',
+      uptime_limit TEXT DEFAULT '00:00:00',
+      bytes_in_quota INTEGER DEFAULT 0,
+      bytes_out_quota INTEGER DEFAULT 0,
+      comment TEXT,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'api',
+      radius_profile_id INTEGER,
+      total_bytes_in INTEGER NOT NULL DEFAULT 0,
+      total_bytes_out INTEGER NOT NULL DEFAULT 0,
+      total_session_time INTEGER NOT NULL DEFAULT 0,
+      last_login_at TEXT,
+      last_logout_at TEXT,
+      first_login_at TEXT,
+      expiry_at TEXT,
+      price REAL NOT NULL DEFAULT 0,
+      shared_users INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `,
+  vouchers: `
+    CREATE TABLE IF NOT EXISTS vouchers (
+      id INTEGER PRIMARY KEY,
+      router_id INTEGER NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL,
+      password TEXT,
+      profile TEXT NOT NULL,
+      duration_minutes INTEGER,
+      data_limit_mb INTEGER,
+      is_used INTEGER NOT NULL DEFAULT 0,
+      used_at TEXT,
+      expires_at TEXT,
+      radius_profile_id INTEGER,
+      price REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `,
+  device_sessions: `
+    CREATE TABLE IF NOT EXISTS device_sessions (
+      id INTEGER PRIMARY KEY,
+      session_token TEXT NOT NULL UNIQUE,
+      mac_address TEXT NOT NULL DEFAULT '',
+      previous_mac TEXT,
+      username TEXT NOT NULL DEFAULT '',
+      password TEXT,
+      profile TEXT,
+      router_id INTEGER NOT NULL DEFAULT 1,
+      hotspot_server TEXT NOT NULL DEFAULT '',
+      total_seconds INTEGER NOT NULL DEFAULT 0,
+      remaining_seconds INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      is_online INTEGER NOT NULL DEFAULT 0,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_rebind_at TEXT,
+      expires_at TEXT
+    )
+  `,
+};
+
+async function ensureTables(client: Client): Promise<void> {
+  for (const table of SYNC_TABLES) {
+    const schema = TABLE_SCHEMAS[table];
+    if (schema) {
+      await client.execute(schema);
+    }
+  }
+}
+
 export async function syncToCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
     if (!client) {
       return { success: false, message: 'Turso not configured', counts: {} };
     }
+
+    await ensureTables(client);
 
     const localDb = getDb();
     const counts: Record<string, number> = {};

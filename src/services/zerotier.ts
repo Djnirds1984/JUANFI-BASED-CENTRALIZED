@@ -155,10 +155,10 @@ export async function installZeroTier(): Promise<string> {
         });
       });
     } else {
-      // Linux installation — try multiple methods
+      // Linux installation — running as root, no sudo needed
       const methods = [
-        { cmd: 'curl -s https://install.zerotier.com | sudo bash', name: 'official installer' },
-        { cmd: 'sudo apt-get update && sudo apt-get install -y zerotier-one', name: 'apt-get' },
+        { cmd: 'curl -s https://install.zerotier.com | bash', name: 'official installer' },
+        { cmd: 'apt-get update && apt-get install -y zerotier-one', name: 'apt-get' },
       ];
 
       let lastError = '';

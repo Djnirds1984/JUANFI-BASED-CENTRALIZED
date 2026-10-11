@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=mikrotik-controller
-Group=mikrotik-controller
+User=root
+Group=root
 WorkingDirectory=/opt/mikrotik-controller
 # NOTE: no chown here. ExecStartPre runs as the unprivileged 'mikrotik-controller'
 # user, which cannot chown root-owned files (Operation not permitted), which would

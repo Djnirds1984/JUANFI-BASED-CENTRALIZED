@@ -187,7 +187,7 @@ const App = {
 
       content.innerHTML = `
         <div class="overview-grid">
-          <div class="dash-card">
+          <div class="dash-card" style="max-height:420px;overflow-y:auto">
             <div class="dash-card-title">Server Health</div>
             <div class="dash-metrics">
               <div class="dash-metric">
@@ -222,7 +222,7 @@ const App = {
             </div>
           </div>
 
-          <div class="dash-card">
+          <div class="dash-card" style="max-height:420px;overflow-y:auto">
             <div class="dash-card-title">Router Status${primaryRouter ? `: ${this.escapeHtml(primaryRouter.name)}` : ''}</div>
             ${primaryRouter ? `
               <div class="dash-router-header">
@@ -281,39 +281,6 @@ const App = {
             </div>
           </div>
         </div>
-
-        ${connectedRouters.length > 0 ? `
-          <div class="dash-card">
-            <div class="dash-card-title">Connected Routers</div>
-            <div class="router-grid">
-              ${connectedRouters.map((r) => {
-                const memP = Math.round((r.systemInfo.memoryUsed / r.systemInfo.memoryTotal) * 100);
-                return `
-                  <div class="router-card online">
-                    <div class="router-name">${this.escapeHtml(r.name)}</div>
-                    <div class="router-host">${this.escapeHtml(r.systemInfo.identity || r.host)} &middot; v${r.systemInfo.version}</div>
-                    <div style="margin-top:0.75rem">
-                      <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
-                        <span>CPU</span><span>${r.systemInfo.cpuLoad}%</span>
-                      </div>
-                      <div class="progress-bar"><div class="fill ${r.systemInfo.cpuLoad > 80 ? 'fill-high' : r.systemInfo.cpuLoad > 50 ? 'fill-medium' : 'fill-low'} anim-bar" data-target="${r.systemInfo.cpuLoad}" style="width:0%"></div></div>
-                    </div>
-                    <div style="margin-top:0.75rem">
-                      <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:0.25rem">
-                        <span>Memory</span><span>${memP}%</span>
-                      </div>
-                      <div class="progress-bar"><div class="fill ${memP > 80 ? 'fill-high' : memP > 50 ? 'fill-medium' : 'fill-low'} anim-bar" data-target="${memP}" style="width:0%"></div></div>
-                    </div>
-                    <div class="router-stats" style="margin-top:0.75rem">
-                      <span>Uptime: ${formatUptime(r.systemInfo.uptime)}</span>
-                      <span>${this.escapeHtml(r.systemInfo.boardName)}</span>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        ` : ''}
       `;
 
       requestAnimationFrame(() => {

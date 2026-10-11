@@ -98,12 +98,14 @@ export function getStatus(): ZeroTierStatus {
       address,
       online,
       networks,
+      container,
     };
   } catch (error: any) {
     return {
       installed: true,
       online: false,
       networks: [],
+      container,
     };
   }
 }

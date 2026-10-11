@@ -1363,7 +1363,11 @@ const App = {
     try {
       await api.deleteActiveDevice(this.selectedRouterId, deviceId);
       this.toast('Device removed', 'success');
-      this.loadHotspotTab();
+      if (this.currentPage === 'radius') {
+        this.loadRadiusTab();
+      } else {
+        this.loadHotspotTab();
+      }
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -1452,7 +1456,11 @@ const App = {
     try {
       await api.removeActiveConnection(this.selectedRouterId, activeId);
       this.toast('User disconnected', 'success');
-      this.loadHotspotTab();
+      if (this.currentPage === 'radius') {
+        this.loadRadiusTab();
+      } else {
+        this.loadHotspotTab();
+      }
     } catch (err) {
       this.toast(err.message, 'error');
     }
@@ -4864,97 +4872,225 @@ const App = {
   },
 
   async loadRadiusActiveSessions(container) {
-    const [sessions, stats] = await Promise.all([
-      api.getActiveRadiusSessions(this.selectedRouterId),
-      api.getRadiusSessionStats(this.selectedRouterId),
-    ]);
+    if (!container) container = document.getElementById('radius-tab-content');
+    this.clearRadiusPollers();
 
-    const fmtBytes = (bytes) => {
-      if (!bytes || bytes === 0) return '0 B';
-      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
-      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
-      if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-      return `${bytes} B`;
-    };
+    try {
+      const [devices, stats] = await Promise.all([
+        api.getActiveDevices(this.selectedRouterId),
+        api.getRadiusSessionStats(this.selectedRouterId),
+      ]);
 
-    const fmtDuration = (secs) => {
-      if (!secs) return '0s';
-      const h = Math.floor(secs / 3600);
-      const m = Math.floor((secs % 3600) / 60);
-      const s = secs % 60;
-      if (h > 0) return `${h}h ${m}m ${s}s`;
-      if (m > 0) return `${m}m ${s}s`;
-      return `${s}s`;
-    };
+      const mappedDevices = this.mapActiveDevices(devices);
 
-    const statsHtml = `
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem">
-        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-          <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">${stats.activeSessions}</div>
-          <div style="font-size:0.8rem;color:var(--text-muted)">Active Sessions</div>
+      const fmtBytes = (bytes) => {
+        if (!bytes || bytes === 0) return '0 B';
+        if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+        if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+        if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+        return `${bytes} B`;
+      };
+
+      const statsHtml = `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem">
+          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">${stats.activeSessions}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Active Sessions</div>
+          </div>
+          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700">${stats.todaySessions}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Today's Sessions</div>
+          </div>
+          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesIn)}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Download Today</div>
+          </div>
+          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesOut)}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Upload Today</div>
+          </div>
         </div>
-        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-          <div style="font-size:1.5rem;font-weight:700">${stats.todaySessions}</div>
-          <div style="font-size:0.8rem;color:var(--text-muted)">Today's Sessions</div>
-        </div>
-        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-          <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesIn)}</div>
-          <div style="font-size:0.8rem;color:var(--text-muted)">Download Today</div>
-        </div>
-        <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-          <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesOut)}</div>
-          <div style="font-size:0.8rem;color:var(--text-muted)">Upload Today</div>
-        </div>
-      </div>
-    `;
+      `;
 
-    let headerHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Active Sessions (${sessions.length})</h4>
-      </div>
-    `;
+      const headerHtml = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+          <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Active Devices (${mappedDevices.length})</h4>
+          <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
+        </div>
+      `;
 
-    if (!sessions || sessions.length === 0) {
-      container.innerHTML = statsHtml + headerHtml + '<div class="empty-state"><p>No active sessions right now.</p></div>';
+      container.innerHTML = statsHtml + headerHtml + `
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>MAC Address</th>
+                <th>IP Address</th>
+                <th>Hostname</th>
+                <th>User</th>
+                <th>Server</th>
+                <th>Status</th>
+                <th>Uptime</th>
+                <th>Session Time Left</th>
+                <th>RX Rate</th>
+                <th>TX Rate</th>
+                <th>Bytes In</th>
+                <th>Bytes Out</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="radius-active-devices-tbody">
+              ${this.renderActiveDeviceRows(mappedDevices)}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      this._radiusActiveInterval = setInterval(async () => {
+        try {
+          const freshDevices = this.mapActiveDevices(await api.getActiveDevices(this.selectedRouterId));
+          this.refreshRadiusActiveDeviceRows(freshDevices);
+        } catch (err) {
+          console.error('Failed to refresh radius active devices:', err);
+        }
+      }, 1000);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  refreshRadiusActiveDeviceRows(devices) {
+    const tbody = document.getElementById('radius-active-devices-tbody');
+    if (!tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
+    const rowKey = (d) => `${d.id}:${d['is-active'] ? 1 : 0}`;
+    const domKey = (r) => `${r.dataset.activeId}:${r.dataset.active}`;
+
+    const freshKeys = devices.map(rowKey).join('|');
+    const liveKeys = rows.map(domKey).join('|');
+
+    if (freshKeys !== liveKeys) {
+      tbody.innerHTML = this.renderActiveDeviceRows(devices);
       return;
     }
 
-    container.innerHTML = statsHtml + headerHtml + `
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Profile</th>
-              <th>Session ID</th>
-              <th>Started</th>
-              <th>Duration</th>
-              <th>Download</th>
-              <th>Upload</th>
-              <th>NAS IP</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${sessions.map((s) => `
-              <tr>
-                <td><strong>${this.escapeHtml(s.username)}</strong></td>
-                <td>${this.escapeHtml(s.profile_name || '-')}</td>
-                <td><code style="font-size:0.75rem">${this.escapeHtml(s.session_id || '-')}</code></td>
-                <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
-                <td>${fmtDuration(s.session_time)}</td>
-                <td>${fmtBytes(s.input_octets)}</td>
-                <td>${fmtBytes(s.output_octets)}</td>
-                <td>${this.escapeHtml(s.nas_ip || '-')}</td>
-                <td>
-                  <button class="btn btn-sm btn-danger" onclick="App.terminateRadiusSession(${s.id})">Disconnect</button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
+    rows.forEach((row, index) => {
+      const device = devices[index];
+      if (!device) return;
+
+      const uptime = row.querySelector('[data-field="uptime"]');
+      if (uptime) uptime.textContent = device.uptime || '-';
+
+      const lastSeen = row.querySelector('[data-field="last-seen"]');
+      if (lastSeen) lastSeen.textContent = device['last-seen'] || '-';
+
+      if (device['is-active'] !== true) return;
+
+      const totalSeconds = this.parseTimeToSeconds(device['session-time-left'] || '');
+
+      const countdown = row.querySelector('.session-countdown');
+      if (countdown) {
+        let countdownClass = 'session-countdown';
+        if (totalSeconds !== Infinity && totalSeconds > 0) {
+          if (totalSeconds <= 60) countdownClass += ' countdown-critical';
+          else if (totalSeconds <= 300) countdownClass += ' countdown-warning';
+        }
+        countdown.className = countdownClass;
+
+        const value = countdown.querySelector('.countdown-value');
+        if (value) value.textContent = this.formatCountdown(totalSeconds);
+
+        const fill = countdown.querySelector('.countdown-bar-fill');
+        if (fill) fill.style.width = `${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%`;
+      }
+
+      const rxRate = device['rx-rate'] || '0 bps';
+      const txRate = device['tx-rate'] || '0 bps';
+
+      const rxValue = row.querySelector('[data-rate="rx"]');
+      if (rxValue) rxValue.textContent = rxRate;
+      const rxFill = row.querySelector('[data-rate-bar="rx"]');
+      if (rxFill) rxFill.style.width = `${this.calculateRateBarWidth(rxRate)}%`;
+
+      const txValue = row.querySelector('[data-rate="tx"]');
+      if (txValue) txValue.textContent = txRate;
+      const txFill = row.querySelector('[data-rate-bar="tx"]');
+      if (txFill) txFill.style.width = `${this.calculateRateBarWidth(txRate)}%`;
+
+      const bytesIn = row.querySelector('[data-field="bytes-in"]');
+      if (bytesIn) bytesIn.textContent = this.formatBytes(parseInt(device['bytes-in'] || '0', 10) || 0);
+
+      const bytesOut = row.querySelector('[data-field="bytes-out"]');
+      if (bytesOut) bytesOut.textContent = this.formatBytes(parseInt(device['bytes-out'] || '0', 10) || 0);
+    });
+  },
+
+  clearRadiusPollers() {
+    if (this._radiusActiveInterval) {
+      clearInterval(this._radiusActiveInterval);
+      this._radiusActiveInterval = null;
+    }
+  },
+
+  showAddRadiusUserModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000';
+    modal.innerHTML = `
+      <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:2rem;max-width:500px;width:90%">
+        <h3 style="margin:0 0 1.5rem 0">Generate RADIUS Voucher</h3>
+        <form id="add-radius-user-form">
+          <div style="margin-bottom:1rem">
+            <label style="display:block;margin-bottom:0.5rem;font-size:0.9rem;color:var(--text-muted)">Profile</label>
+            <select name="profile_id" required style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+              <option value="">Loading profiles...</option>
+            </select>
+          </div>
+          <div style="margin-bottom:1rem">
+            <label style="display:block;margin-bottom:0.5rem;font-size:0.9rem;color:var(--text-muted)">Prefix (optional)</label>
+            <input type="text" name="prefix" placeholder="e.g., P" style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+          </div>
+          <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+            <button type="button" class="btn btn-outline" onclick="this.closest('.modal').remove()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Generate</button>
+          </div>
+        </form>
       </div>
     `;
+    document.body.appendChild(modal);
+
+    api.getRadiusProfiles(this.selectedRouterId).then((profiles) => {
+      const select = modal.querySelector('select[name="profile_id"]');
+      if (profiles && profiles.length > 0) {
+        select.innerHTML = profiles.map((p) => `<option value="${p.id}">${this.escapeHtml(p.name)}</option>`).join('');
+      } else {
+        select.innerHTML = '<option value="">No profiles available</option>';
+      }
+    }).catch(() => {
+      modal.querySelector('select[name="profile_id"]').innerHTML = '<option value="">Failed to load profiles</option>';
+    });
+
+    modal.querySelector('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const data = {
+        count: 1,
+        radiusProfileId: parseInt(formData.get('profile_id'), 10),
+        prefix: formData.get('prefix') || 'P',
+        codeLength: 8,
+      };
+
+      try {
+        const result = await api.generateVouchers(this.selectedRouterId, data);
+        this.toast(`Voucher generated: ${result.vouchers?.[0]?.code || 'success'}`, 'success');
+        modal.remove();
+        this.loadRadiusTab();
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
+    });
   },
 
   async terminateRadiusSession(sessionId) {

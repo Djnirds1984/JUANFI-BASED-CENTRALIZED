@@ -1,19 +1,22 @@
 /*
  * JuanFi centralized - roaming device session token client.
  *
- * A device gets ONE permanent token (stored in a long-lived first-party cookie
- * on the hotspot portal origin). When the phone roams to a different SSID of
- * the same hotspot system, the portal reads this token, posts it together with
- * the new MAC to the controller, which re-binds the session and returns the
- * credentials + remaining time so the user is restored without re-entering a
- * voucher.
+ * Token storage strategy
+ * ----------------------
+ * The portal pages (login.html / status.html) are served from the MikroTik's
+ * hotspot IP, which is DIFFERENT per SSID. A cookie set on SSID-A's portal IP
+ * is not available when the device roams to SSID-B (different portal IP).
  *
- * Requires (defined by config.js):
- *   var controllerApiUrl = "http://<controller-lan-ip>:3000/api";
- *   var sessionCookieName = "juanfi_sid";
+ * To solve this, we embed a hidden iframe that points to the panel's
+ * /session/token-frame endpoint. The iframe runs in a first-party context for
+ * the panel's origin (constant IP across all SSIDs), so cookies set inside the
+ * iframe persist across SSIDs. The parent page and iframe communicate via
+ * postMessage.
  *
- * The controller URL must be reachable BEFORE login -> add it to the MikroTik
- * IP > Hotspot > Walled Garden (the controller does this automatically).
+ * Fallback: if the iframe doesn't load within 3 seconds (e.g. panel down, or
+ * browser blocks third-party iframes), we fall back to direct API calls with
+ * localStorage. This won't survive cross-SSID roaming but still works for
+ * reconnects on the same SSID.
  */
 (function (window) {
   'use strict';
@@ -27,49 +30,89 @@
       ? sessionCookieName
       : 'juanfi_sid';
 
-  var TEN_YEARS = 3650; // token cookie effectively never expires
   var TOKEN_RE = /^[a-f0-9]{48}$/;
+  var IFRAME_TIMEOUT = 3000;
 
-  function setCookie(name, value, days) {
-    var expires = '';
-    if (days) {
-      var date = new Date();
-      date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
-      expires = '; expires=' + date.toUTCString();
+  // ---- iframe bridge ----
+  var iframe = null;
+  var iframeReady = false;
+  var pendingQueue = [];
+  var tokenResolver = null;
+
+  function initIframe() {
+    if (iframe || !apiBase) return;
+    try {
+      iframe = document.createElement('iframe');
+      iframe.src = apiBase + '/session/token-frame';
+      iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
+      iframe.setAttribute('aria-hidden', 'true');
+      (document.body || document.documentElement).appendChild(iframe);
+
+      window.addEventListener('message', function (e) {
+        if (!iframe || !iframe.contentWindow || e.source !== iframe.contentWindow) return;
+        var d = e.data || {};
+        if (d.type === 'token-frame-ready') {
+          iframeReady = true;
+          for (var i = 0; i < pendingQueue.length; i++) pendingQueue[i]();
+          pendingQueue = [];
+        } else if (d.type === 'token' && typeof d.token === 'string') {
+          if (tokenResolver) {
+            var fn = tokenResolver;
+            tokenResolver = null;
+            fn(d.token);
+          }
+        }
+      });
+
+      setTimeout(function () {
+        if (!iframeReady) {
+          iframeReady = false;
+          for (var i = 0; i < pendingQueue.length; i++) pendingQueue[i]();
+          pendingQueue = [];
+        }
+      }, IFRAME_TIMEOUT);
+    } catch (ex) {
+      // iframe creation failed (e.g. no document.body yet) — fall through
     }
-    document.cookie = name + '=' + (value || '') + expires + '; path=/; SameSite=Lax';
   }
 
-  function getCookie(name) {
-    var nameEQ = name + '=';
-    var ca = document.cookie.split(';');
-    for (var i = 0; i < ca.length; i++) {
-      var c = ca[i];
-      while (c.charAt(0) === ' ') c = c.substring(1, c.length);
-      if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+  function requestTokenFromIframe(mac, ip, server) {
+    return new Promise(function (resolve) {
+      tokenResolver = resolve;
+      function send() {
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'get-token', mac: mac, ip: ip, server: server }, '*');
+        } else {
+          resolve(null);
+        }
+      }
+      if (iframeReady) send();
+      else pendingQueue.push(send);
+    });
+  }
+
+  function sendTokenToIframe(token) {
+    if (iframe && iframe.contentWindow && TOKEN_RE.test(token)) {
+      iframe.contentWindow.postMessage({ type: 'set-token', token: token }, '*');
     }
-    return null;
   }
 
-  function eraseCookie(name) {
-    document.cookie = name + '=; Max-Age=-99999999; path=/';
+  // ---- localStorage fallback ----
+  function localGetToken() {
+    try {
+      var t = localStorage.getItem(cookieName);
+      return t && TOKEN_RE.test(t) ? t : null;
+    } catch (e) { return null; }
   }
 
-  function configured() {
-    return !!apiBase;
+  function localSetToken(t) {
+    try { if (t && TOKEN_RE.test(t)) localStorage.setItem(cookieName, t); } catch (e) {}
   }
 
-  function getToken() {
-    var t = getCookie(cookieName);
-    return t && TOKEN_RE.test(t) ? t : null;
-  }
-
+  // ---- direct API (fallback) ----
   function post(path, body, timeoutMs) {
     var controller = new AbortController();
-    var timer = setTimeout(function () {
-      controller.abort();
-    }, timeoutMs || 6000);
-
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 6000);
     return fetch(apiBase + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -77,96 +120,86 @@
       signal: controller.signal,
       credentials: 'omit',
     })
-      .then(function (res) {
-        clearTimeout(timer);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
-      })
-      .catch(function (err) {
-        clearTimeout(timer);
-        throw err;
-      });
+      .then(function (res) { clearTimeout(timer); if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .catch(function (err) { clearTimeout(timer); throw err; });
   }
 
+  function configured() { return !!apiBase; }
+
+  // ---- public API ----
+
   /*
-   * Make sure this browser owns a token. If the cookie already holds a valid
-   * token we keep it (this is what survives roaming across SSIDs). Only when
-   * there is none do we ask the controller to issue one for the current MAC.
+   * Ensure this browser owns a token. Tries iframe first (cross-SSID persistent),
+   * falls back to localStorage + direct API.
    */
   function ensureToken(mac, ip, server) {
-    var existing = getToken();
-    if (existing) return Promise.resolve(existing);
     if (!configured()) return Promise.resolve(null);
 
+    // Try iframe first — this is the cross-SSID persistent store
+    if (iframe !== undefined) {
+      initIframe();
+      return requestTokenFromIframe(mac, ip, server).then(function (tok) {
+        if (tok) { localSetToken(tok); return tok; }
+        // iframe failed — fall back to direct API
+        return directEnsureToken(mac, ip, server);
+      });
+    }
+    return directEnsureToken(mac, ip, server);
+  }
+
+  function directEnsureToken(mac, ip, server) {
+    var existing = localGetToken();
+    if (existing) return Promise.resolve(existing);
     return post('/session/init', { mac: mac, ip: ip, server: server }, 5000)
       .then(function (data) {
-        if (data && data.token) {
-          setCookie(cookieName, data.token, TEN_YEARS);
-          return data.token;
-        }
+        if (data && data.token) { localSetToken(data.token); return data.token; }
         return null;
       })
-      .catch(function () {
-        return null; // never block the login page on the controller
-      });
+      .catch(function () { return null; });
   }
 
   /*
-   * Roam restore: portal -> panel handshake.
-   * On every captive-portal load, login.html sends { token, mac, ip, server }
-   * to POST /api/session/restore (panel URL comes from config.js
-   * `controllerApiUrl`). The panel compares the received token against its
-   * stored token+MAC binding: same token + different MAC = same owner roaming
-   * to a new SSID -> it rebinds the session, restores the remaining time via
-   * limit-uptime, and returns { username, password, remaining, rebind } so the
-   * caller (login.html, which owns the CHAP variables) logs back in silently.
-   * Fully automatic — no passwords, no prompts. Another device can't restore
-   * because it doesn't carry this device's token cookie.
+   * Roam restore: send token + new MAC to the panel. If the token matches a
+   * known session, the panel rebinds and returns credentials + remaining time.
    */
   function restore(mac, ip, server) {
-    var token = getToken();
-    if (!token || !configured()) return Promise.resolve(null);
+    if (!configured()) return Promise.resolve(null);
 
-    var body = { token: token, mac: mac, ip: ip, server: server };
+    // Get token from iframe or localStorage
+    var tok = localGetToken();
+    if (!tok) return Promise.resolve(null);
+
+    var body = { token: tok, mac: mac, ip: ip, server: server };
     return post('/session/restore', body, 6000)
-      .then(function (data) {
-        return data || null;
-      })
-      .catch(function () {
-        return null;
-      });
+      .then(function (data) { return data || null; })
+      .catch(function () { return null; });
   }
 
   /*
-   * Called from status.html right after a successful login: bind the token to
-   * this MAC + username and adopt the live session-time-left.
+   * After login: bind the token to this MAC + username and adopt the live
+   * session time.
    */
   function bind(mac, username, server, sessionTimeLeftSecs) {
-    var token = ensureToken(mac, '', server);
-    return token.then(function (t) {
+    return ensureToken(mac, '', server).then(function (t) {
       if (!t || !username) return null;
-      return post(
-        '/session/bind',
-        { token: t, mac: mac, username: username, server: server, sessionTimeLeft: sessionTimeLeftSecs },
-        6000
-      ).then(function (data) {
-        return data || null;
-      }).catch(function () {
-        return null;
-      });
+      sendTokenToIframe(t);
+      return post('/session/bind', {
+        token: t, mac: mac, username: username, server: server, sessionTimeLeft: sessionTimeLeftSecs
+      }, 6000)
+        .then(function (data) { return data || null; })
+        .catch(function () { return null; });
     });
   }
 
-  /* Best-effort heartbeat / pause / logout snapshot. */
+  /* Heartbeat / pause / logout snapshot. */
   function reportState(event, remainingSecs) {
-    var token = getToken();
-    if (!token || !configured()) return Promise.resolve(null);
-    return post('/session/state', { token: token, event: event, remaining: remainingSecs }, 5000).catch(
-      function () {
-        return null;
-      }
-    );
+    var tok = localGetToken();
+    if (!tok || !configured()) return Promise.resolve(null);
+    return post('/session/state', { token: tok, event: event, remaining: remainingSecs }, 5000)
+      .catch(function () { return null; });
   }
+
+  function getToken() { return localGetToken(); }
 
   window.JuanFiSession = {
     isConfigured: configured,

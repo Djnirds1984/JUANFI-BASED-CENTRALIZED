@@ -22,7 +22,7 @@ router.post('/zerotier/install', async (req: Request, res: Response) => {
     const result = await zerotier.installZeroTier();
     res.json({ success: true, message: result });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, permissionDenied: error.message.includes('PERMISSION_DENIED') });
   }
 });
 

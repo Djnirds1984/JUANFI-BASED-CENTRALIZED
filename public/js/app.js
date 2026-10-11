@@ -5384,17 +5384,21 @@ const App = {
     try {
       const status = await api.getZeroTierStatus();
       if (!status.installed) {
-        if (status.container) {
-          container.innerHTML = `
-            <div style="text-align:center;padding:2rem 0">
-              <div style="font-size:3rem;margin-bottom:1rem">&#128230;</div>
-              <h4>Running in Container</h4>
-              <p style="color:var(--text-secondary);max-width:600px;margin:0.5rem auto 1.5rem">
-                ZeroTier cannot be installed from inside a container. You need to install it on the host system.
-              </p>
-              <div style="background:var(--bg-secondary);padding:1.5rem;border-radius:8px;max-width:600px;margin:0 auto;text-align:left">
-                <h5 style="margin-top:0">Manual Installation via SSH:</h5>
-                <pre style="background:var(--bg);padding:1rem;border-radius:4px;overflow-x:auto;font-size:0.9rem">
+        container.innerHTML = `
+          <div style="text-align:center;padding:2rem 0">
+            <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
+            <h4>ZeroTier Not Installed</h4>
+            <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
+              Install ZeroTier to access this panel remotely from anywhere in the world.
+              ZeroTier creates a secure virtual network between your devices.
+            </p>
+            <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
+              Install ZeroTier
+            </button>
+            <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
+            <div id="zt-manual-instructions" style="display:none;background:var(--bg-secondary);padding:1.5rem;border-radius:8px;max-width:650px;margin:1.5rem auto 0;text-align:left">
+              <h5 style="margin-top:0">Manual Installation (if auto-install fails):</h5>
+              <pre style="background:var(--bg);padding:1rem;border-radius:4px;overflow-x:auto;font-size:0.9rem;margin:0">
 SSH into your SBC and run:
 
   sudo apt-get update
@@ -5402,33 +5406,11 @@ SSH into your SBC and run:
   sudo systemctl enable zerotier-one
   sudo systemctl start zerotier-one
 
-Then get your ZeroTier address:
-  sudo zerotier-cli info
-
-Finally, join your network:
+Then join your network:
   sudo zerotier-cli join &lt;NETWORK_ID&gt;</pre>
-              </div>
-              <button class="btn btn-primary" style="margin-top:1.5rem" onclick="App.loadToolsContent()">
-                Check Again
-              </button>
             </div>
-          `;
-        } else {
-          container.innerHTML = `
-            <div style="text-align:center;padding:2rem 0">
-              <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
-              <h4>ZeroTier Not Installed</h4>
-              <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
-                Install ZeroTier to access this panel remotely from anywhere in the world.
-                ZeroTier creates a secure virtual network between your devices.
-              </p>
-              <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
-                Install ZeroTier
-              </button>
-              <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
-            </div>
-          `;
-        }
+          </div>
+        `;
         return;
       }
 
@@ -5490,16 +5472,26 @@ Finally, join your network:
   async installZeroTier() {
     const btn = document.getElementById('zt-install-btn');
     const statusEl = document.getElementById('zt-install-status');
+    const manualEl = document.getElementById('zt-manual-instructions');
     if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
     if (statusEl) statusEl.textContent = 'Downloading and installing ZeroTier. This may take a minute...';
+    if (manualEl) manualEl.style.display = 'none';
     try {
       const res = await api.installZeroTier();
       this.toast(res.message || 'ZeroTier installed successfully', 'success');
       await this.loadToolsContent();
     } catch (err) {
-      this.toast(err.message, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'Install ZeroTier'; }
-      if (statusEl) statusEl.textContent = 'Installation failed: ' + err.message;
+      const isPermissionError = err.message && err.message.includes('PERMISSION_DENIED');
+      if (isPermissionError) {
+        this.toast('Auto-install failed due to permissions. Showing manual instructions.', 'error');
+        if (manualEl) manualEl.style.display = 'block';
+        if (statusEl) statusEl.textContent = 'Auto-install failed. Use the manual commands below.';
+        if (btn) { btn.disabled = false; btn.textContent = 'Install ZeroTier'; }
+      } else {
+        this.toast(err.message, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Install ZeroTier'; }
+        if (statusEl) statusEl.textContent = 'Installation failed: ' + err.message;
+      }
     }
   },
 

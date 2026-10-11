@@ -8,7 +8,6 @@ export interface ZeroTierStatus {
   address?: string;
   online: boolean;
   networks: ZeroTierNetwork[];
-  container: boolean;
 }
 
 export interface ZeroTierNetwork {
@@ -44,22 +43,6 @@ export function checkInstalled(): boolean {
   }
 }
 
-export function isContainer(): boolean {
-  // Check common container indicators
-  try {
-    const hasCgroup = fs.existsSync('/.dockerenv') || 
-                      fs.existsSync('/run/.containerenv') ||
-                      process.env.container !== undefined;
-    if (hasCgroup) return true;
-    
-    // Check if running in a container by reading cgroup
-    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
-    return cgroup.includes('docker') || cgroup.includes('lxc') || cgroup.includes('kubepods');
-  } catch {
-    return false;
-  }
-}
-
 export function getVersion(): string {
   try {
     return runCommand(`${zerotierCli} version`);
@@ -70,14 +53,12 @@ export function getVersion(): string {
 
 export function getStatus(): ZeroTierStatus {
   const installed = checkInstalled();
-  const container = isContainer();
 
   if (!installed) {
     return {
       installed: false,
       online: false,
       networks: [],
-      container,
     };
   }
 
@@ -98,14 +79,12 @@ export function getStatus(): ZeroTierStatus {
       address,
       online,
       networks,
-      container,
     };
   } catch (error: any) {
     return {
       installed: true,
       online: false,
       networks: [],
-      container,
     };
   }
 }
@@ -169,7 +148,7 @@ export async function installZeroTier(): Promise<string> {
         // Run installer silently
         exec(`msiexec /i "${installerPath}" /quiet /norestart`, (error, stdout, stderr) => {
           if (error) {
-            reject(new Error('Failed to install ZeroTier'));
+            reject(new Error('Failed to install ZeroTier. Please install manually.'));
             return;
           }
           resolve('ZeroTier installed successfully. Please restart the panel.');
@@ -192,7 +171,7 @@ export async function installZeroTier(): Promise<string> {
           lastError = err.stderr || err.message || 'unknown error';
         }
       }
-      reject(new Error('All installation methods failed. Last error: ' + lastError));
+      reject(new Error('PERMISSION_DENIED:' + lastError));
     }
   });
 }

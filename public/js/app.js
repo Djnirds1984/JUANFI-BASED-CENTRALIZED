@@ -446,6 +446,7 @@ const App = {
                       <strong>${this.escapeHtml(r.name)}</strong>
                       ${r.use_rest_api ? '<span class="status-badge" style="background:#6366f1;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">REST</span>' : ''}
                       ${r.auth_mode === 'radius' ? '<span class="status-badge" style="background:#059669;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">RADIUS</span>' : ''}
+                      ${r.portal_mode === 'radius' ? '<span class="status-badge" style="background:#8b5cf6;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">Portal:RADIUS</span>' : ''}
                     </td>
                     <td>${this.escapeHtml(r.host)}</td>
                     <td>${r.port}</td>
@@ -523,6 +524,20 @@ const App = {
           </div>
           <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
         </div>
+        <div class="form-group">
+          <label>Portal Mode</label>
+          <div style="display:flex;gap:1rem;align-items:center">
+            <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+              <input type="radio" name="portal_mode" value="local" checked style="width:auto;margin:0">
+              Local (MikroTik hosts portal)
+            </label>
+            <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+              <input type="radio" name="portal_mode" value="radius" style="width:auto;margin:0">
+              RADIUS (Panel hosts portal)
+            </label>
+          </div>
+          <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: portal files served from this panel, panel handles all auth. Requires RADIUS auth mode.</small>
+        </div>
         <div id="radius-secret-group" class="form-group" style="display:none">
           <label>RADIUS Shared Secret</label>
           <div style="display:flex;gap:0.5rem">
@@ -564,6 +579,7 @@ const App = {
       description: form.description.value,
       use_rest_api: form.use_rest_api.checked,
       auth_mode: document.querySelector('#add-router-form [name="auth_mode"]:checked').value,
+      portal_mode: document.querySelector('#add-router-form [name="portal_mode"]:checked').value,
     };
 
     if (form.radius_shared_secret && form.radius_shared_secret.value) {
@@ -588,6 +604,7 @@ const App = {
     try {
       const router = await api.getRouter(routerId);
       const currentMode = router.auth_mode || 'api';
+      const currentPortalMode = router.portal_mode || 'local';
       this.openModal('Edit Router', `
         <form id="edit-router-form">
           <div class="form-group">
@@ -634,6 +651,20 @@ const App = {
               </label>
             </div>
             <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
+          </div>
+          <div class="form-group">
+            <label>Portal Mode</label>
+            <div style="display:flex;gap:1rem;align-items:center">
+              <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+                <input type="radio" name="portal_mode" value="local" ${currentPortalMode === 'local' ? 'checked' : ''} style="width:auto;margin:0">
+                Local (MikroTik hosts portal)
+              </label>
+              <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
+                <input type="radio" name="portal_mode" value="radius" ${currentPortalMode === 'radius' ? 'checked' : ''} style="width:auto;margin:0">
+                RADIUS (Panel hosts portal)
+              </label>
+            </div>
+            <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: portal files served from this panel, panel handles all auth. Requires RADIUS auth mode.</small>
           </div>
           <div id="radius-secret-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
             <label>RADIUS Shared Secret</label>
@@ -746,6 +777,7 @@ const App = {
       description: form.description.value,
       use_rest_api: form.use_rest_api.checked,
       auth_mode: document.querySelector('#edit-router-form [name="auth_mode"]:checked').value,
+      portal_mode: document.querySelector('#edit-router-form [name="portal_mode"]:checked').value,
     };
 
     if (form.password.value) {

@@ -252,6 +252,18 @@ export function initializeDatabase(): void {
   if (!columns.some((c: any) => c.name === 'auth_mode')) {
     db.exec("ALTER TABLE routers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api'");
   }
+  if (!columns.some((c: any) => c.name === 'portal_mode')) {
+    db.exec("ALTER TABLE routers ADD COLUMN portal_mode TEXT NOT NULL DEFAULT 'local'");
+  }
+
+  const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];
+  if (!sessCols.some((c: any) => c.name === 'mac_address')) {
+    db.exec("ALTER TABLE radius_sessions ADD COLUMN mac_address TEXT NOT NULL DEFAULT ''");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_radius_sessions_mac ON radius_sessions(router_id, mac_address) WHERE mac_address <> ''");
+  }
+  if (!sessCols.some((c: any) => c.name === 'binding_id')) {
+    db.exec("ALTER TABLE radius_sessions ADD COLUMN binding_id TEXT");
+  }
 
   const portalCols = db.prepare("PRAGMA table_info('portal_files')").all() as any[];
   if (portalCols.some((c: any) => c.name === 'name') && !portalCols.some((c: any) => c.name === 'path')) {

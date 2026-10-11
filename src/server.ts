@@ -25,6 +25,7 @@ import interfaceRoutes from './api/interfaces';
 import sessionRoutes from './api/session';
 import radiusProfileRoutes from './api/radiusProfiles';
 import radiusSessionRoutes from './api/radiusSessions';
+import portalServeRoutes from './api/portalServe';
 
 const app = express();
 const server = http.createServer(app);
@@ -56,6 +57,8 @@ app.use('/api/interfaces', interfaceRoutes);
 app.use('/api/session', sessionRoutes);
 app.use('/api/radius-profiles', radiusProfileRoutes);
 app.use('/api/radius-sessions', radiusSessionRoutes);
+
+app.use('/portal', portalServeRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

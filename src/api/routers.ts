@@ -91,7 +91,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, use_rest_api, auth_mode, radius_shared_secret } = req.body;
+    const { name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode, radius_shared_secret } = req.body;
 
     if (!name || !host || !username || !password) {
       res.status(400).json({ error: 'Name, host, username, and password are required' });
@@ -100,11 +100,12 @@ router.post('/', async (req: Request, res: Response) => {
 
     const db = getDb();
     const mode = auth_mode === 'radius' ? 'radius' : 'api';
+    const pMode = portal_mode === 'radius' ? 'radius' : 'local';
     const result = db
       .prepare(
-        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0, mode);
+      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0, mode, pMode);
 
     const routerId = result.lastInsertRowid as number;
 
@@ -146,6 +147,7 @@ router.post('/', async (req: Request, res: Response) => {
       description,
       use_rest_api: use_rest_api ? 1 : 0,
       auth_mode: mode,
+      portal_mode: pMode,
       connected,
     });
   } catch (error) {
@@ -156,7 +158,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, is_active, use_rest_api, auth_mode, radius_shared_secret } = req.body;
+    const { name, host, port, username, password, description, is_active, use_rest_api, auth_mode, portal_mode, radius_shared_secret } = req.body;
     const db = getDb();
 
     const existing = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id) as any;
@@ -166,9 +168,10 @@ router.put('/:id', (req: Request, res: Response) => {
     }
 
     const newMode = auth_mode !== undefined ? (auth_mode === 'radius' ? 'radius' : 'api') : existing.auth_mode;
+    const newPortalMode = portal_mode !== undefined ? (portal_mode === 'radius' ? 'radius' : 'local') : existing.portal_mode;
 
     db.prepare(
-      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, portal_mode = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       name || existing.name,
       host || existing.host,
@@ -179,6 +182,7 @@ router.put('/:id', (req: Request, res: Response) => {
       is_active !== undefined ? is_active : existing.is_active,
       use_rest_api !== undefined ? (use_rest_api ? 1 : 0) : existing.use_rest_api,
       newMode,
+      newPortalMode,
       req.params.id
     );
 

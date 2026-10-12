@@ -5954,7 +5954,14 @@ Then join your network:
 \t<meta charset="UTF-8">
 \t<title>Redirecting...</title>
 \t<script>
-\t\twindow.location.href = "${panelUrl}/portal/?mac=$(mac)&ip=$(ip)";
+\t\tvar params = new URLSearchParams();
+\t\tparams.set('mac', '$(mac)');
+\t\tparams.set('ip', '$(ip)');
+\t\tparams.set('chap-id', '$(chap-id)');
+\t\tparams.set('chap-challenge', '$(chap-challenge)');
+\t\tparams.set('link-login-only', '$(link-login-only)');
+\t\tparams.set('link-status', '$(link-status)');
+\t\twindow.location.href = "${panelUrl}/portal/?" + params.toString();
 \t</script>
 </head>
 <body>

@@ -4,7 +4,14 @@
 	<meta charset="UTF-8">
 	<title>Redirecting...</title>
 	<script>
-		window.location.href = "{{PANEL_URL}}/portal/?mac=$(mac)&ip=$(ip)";
+		var params = new URLSearchParams();
+		params.set('mac', '$(mac)');
+		params.set('ip', '$(ip)');
+		params.set('chap-id', '$(chap-id)');
+		params.set('chap-challenge', '$(chap-challenge)');
+		params.set('link-login-only', '$(link-login-only)');
+		params.set('link-status', '$(link-status)');
+		window.location.href = "{{PANEL_URL}}/portal/?" + params.toString();
 	</script>
 </head>
 <body>

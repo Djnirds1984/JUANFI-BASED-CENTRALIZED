@@ -128,24 +128,35 @@
 		</div>
 	</div>
 
+	<!-- Hidden form for MikroTik login -->
+	<form name="sendin" action="" method="post" style="display:none">
+		<input type="hidden" name="username" />
+		<input type="hidden" name="password" />
+		<input type="hidden" name="dst" value="/status" />
+		<input type="hidden" name="popup" value="true" />
+	</form>
+
+	<script src="/hotspot-assets/js/md5.js"></script>
 	<script>
 		const urlParams = new URLSearchParams(window.location.search);
 		const mac = urlParams.get('mac') || '';
 		const ip = urlParams.get('ip') || '';
+		const chapId = urlParams.get('chap-id') || '';
+		const chapChallenge = urlParams.get('chap-challenge') || '';
+		const linkLoginOnly = urlParams.get('link-login-only') || '';
+		const linkStatus = urlParams.get('link-status') || '';
 		
-		console.log('[portal] MAC:', mac, 'IP:', ip);
+		console.log('[portal] MAC:', mac, 'IP:', ip, 'CHAP-ID:', chapId, 'CHAP-Challenge:', chapChallenge);
+		
+		// Set the form action to MikroTik's login endpoint
+		if (linkLoginOnly) {
+			document.sendin.action = linkLoginOnly;
+		}
 		
 		const form = document.getElementById('loginForm');
 		const voucherInput = document.getElementById('voucherInput');
 		const loginBtn = document.getElementById('loginBtn');
 		const errorMsg = document.getElementById('errorMsg');
-		
-		// Auto-fill MAC as voucher if needed
-		if (mac) {
-			const macNoColon = mac.replace(/:/g, '');
-			// Check if we should use MAC as voucher (optional)
-			// voucherInput.value = macNoColon;
-		}
 		
 		form.addEventListener('submit', function(e) {
 			e.preventDefault();
@@ -160,38 +171,26 @@
 			loginBtn.textContent = 'Connecting...';
 			hideError();
 			
-			// Submit to MikroTik login
+			// Submit to MikroTik login with CHAP
 			doLogin(voucher);
 		});
 		
 		function doLogin(username) {
 			console.log('[portal] Logging in:', username);
 			
-			// Create form to submit to MikroTik
-			const loginForm = document.createElement('form');
-			loginForm.method = 'POST';
-			loginForm.action = 'http://10.0.0.1/login';
+			// Fill the hidden form
+			document.sendin.username.value = username;
 			
-			const usernameInput = document.createElement('input');
-			usernameInput.type = 'hidden';
-			usernameInput.name = 'username';
-			usernameInput.value = username;
-			loginForm.appendChild(usernameInput);
+			// Generate CHAP-MD5 password
+			if (chapId && chapChallenge) {
+				document.sendin.password.value = hexMD5(chapId + username + chapChallenge);
+			} else {
+				// No CHAP, send empty password
+				document.sendin.password.value = '';
+			}
 			
-			const passwordInput = document.createElement('input');
-			passwordInput.type = 'hidden';
-			passwordInput.name = 'password';
-			passwordInput.value = '';
-			loginForm.appendChild(passwordInput);
-			
-			const dstInput = document.createElement('input');
-			dstInput.type = 'hidden';
-			dstInput.name = 'dst';
-			dstInput.value = '/status';
-			loginForm.appendChild(dstInput);
-			
-			document.body.appendChild(loginForm);
-			loginForm.submit();
+			// Submit the form
+			document.sendin.submit();
 		}
 		
 		function showError(msg) {

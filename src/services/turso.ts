@@ -1,5 +1,6 @@
 import { createClient, Client } from '@libsql/client';
 import { getDb } from '../database';
+import { mikroTikService } from './mikrotik';
 import fs from 'fs';
 import path from 'path';
 
@@ -246,14 +247,82 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
     localDb.exec(`DELETE FROM device_sessions`);
     counts.device_sessions = 0;
 
+    // Push restored users/vouchers to the MikroTik router
+    const syncResult = await syncUsersToRouter();
+
+    const parts = [`Restored ${SYNC_TABLES.length} tables from Turso`, `sessions cleared`];
+    if (syncResult.skipped) {
+      parts.push(syncResult.skipped);
+    } else {
+      parts.push(`${syncResult.pushed} users/vouchers pushed to router`);
+      if (syncResult.failed > 0) parts.push(`${syncResult.failed} failed`);
+    }
+
     return {
       success: true,
-      message: `Restored ${SYNC_TABLES.length} tables from Turso (sessions cleared — users must re-authenticate)`,
+      message: parts.join(' — '),
       counts,
     };
   } catch (error: any) {
     return { success: false, message: error.message || 'Restore failed', counts: {} };
   }
+}
+
+export async function syncUsersToRouter(): Promise<{ pushed: number; failed: number; skipped: string }> {
+  const localDb = getDb();
+  const routerId = getLocalRouterId(localDb);
+  const routerRow = localDb.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
+
+  if (!routerRow || routerRow.auth_mode === 'radius') {
+    return { pushed: 0, failed: 0, skipped: 'RADIUS mode — no push needed' };
+  }
+
+  if (!mikroTikService.isConnected(routerId)) {
+    return { pushed: 0, failed: 0, skipped: 'Router not connected' };
+  }
+
+  let pushed = 0;
+  let failed = 0;
+
+  const users = localDb.prepare('SELECT * FROM hotspot_users WHERE router_id = ? AND disabled = 0').all(routerId) as any[];
+  for (const u of users) {
+    try {
+      await mikroTikService.createHotspotUser(routerId, {
+        username: u.username,
+        password: u.password,
+        profile: u.profile,
+        uptimeLimit: u.uptime_limit || undefined,
+        bytesInQuota: u.bytes_in_quota || undefined,
+        bytesOutQuota: u.bytes_out_quota || undefined,
+        comment: u.comment || undefined,
+      });
+      pushed++;
+    } catch {
+      failed++;
+    }
+  }
+
+  const vouchers = localDb.prepare(
+    'SELECT * FROM vouchers WHERE router_id = ? AND is_used = 0 AND (expires_at IS NULL OR expires_at > datetime(\'now\'))'
+  ).all(routerId) as any[];
+  for (const v of vouchers) {
+    try {
+      const uptimeLimit = v.duration_minutes
+        ? `${Math.floor(v.duration_minutes / 60)}:${String(v.duration_minutes % 60).padStart(2, '0')}:00`
+        : undefined;
+      await mikroTikService.createHotspotUser(routerId, {
+        username: v.username,
+        profile: v.profile,
+        uptimeLimit,
+        comment: `Voucher: ${v.code}`,
+      });
+      pushed++;
+    } catch {
+      failed++;
+    }
+  }
+
+  return { pushed, failed, skipped: '' };
 }
 
 export async function pullIfLocalEmpty(): Promise<{ pulled: boolean; message: string; counts?: Record<string, number> }> {

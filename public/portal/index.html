@@ -22,188 +22,185 @@
 			max-width: 400px;
 			width: 100%;
 			box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+		}
+		.logo {
 			text-align: center;
-		}
-		h1 {
-			color: #333;
-			margin-bottom: 10px;
-			font-size: 28px;
-		}
-		.subtitle {
-			color: #666;
 			margin-bottom: 30px;
-			font-size: 14px;
 		}
-		.status {
-			padding: 20px;
-			border-radius: 10px;
+		.logo h1 {
+			color: #667eea;
+			font-size: 32px;
+			font-weight: 700;
+		}
+		.logo p {
+			color: #666;
+			font-size: 14px;
+			margin-top: 5px;
+		}
+		.form-group {
 			margin-bottom: 20px;
 		}
-		.status.waiting {
-			background: #fff3cd;
-			color: #856404;
+		.form-group label {
+			display: block;
+			color: #333;
+			font-weight: 600;
+			margin-bottom: 8px;
+			font-size: 14px;
 		}
-		.status.success {
-			background: #d4edda;
-			color: #155724;
+		.form-group input {
+			width: 100%;
+			padding: 12px 15px;
+			border: 2px solid #e0e0e0;
+			border-radius: 10px;
+			font-size: 16px;
+			transition: border-color 0.3s;
 		}
-		.status.error {
-			background: #f8d7da;
-			color: #721c24;
+		.form-group input:focus {
+			outline: none;
+			border-color: #667eea;
 		}
-		.spinner {
-			border: 3px solid #f3f3f3;
-			border-top: 3px solid #667eea;
-			border-radius: 50%;
-			width: 40px;
-			height: 40px;
-			animation: spin 1s linear infinite;
-			margin: 20px auto;
+		.btn {
+			width: 100%;
+			padding: 14px;
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: white;
+			border: none;
+			border-radius: 10px;
+			font-size: 16px;
+			font-weight: 600;
+			cursor: pointer;
+			transition: transform 0.2s;
 		}
-		@keyframes spin {
-			0% { transform: rotate(0deg); }
-			100% { transform: rotate(360deg); }
+		.btn:hover {
+			transform: translateY(-2px);
 		}
-		.hidden { display: none; }
+		.btn:active {
+			transform: translateY(0);
+		}
+		.btn:disabled {
+			opacity: 0.6;
+			cursor: not-allowed;
+			transform: none;
+		}
+		.error {
+			background: #fee;
+			color: #c33;
+			padding: 12px;
+			border-radius: 8px;
+			margin-bottom: 20px;
+			font-size: 14px;
+			display: none;
+		}
+		.error.show {
+			display: block;
+		}
+		.info {
+			background: #e7f3ff;
+			color: #0066cc;
+			padding: 12px;
+			border-radius: 8px;
+			margin-top: 20px;
+			font-size: 13px;
+			text-align: center;
+		}
 	</style>
 </head>
 <body>
 	<div class="container">
-		<h1>Aircoins WiFi</h1>
-		<p class="subtitle">Insert coin to connect</p>
-		
-		<div id="waitingStatus" class="status waiting">
-			<div class="spinner"></div>
-			<p>Waiting for coin insertion...</p>
+		<div class="logo">
+			<h1>Aircoins WiFi</h1>
+			<p>Enter your voucher code to connect</p>
 		</div>
 		
-		<div id="successStatus" class="status success hidden">
-			<p><strong>Connected!</strong></p>
-			<p id="sessionInfo"></p>
-		</div>
+		<div id="errorMsg" class="error"></div>
 		
-		<div id="errorStatus" class="status error hidden">
-			<p><strong>Error</strong></p>
-			<p id="errorMessage"></p>
+		<form id="loginForm">
+			<div class="form-group">
+				<label>Voucher Code</label>
+				<input type="text" id="voucherInput" placeholder="Enter voucher code" autocomplete="off" required>
+			</div>
+			
+			<button type="submit" class="btn" id="loginBtn">Connect</button>
+		</form>
+		
+		<div class="info">
+			Insert coin to get your voucher code
 		</div>
 	</div>
 
 	<script>
-		// Get parameters from URL
 		const urlParams = new URLSearchParams(window.location.search);
 		const mac = urlParams.get('mac') || '';
 		const ip = urlParams.get('ip') || '';
-		const routerMac = urlParams.get('router-mac') || '';
 		
-		console.log('[portal] MAC:', mac, 'IP:', ip, 'Router MAC:', routerMac);
+		console.log('[portal] MAC:', mac, 'IP:', ip);
 		
-		if (!mac) {
-			showError('No MAC address detected. Please connect to WiFi first.');
-		} else {
-			startCoinDetection();
-		}
+		const form = document.getElementById('loginForm');
+		const voucherInput = document.getElementById('voucherInput');
+		const loginBtn = document.getElementById('loginBtn');
+		const errorMsg = document.getElementById('errorMsg');
 		
-		function startCoinDetection() {
-			// Poll NodeMCU for coin insertion
-			const vendorIp = '10.0.0.243';
-			const checkInterval = 1000;
-			
-			const checkCoin = setInterval(function() {
-				fetch('http://' + vendorIp + '/checkCoin', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: 'voucher=' + mac.replace(/:/g, '')
-				})
-				.then(function(res) { return res.json(); })
-				.then(function(data) {
-					if (data.status === 'true' && parseInt(data.totalCoin) > 0) {
-						clearInterval(checkCoin);
-						handleCoinInserted(parseInt(data.totalCoin), vendorIp);
-					}
-				})
-				.catch(function(err) {
-					console.warn('[portal] Check coin failed:', err);
-				});
-			}, checkInterval);
-		}
-		
-		function handleCoinInserted(totalCoin, vendorIp) {
-			console.log('[portal] Coin inserted:', totalCoin);
-			
-			// Call panel API to create user
-			const panelUrl = window.location.origin + '/api';
+		// Auto-fill MAC as voucher if needed
+		if (mac) {
 			const macNoColon = mac.replace(/:/g, '');
-			
-			// Estimate duration from coin value (adjust as needed)
-			const durationMinutes = Math.floor(totalCoin / 1); // 1 peso = 1 minute
-			
-			fetch(panelUrl + '/vouchers/coin-auth', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					mac: macNoColon,
-					durationMinutes: durationMinutes,
-					serverAddress: '10.0.0.1'
-				})
-			})
-			.then(function(res) { return res.json(); })
-			.then(function(data) {
-				console.log('[portal] Coin auth success:', data);
-				showSuccess(durationMinutes);
-				
-				// Auto-login after creating user
-				setTimeout(function() {
-					doLogin(macNoColon);
-				}, 1000);
-			})
-			.catch(function(err) {
-				console.error('[portal] Coin auth failed:', err);
-				showError('Failed to process payment. Please try again.');
-			});
+			// Check if we should use MAC as voucher (optional)
+			// voucherInput.value = macNoColon;
 		}
+		
+		form.addEventListener('submit', function(e) {
+			e.preventDefault();
+			
+			const voucher = voucherInput.value.trim();
+			if (!voucher) {
+				showError('Please enter a voucher code');
+				return;
+			}
+			
+			loginBtn.disabled = true;
+			loginBtn.textContent = 'Connecting...';
+			hideError();
+			
+			// Submit to MikroTik login
+			doLogin(voucher);
+		});
 		
 		function doLogin(username) {
 			console.log('[portal] Logging in:', username);
 			
-			// Submit to MikroTik login
-			const form = document.createElement('form');
-			form.method = 'POST';
-			form.action = 'http://10.0.0.1/login';
+			// Create form to submit to MikroTik
+			const loginForm = document.createElement('form');
+			loginForm.method = 'POST';
+			loginForm.action = 'http://10.0.0.1/login';
 			
 			const usernameInput = document.createElement('input');
 			usernameInput.type = 'hidden';
 			usernameInput.name = 'username';
 			usernameInput.value = username;
-			form.appendChild(usernameInput);
+			loginForm.appendChild(usernameInput);
 			
 			const passwordInput = document.createElement('input');
 			passwordInput.type = 'hidden';
 			passwordInput.name = 'password';
 			passwordInput.value = '';
-			form.appendChild(passwordInput);
+			loginForm.appendChild(passwordInput);
 			
 			const dstInput = document.createElement('input');
 			dstInput.type = 'hidden';
 			dstInput.name = 'dst';
 			dstInput.value = '/status';
-			form.appendChild(dstInput);
+			loginForm.appendChild(dstInput);
 			
-			document.body.appendChild(form);
-			form.submit();
+			document.body.appendChild(loginForm);
+			loginForm.submit();
 		}
 		
-		function showSuccess(duration) {
-			document.getElementById('waitingStatus').classList.add('hidden');
-			document.getElementById('errorStatus').classList.add('hidden');
-			document.getElementById('successStatus').classList.remove('hidden');
-			document.getElementById('sessionInfo').textContent = 'You have ' + duration + ' minute(s) of internet access';
+		function showError(msg) {
+			errorMsg.textContent = msg;
+			errorMsg.classList.add('show');
 		}
 		
-		function showError(message) {
-			document.getElementById('waitingStatus').classList.add('hidden');
-			document.getElementById('successStatus').classList.add('hidden');
-			document.getElementById('errorStatus').classList.remove('hidden');
-			document.getElementById('errorMessage').textContent = message;
+		function hideError() {
+			errorMsg.classList.remove('show');
 		}
 	</script>
 </body>

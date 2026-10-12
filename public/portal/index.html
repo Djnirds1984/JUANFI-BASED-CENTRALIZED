@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Aircoins WiFi</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 20px;
+		}
+		.container {
+			background: white;
+			border-radius: 20px;
+			padding: 40px 30px;
+			max-width: 400px;
+			width: 100%;
+			box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+			text-align: center;
+		}
+		h1 {
+			color: #333;
+			margin-bottom: 10px;
+			font-size: 28px;
+		}
+		.subtitle {
+			color: #666;
+			margin-bottom: 30px;
+			font-size: 14px;
+		}
+		.status {
+			padding: 20px;
+			border-radius: 10px;
+			margin-bottom: 20px;
+		}
+		.status.waiting {
+			background: #fff3cd;
+			color: #856404;
+		}
+		.status.success {
+			background: #d4edda;
+			color: #155724;
+		}
+		.status.error {
+			background: #f8d7da;
+			color: #721c24;
+		}
+		.spinner {
+			border: 3px solid #f3f3f3;
+			border-top: 3px solid #667eea;
+			border-radius: 50%;
+			width: 40px;
+			height: 40px;
+			animation: spin 1s linear infinite;
+			margin: 20px auto;
+		}
+		@keyframes spin {
+			0% { transform: rotate(0deg); }
+			100% { transform: rotate(360deg); }
+		}
+		.hidden { display: none; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>Aircoins WiFi</h1>
+		<p class="subtitle">Insert coin to connect</p>
+		
+		<div id="waitingStatus" class="status waiting">
+			<div class="spinner"></div>
+			<p>Waiting for coin insertion...</p>
+		</div>
+		
+		<div id="successStatus" class="status success hidden">
+			<p><strong>Connected!</strong></p>
+			<p id="sessionInfo"></p>
+		</div>
+		
+		<div id="errorStatus" class="status error hidden">
+			<p><strong>Error</strong></p>
+			<p id="errorMessage"></p>
+		</div>
+	</div>
+
+	<script>
+		// Get parameters from URL
+		const urlParams = new URLSearchParams(window.location.search);
+		const mac = urlParams.get('mac') || '';
+		const ip = urlParams.get('ip') || '';
+		const routerMac = urlParams.get('router-mac') || '';
+		
+		console.log('[portal] MAC:', mac, 'IP:', ip, 'Router MAC:', routerMac);
+		
+		if (!mac) {
+			showError('No MAC address detected. Please connect to WiFi first.');
+		} else {
+			startCoinDetection();
+		}
+		
+		function startCoinDetection() {
+			// Poll NodeMCU for coin insertion
+			const vendorIp = '10.0.0.243';
+			const checkInterval = 1000;
+			
+			const checkCoin = setInterval(function() {
+				fetch('http://' + vendorIp + '/checkCoin', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'voucher=' + mac.replace(/:/g, '')
+				})
+				.then(function(res) { return res.json(); })
+				.then(function(data) {
+					if (data.status === 'true' && parseInt(data.totalCoin) > 0) {
+						clearInterval(checkCoin);
+						handleCoinInserted(parseInt(data.totalCoin), vendorIp);
+					}
+				})
+				.catch(function(err) {
+					console.warn('[portal] Check coin failed:', err);
+				});
+			}, checkInterval);
+		}
+		
+		function handleCoinInserted(totalCoin, vendorIp) {
+			console.log('[portal] Coin inserted:', totalCoin);
+			
+			// Call panel API to create user
+			const panelUrl = window.location.origin + '/api';
+			const macNoColon = mac.replace(/:/g, '');
+			
+			// Estimate duration from coin value (adjust as needed)
+			const durationMinutes = Math.floor(totalCoin / 1); // 1 peso = 1 minute
+			
+			fetch(panelUrl + '/vouchers/coin-auth', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					mac: macNoColon,
+					durationMinutes: durationMinutes,
+					serverAddress: '10.0.0.1'
+				})
+			})
+			.then(function(res) { return res.json(); })
+			.then(function(data) {
+				console.log('[portal] Coin auth success:', data);
+				showSuccess(durationMinutes);
+				
+				// Auto-login after creating user
+				setTimeout(function() {
+					doLogin(macNoColon);
+				}, 1000);
+			})
+			.catch(function(err) {
+				console.error('[portal] Coin auth failed:', err);
+				showError('Failed to process payment. Please try again.');
+			});
+		}
+		
+		function doLogin(username) {
+			console.log('[portal] Logging in:', username);
+			
+			// Submit to MikroTik login
+			const form = document.createElement('form');
+			form.method = 'POST';
+			form.action = 'http://10.0.0.1/login';
+			
+			const usernameInput = document.createElement('input');
+			usernameInput.type = 'hidden';
+			usernameInput.name = 'username';
+			usernameInput.value = username;
+			form.appendChild(usernameInput);
+			
+			const passwordInput = document.createElement('input');
+			passwordInput.type = 'hidden';
+			passwordInput.name = 'password';
+			passwordInput.value = '';
+			form.appendChild(passwordInput);
+			
+			const dstInput = document.createElement('input');
+			dstInput.type = 'hidden';
+			dstInput.name = 'dst';
+			dstInput.value = '/status';
+			form.appendChild(dstInput);
+			
+			document.body.appendChild(form);
+			form.submit();
+		}
+		
+		function showSuccess(duration) {
+			document.getElementById('waitingStatus').classList.add('hidden');
+			document.getElementById('errorStatus').classList.add('hidden');
+			document.getElementById('successStatus').classList.remove('hidden');
+			document.getElementById('sessionInfo').textContent = 'You have ' + duration + ' minute(s) of internet access';
+		}
+		
+		function showError(message) {
+			document.getElementById('waitingStatus').classList.add('hidden');
+			document.getElementById('successStatus').classList.add('hidden');
+			document.getElementById('errorStatus').classList.remove('hidden');
+			document.getElementById('errorMessage').textContent = message;
+		}
+	</script>
+</body>
+</html>

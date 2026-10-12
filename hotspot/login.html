@@ -141,11 +141,6 @@ body {
   color: #00bcd4 !important;
   border: 2px solid #00bcd4 !important;
 }
-#memberLoginBtn {
-  background: #fff !important;
-  color: #9c27b0 !important;
-  border: 2px solid #9c27b0 !important;
-}
 /* Status */
 .status-disconnected, .status-connected {
   background: #f5f5f5;
@@ -498,7 +493,6 @@ body#loginBody {
 #promoRateBtn { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
 #chargingBtn { background: var(--success-gradient); color: white; }
 #eloadBtn { background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; }
-#memberLoginBtn { background: linear-gradient(135deg, #64748b, #475569); color: white; }
 #connectBtn { background: var(--primary-gradient); color: white; font-size: 16px; padding: 14px; border-radius: 12px; }
 
 .form-control {
@@ -696,18 +690,6 @@ body#loginBody {
     </script>
 
 	<script type="text/javascript" src="assets/js/md5.js"></script>
-	<script type="text/javascript">
-	<!--
-	    function doLoginMember() {
-		document.sendin.username.value = document.login.username.value;
-		document.sendin.password.value = hexMD5('$(chap-id)' + document.login.password.value + '$(chap-challenge)');
-		// Clear dst to prevent redirect to random IPs from $(link-orig)
-		document.sendin.dst.value = "$(link-status)";
-		document.sendin.submit();
-		return false;
-	    }
-	//-->
-	</script>
 	$(endif)
 
 	$(if error)
@@ -756,7 +738,6 @@ body#loginBody {
 								<button type="button" id="promoRateBtn" onclick="promoBtnAction(); return false" class="btn portal-btn mb-3">PROMO RATES</button>
 								<button type="button" id="chargingBtn" onclick="chargingBtnAction(); return false" class="btn portal-btn mb-3">CHARGING STATION</button>
 								<button type="button" id="eloadBtn" onclick="eloadBtnAction(); return false" class="btn portal-btn mb-3">E-LOAD</button>
-								<button type="button" id="memberLoginBtn" class="btn portal-btn mb-3" data-toggle="modal" data-target="#memberModal">MEMBER LOGIN</button>
 
 								<div class="form-group mt-4">
 									<span class="form-text voucher-section-label mb-1">VOUCHER CODE</span>
@@ -954,39 +935,6 @@ body#loginBody {
 						  <button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
 						</div>
 					  </div>
-					</div>
-				</div>
-
-				<div class="modal fade" id="memberModal" role="dialog" data-backdrop="static" data-keyboard="false">
-					<div class="modal-dialog modal-dialog-centered">
-					<div class="modal-content">
-						<div class="modal-header">
-							<h5 class="modal-title font-weight-bold">Member Login</h5>
-							<button type="button" class="close text-white" data-dismiss="modal">&times;</button>
-						</div>
-						<div class="modal-body">
-							<div class="memdiv text-left">
-								<form name="login" action="$(link-login-only)" method="post" $(if chap-id) onSubmit="return doLoginMember()" $(endif)>
-									<input type="hidden" name="dst" value="$(link-status)" />
-									<input type="hidden" name="popup" value="true" />
-									<div class="form-group">
-										<label style="color: #475569; font-weight: 600; font-size: 13px;">Username</label>
-										<input name="username" type="text" class="form-control" value="$(username)" />
-									</div>
-									<div class="form-group">
-										<label style="color: #475569; font-weight: 600; font-size: 13px;">Password</label>
-										<input name="password" type="password" class="form-control" />
-									</div>
-									<div class="text-center mt-4">
-										<button class="btn btn-primary btn-block py-2 font-weight-bold" type="submit" value="Connect">Login</button>
-									</div>
-								</form>
-							</div>
-						</div>
-						<div class="modal-footer bg-light">
-							<button type="button" class="btn btn-secondary px-4" data-dismiss="modal">Close</button>
-						</div>
-					</div>
 					</div>
 				</div>
 

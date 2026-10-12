@@ -134,6 +134,11 @@ async function ensureTables(client: Client): Promise<void> {
   }
 }
 
+function getLocalRouterId(localDb: any): number {
+  const row = localDb.prepare('SELECT id FROM routers ORDER BY id LIMIT 1').get() as any;
+  return row?.id ?? 1;
+}
+
 export async function syncToCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
@@ -144,6 +149,7 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
     await ensureTables(client);
 
     const localDb = getDb();
+    const routerId = getLocalRouterId(localDb);
     const counts: Record<string, number> = {};
 
     for (const table of SYNC_TABLES) {
@@ -161,7 +167,7 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
 
       for (const row of rows) {
         const values = columns.map(col => {
-          if (col === 'router_id') return 1;
+          if (col === 'router_id') return routerId;
           return row[col];
         });
         await client.execute({ sql: insertSql, args: values });
@@ -186,6 +192,7 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
     }
 
     const localDb = getDb();
+    const routerId = getLocalRouterId(localDb);
     const counts: Record<string, number> = {};
 
     for (const table of SYNC_TABLES) {
@@ -205,7 +212,7 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       const insertMany = localDb.transaction((rows: any[]) => {
         for (const row of rows) {
           const values = columns.map(col => {
-            if (col === 'router_id') return 1;
+            if (col === 'router_id') return routerId;
             return (row as any)[col];
           });
           stmt.run(...values);

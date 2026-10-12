@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { getDb } from '../database';
 import {
   initSession,
   restoreSession,
@@ -216,6 +217,58 @@ router.post('/state', (req: Request, res: Response) => {
     }
 
     res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/session/validity - return expiration data for a MAC address
+// Used by status.html as fallback when /data/{MAC}.txt is unavailable
+router.get('/validity', (req: Request, res: Response) => {
+  try {
+    const mac = normalizeBodyMac(req.query?.mac);
+    if (!MAC_RE.test(mac)) {
+      res.status(400).json({ error: 'Valid mac query parameter is required' });
+      return;
+    }
+
+    const db = getDb();
+
+    // Look up the active session for this MAC
+    const session = db
+      .prepare(
+        `SELECT ds.remaining_seconds, ds.total_seconds, ds.status, ds.username, ds.last_seen,
+                v.duration_minutes, v.expires_at as voucher_expires
+         FROM device_sessions ds
+         LEFT JOIN vouchers v ON v.username = ds.username AND v.router_id = ds.router_id
+         WHERE ds.mac_address = ? AND ds.router_id = 1
+         ORDER BY ds.last_seen DESC LIMIT 1`
+      )
+      .get(mac) as any;
+
+    if (!session) {
+      res.json({ validity: null, remaining: 0 });
+      return;
+    }
+
+    // Calculate expiration: if we have remaining_seconds, expiration = now + remaining
+    let expirationDate: string | null = null;
+    if (session.remaining_seconds > 0) {
+      const expTime = Date.now() + session.remaining_seconds * 1000;
+      expirationDate = new Date(expTime).toISOString();
+    } else if (session.voucher_expires) {
+      expirationDate = session.voucher_expires;
+    } else if (session.duration_minutes > 0 && session.last_seen) {
+      const startTime = new Date(session.last_seen + 'Z').getTime();
+      const expTime = startTime + session.duration_minutes * 60 * 1000;
+      expirationDate = new Date(expTime).toISOString();
+    }
+
+    res.json({
+      validity: expirationDate,
+      remaining: session.remaining_seconds || 0,
+      username: session.username || '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

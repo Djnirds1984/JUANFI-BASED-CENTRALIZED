@@ -944,6 +944,31 @@ body {
 			}
 			
 			function fallbackValidity(){
+				// Try panel API first
+				if (typeof controllerApiUrl !== 'undefined' && controllerApiUrl) {
+					var apiBase = controllerApiUrl.replace(/\/+$/, '');
+					$.ajax({
+						type: "GET",
+						url: apiBase + "/session/validity?mac=" + encodeURIComponent(mac),
+						timeout: 5000,
+						success: function(data){
+							if (data && data.validity) {
+								var validityTime = new Date(Date.parse(data.validity));
+								$("#expirationTime").html(validityTime.toLocaleString());
+							} else {
+								fallbackValidityLocal();
+							}
+						},
+						error: function(){
+							fallbackValidityLocal();
+						}
+					});
+				} else {
+					fallbackValidityLocal();
+				}
+			}
+
+			function fallbackValidityLocal(){
 				var validity = getStorageValue(voucher+"validity");
 				if(validity != null){
 					var curDate = new Date();

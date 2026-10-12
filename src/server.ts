@@ -68,28 +68,8 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
-});
-
-app.get('/admin/', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
-});
-
-app.get('/portal', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'portal', 'index.html'));
-});
-
-app.get('/portal/', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'portal', 'index.html'));
-});
-
-app.get('/', (req, res) => {
-  res.redirect('/portal');
-});
-
 app.get('*', (req, res) => {
-  res.redirect('/portal');
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 io.on('connection', (socket) => {

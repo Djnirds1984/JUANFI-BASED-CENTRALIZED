@@ -68,6 +68,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/portal', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'portal', 'index.html'));
+});
+
+app.get('/portal/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'portal', 'index.html'));
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });

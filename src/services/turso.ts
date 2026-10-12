@@ -160,7 +160,10 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
       const insertSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
 
       for (const row of rows) {
-        const values = columns.map(col => row[col]);
+        const values = columns.map(col => {
+          if (col === 'router_id') return 1;
+          return row[col];
+        });
         await client.execute({ sql: insertSql, args: values });
       }
     }
@@ -201,7 +204,10 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       const stmt = localDb.prepare(insertSql);
       const insertMany = localDb.transaction((rows: any[]) => {
         for (const row of rows) {
-          const values = columns.map(col => (row as any)[col]);
+          const values = columns.map(col => {
+            if (col === 'router_id') return 1;
+            return (row as any)[col];
+          });
           stmt.run(...values);
         }
       });

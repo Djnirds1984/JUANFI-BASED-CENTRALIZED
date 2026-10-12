@@ -146,11 +146,14 @@
 		const linkLoginOnly = urlParams.get('link-login-only') || '';
 		const linkStatus = urlParams.get('link-status') || '';
 		
-		console.log('[portal] MAC:', mac, 'IP:', ip, 'CHAP-ID:', chapId, 'CHAP-Challenge:', chapChallenge);
+		console.log('[portal] MAC:', mac, 'IP:', ip, 'CHAP-ID:', chapId, 'CHAP-Challenge:', chapChallenge, 'Login URL:', linkLoginOnly);
 		
 		// Set the form action to MikroTik's login endpoint
 		if (linkLoginOnly) {
 			document.sendin.action = linkLoginOnly;
+		} else {
+			console.error('[portal] No link-login-only parameter! Cannot submit to MikroTik.');
+			showError('Login parameters missing. Please disconnect and reconnect to WiFi.');
 		}
 		
 		const form = document.getElementById('loginForm');
@@ -160,6 +163,11 @@
 		
 		form.addEventListener('submit', function(e) {
 			e.preventDefault();
+			
+			if (!linkLoginOnly) {
+				showError('Login parameters missing. Please disconnect and reconnect to WiFi.');
+				return;
+			}
 			
 			const voucher = voucherInput.value.trim();
 			if (!voucher) {
@@ -176,7 +184,7 @@
 		});
 		
 		function doLogin(username) {
-			console.log('[portal] Logging in:', username);
+			console.log('[portal] Logging in:', username, 'to', document.sendin.action);
 			
 			// Fill the hidden form
 			document.sendin.username.value = username;
@@ -188,6 +196,8 @@
 				// No CHAP, send empty password
 				document.sendin.password.value = '';
 			}
+			
+			console.log('[portal] Submitting form with username:', username, 'password:', document.sendin.password.value);
 			
 			// Submit the form
 			document.sendin.submit();

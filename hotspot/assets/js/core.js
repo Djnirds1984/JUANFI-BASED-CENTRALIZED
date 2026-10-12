@@ -613,16 +613,25 @@ function saveVoucherBtnAction(){
 								data: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity, serverAddress: hotspotAddress }),
 								contentType: "application/json",
 								timeout: 5000,
-								success: function() { console.log('[coin-flow] coin-auth SUCCESS'); },
-								error: function(xhr, status, err) { console.error('[coin-flow] coin-auth FAILED:', status, err); }
+								success: function() {
+									console.log('[coin-flow] coin-auth SUCCESS, calling doLogin()');
+									setTimeout(function (){
+										try { doLogin(); } catch(e) { console.error('[coin-flow] doLogin error:', e); newLogin(); }
+									}, 1000);
+								},
+								error: function(xhr, status, err) {
+									console.error('[coin-flow] coin-auth FAILED:', status, err, '- attempting doLogin anyway');
+									setTimeout(function (){
+										try { doLogin(); } catch(e) { console.error('[coin-flow] doLogin error:', e); newLogin(); }
+									}, 1000);
+								}
 							});
 						} else {
 							console.warn('[coin-flow] controllerApiUrl or mac not defined', { controllerApiUrl: typeof controllerApiUrl, mac: typeof mac });
+							setTimeout(function (){
+								try { doLogin(); } catch(e) { console.error('[coin-flow] doLogin error:', e); newLogin(); }
+							}, 2000);
 						}
-						setTimeout(function (){
-							console.log('[coin-flow] Calling doLogin()');
-							try { doLogin(); } catch(e) { console.error('[coin-flow] doLogin error:', e); newLogin(); }
-						}, 2000);
 					}
 				}
 			}else{

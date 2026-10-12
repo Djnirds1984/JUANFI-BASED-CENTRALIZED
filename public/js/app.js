@@ -116,6 +116,7 @@ const App = {
       radius: 'RADIUS',
       monitoring: 'Monitoring',
       portal: 'Portal',
+      'stub-portal': 'Stub Portal',
       subvendo: 'SubVendo',
       appearance: 'Appearance',
     };
@@ -139,6 +140,7 @@ const App = {
         case 'vouchers': await this.renderVouchers(); break;
         case 'radius': await this.renderRadius(); break;
         case 'portal': await this.renderPortal(); break;
+        case 'stub-portal': await this.renderStubPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
@@ -5898,6 +5900,90 @@ Then join your network:
       }
     } catch (err) {
       this.toast(err.message, 'error');
+    }
+  },
+
+  async renderStubPortal() {
+    const content = document.getElementById('page-content');
+    const routers = (await api.getRouters()).filter((r) => r.connected);
+    
+    content.innerHTML = `
+      <div style="max-width:900px;margin:0 auto">
+        <div class="card">
+          <div class="card-header">
+            <h3>Stub Portal Generator</h3>
+            <small style="color:var(--text-secondary)">Generate a simple redirect login page for MikroTik</small>
+          </div>
+          <div class="card-body">
+            <div class="form-group" style="margin-bottom:1rem">
+              <label>Panel URL</label>
+              <input type="text" id="stub-panel-url" class="form-control" value="http://10.0.0.252:3000" placeholder="http://10.0.0.252:3000">
+              <small style="color:var(--text-secondary)">The URL of this panel (used for redirect)</small>
+            </div>
+            
+            <div class="form-group" style="margin-bottom:1rem">
+              <label>Select Router</label>
+              <select id="stub-router-select" class="form-control">
+                <option value="">-- Select Router --</option>
+                ${routers.map(r => `<option value="${r.id}">${this.escapeHtml(r.name)} (${r.host})</option>`).join('')}
+              </select>
+            </div>
+            
+            <div class="form-group" style="margin-bottom:1rem">
+              <label>Generated Stub HTML</label>
+              <textarea id="stub-html-preview" class="form-control" rows="15" readonly style="font-family:monospace;font-size:0.8rem"></textarea>
+            </div>
+            
+            <div style="display:flex;gap:0.5rem">
+              <button class="btn btn-outline" onclick="App.generateStubHtml()">Generate</button>
+              <button class="btn btn-primary" onclick="App.uploadStubToRouter()">Upload to Router</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    this.generateStubHtml();
+  },
+
+  generateStubHtml() {
+    const panelUrl = document.getElementById('stub-panel-url').value.trim();
+    const stubHtml = `<!DOCTYPE html>
+<html>
+<head>
+\t<meta charset="UTF-8">
+\t<title>Redirecting...</title>
+\t<script>
+\t\twindow.location.href = "${panelUrl}/portal/?mac=$(mac)&ip=$(ip)";
+\t</script>
+</head>
+<body>
+\t<p>Redirecting to login portal...</p>
+</body>
+</html>`;
+    
+    document.getElementById('stub-html-preview').value = stubHtml;
+  },
+
+  async uploadStubToRouter() {
+    const routerId = parseInt(document.getElementById('stub-router-select').value);
+    if (!routerId) {
+      this.toast('Please select a router', 'error');
+      return;
+    }
+    
+    const stubHtml = document.getElementById('stub-html-preview').value;
+    
+    try {
+      this.toast('Saving stub to panel...', 'info');
+      await api.savePortalFile('login.html', stubHtml);
+      
+      this.toast('Uploading stub to router...', 'info');
+      await api.pushPortalFile(routerId, 'login.html');
+      
+      this.toast('Stub uploaded successfully', 'success');
+    } catch (err) {
+      this.toast('Upload failed: ' + err.message, 'error');
     }
   },
 

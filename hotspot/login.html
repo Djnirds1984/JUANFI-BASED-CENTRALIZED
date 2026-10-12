@@ -1003,8 +1003,8 @@ body#loginBody {
 										} else {
 											document.sendin.password.value = hexMD5('$(chap-id)' + (res.password || res.username) + '$(chap-challenge)');
 										}
-										// Clear dst to prevent redirect to random IPs from $(link-orig)
-										document.sendin.dst.value = "$(link-status)";
+										// Force redirect to status page after login (prevent browser from going to original URL)
+										document.sendin.dst.value = "/status";
 										document.sendin.submit();
 									} catch (e) {}
 								}, 400);

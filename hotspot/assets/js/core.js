@@ -172,7 +172,7 @@ $(document).ready(function(){
   var redirectLogin = getStorageValue("redirectLogin");
   if(redirectLogin == "1"){
 	  removeStorageValue("redirectLogin");
-	  location.reload();
+	  window.location.href = "./login.html";
 	  return;
   }
 
@@ -285,7 +285,7 @@ function insertBtnAction(){
 		  url: "/status",
            success: function(data, textStatus, request){
               if ( data.indexOf("IAMNOTLOGINSTRINGPLEASEDONTREMOVE") < 0 ){
-				  location.reload();
+				  window.location.href = "./status";
 			  }else {
 				  callTopupAPI(0);
 			  }
@@ -705,7 +705,7 @@ function checkCoin(){
 									data: "erase-cookie=true",
 									success: function(data){
 										setStorageValue('reLogin', '1');
-										location.reload();
+										window.location.href = "./login.html";
 									}
 									});
 								}else{
@@ -870,7 +870,7 @@ function resume(){
 	removeStorageValue("isPaused");
 	removeStorageValue("activeVoucher");
 	removeStorageValue("ignoreSaveCode");
-	location.reload();
+	window.location.href = "./login.html";
 }
 
 function getStorageValue(key){
@@ -952,7 +952,7 @@ function fetchValidity(retryNo){
 }
 
 function newLogin(){
-	location.reload();
+	window.location.href = "./status";
 }
 
 function fallbackValidity(){

@@ -18,11 +18,11 @@ router.post('/coin-auth', (req: Request, res: Response) => {
 
   const db = getDb();
   const routerRow = db.prepare(
-    "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1 AND auth_mode = 'radius'"
+    "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1"
   ).get(serverAddress) as any;
 
   if (!routerRow) {
-    res.status(404).json({ error: 'Router not found or not in RADIUS mode' });
+    res.status(404).json({ error: 'Router not found or not active' });
     return;
   }
 

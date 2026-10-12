@@ -11,17 +11,25 @@ const router = Router();
 router.post('/coin-auth', (req: Request, res: Response) => {
   const { mac, durationMinutes, serverAddress } = req.body;
 
+  console.log(`[coin-auth] Request received: mac=${mac}, duration=${durationMinutes}, server=${serverAddress}`);
+
   if (!mac || !durationMinutes || !serverAddress) {
+    console.error('[coin-auth] Missing required parameters');
     res.status(400).json({ error: 'mac, durationMinutes, and serverAddress are required' });
     return;
   }
 
   const db = getDb();
+  const hostOnly = serverAddress.split(':')[0];
+  console.log(`[coin-auth] Looking up router by host: ${hostOnly} (original: ${serverAddress})`);
   const routerRow = db.prepare(
     "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1"
-  ).get(serverAddress) as any;
+  ).get(hostOnly) as any;
+
+  console.log(`[coin-auth] Router lookup result:`, routerRow);
 
   if (!routerRow) {
+    console.error(`[coin-auth] Router not found for host: ${serverAddress}`);
     res.status(404).json({ error: 'Router not found or not active' });
     return;
   }

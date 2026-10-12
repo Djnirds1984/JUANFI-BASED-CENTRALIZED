@@ -208,9 +208,14 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       insertMany(rows);
     }
 
+    // Clear device_sessions after restore — router sessions are stale
+    // Users will re-authenticate and create fresh sessions
+    localDb.exec(`DELETE FROM device_sessions`);
+    counts.device_sessions = 0;
+
     return {
       success: true,
-      message: `Restored ${SYNC_TABLES.length} tables from Turso`,
+      message: `Restored ${SYNC_TABLES.length} tables from Turso (sessions cleared — users must re-authenticate)`,
       counts,
     };
   } catch (error: any) {

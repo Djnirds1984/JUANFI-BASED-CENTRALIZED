@@ -334,6 +334,7 @@ function buildProfileAttributes(profile: any): RadiusAttribute[] {
 
 function authenticateUser(routerId: number, username: string): AuthResult {
   try {
+    console.log(`[RADIUS-auth] Attempting auth: routerId=${routerId}, username=${username}`);
     const db = getDb();
     const user = db.prepare(
       `SELECT id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled,
@@ -341,6 +342,8 @@ function authenticateUser(routerId: number, username: string): AuthResult {
        FROM hotspot_users
        WHERE router_id = ? AND username = ? AND disabled = 0`
     ).get(routerId, username) as any;
+
+    console.log(`[RADIUS-auth] User lookup result:`, user ? `Found id=${user.id}, disabled=${user.disabled}` : 'NOT FOUND');
 
     if (user) {
       if (user.expiry_at) {
@@ -438,9 +441,11 @@ function authenticateUser(routerId: number, username: string): AuthResult {
 
       db.prepare('UPDATE vouchers SET is_used = 1, used_at = datetime(\'now\') WHERE id = ?').run(voucher.id);
 
+      console.log(`[RADIUS-auth] ACCEPT: username=${username}, voucher duration=${voucher?.duration_minutes}min`);
       return { accept: true, replyAttributes: profileAttrs, profileId };
     }
 
+    console.log(`[RADIUS-auth] REJECT: No user or voucher found for routerId=${routerId}, username=${username}`);
     return { accept: false, replyAttributes: [] };
   } catch (err) {
     console.error('[RADIUS] Auth error:', err);

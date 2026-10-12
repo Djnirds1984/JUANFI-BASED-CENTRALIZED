@@ -602,19 +602,27 @@ function saveVoucherBtnAction(){
 							  }
 							 });
 					}else{
+						console.log('[coin-flow] Starting auto-login after coin insertion');
 						if(typeof controllerApiUrl !== 'undefined' && typeof mac !== 'undefined'){
 							var macNoColon = replaceAll(mac, ":");
+							var coinAuthUrl = controllerApiUrl.replace('/api','') + "/api/vouchers/coin-auth";
+							console.log('[coin-flow] Calling coin-auth:', coinAuthUrl, 'MAC:', macNoColon, 'Duration:', data.validity, 'Server:', hotspotAddress);
 							$.ajax({
 								type: "POST",
-								url: controllerApiUrl.replace('/api','') + "/api/vouchers/coin-auth",
+								url: coinAuthUrl,
 								data: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity, serverAddress: hotspotAddress }),
 								contentType: "application/json",
-								timeout: 5000
+								timeout: 5000,
+								success: function() { console.log('[coin-flow] coin-auth SUCCESS'); },
+								error: function(xhr, status, err) { console.error('[coin-flow] coin-auth FAILED:', status, err); }
 							});
+						} else {
+							console.warn('[coin-flow] controllerApiUrl or mac not defined', { controllerApiUrl: typeof controllerApiUrl, mac: typeof mac });
 						}
 						setTimeout(function (){
-							try { doLogin(); } catch(e) { newLogin(); }
-						}, 1000);
+							console.log('[coin-flow] Calling doLogin()');
+							try { doLogin(); } catch(e) { console.error('[coin-flow] doLogin error:', e); newLogin(); }
+						}, 2000);
 					}
 				}
 			}else{

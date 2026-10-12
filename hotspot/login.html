@@ -643,7 +643,7 @@ body#loginBody {
     <form name="sendin" action="$(link-login-only)" method="post" style="display:none">
         <input type="hidden" name="username" />
         <input type="hidden" name="password" />
-        <input type="hidden" name="dst" value="$(link-orig)" />
+        <input type="hidden" name="dst" value="$(link-status)" />
         <input type="hidden" name="popup" value="true" />
     </form>
 
@@ -967,7 +967,7 @@ body#loginBody {
 						<div class="modal-body">
 							<div class="memdiv text-left">
 								<form name="login" action="$(link-login-only)" method="post" $(if chap-id) onSubmit="return doLoginMember()" $(endif)>
-									<input type="hidden" name="dst" value="$(link-orig)" />
+									<input type="hidden" name="dst" value="$(link-status)" />
 									<input type="hidden" name="popup" value="true" />
 									<div class="form-group">
 										<label style="color: #475569; font-weight: 600; font-size: 13px;">Username</label>

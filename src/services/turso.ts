@@ -139,6 +139,15 @@ function getLocalRouterId(localDb: any): number {
   return row?.id ?? 1;
 }
 
+function deduplicateRows(rows: any[], keyCol: string): any[] {
+  const seen = new Map<string, any>();
+  for (const row of rows) {
+    const key = String(row[keyCol] ?? '');
+    seen.set(key, row);
+  }
+  return Array.from(seen.values());
+}
+
 export async function syncToCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
@@ -184,6 +193,12 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
   }
 }
 
+const DEDUP_KEYS: Record<string, string> = {
+  hotspot_users: 'username',
+  vouchers: 'code',
+  device_sessions: 'mac_address',
+};
+
 export async function restoreFromCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
@@ -197,8 +212,13 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
 
     for (const table of SYNC_TABLES) {
       const result = await client.execute(`SELECT * FROM ${table}`);
-      const rows = result.rows;
+      let rows = result.rows;
       counts[table] = rows.length;
+
+      const dedupKey = DEDUP_KEYS[table];
+      if (dedupKey) {
+        rows = deduplicateRows(rows, dedupKey);
+      }
 
       localDb.exec(`DELETE FROM ${table}`);
 

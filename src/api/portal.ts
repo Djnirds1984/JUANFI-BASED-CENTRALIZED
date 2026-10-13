@@ -128,7 +128,6 @@ router.get('/check-session', (req: Request, res: Response) => {
       username: macNoColons,
     });
   } catch (error: any) {
-    console.error('[check-session] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });

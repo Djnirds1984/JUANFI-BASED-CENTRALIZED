@@ -158,17 +158,13 @@ function updateCountdownDisplay() {
 
 // ---- Session Check ----
 function checkSessionState() {
-	console.log('[portal] checkSessionState called - mac:', mac, 'routerId:', routerId);
 	if (!mac || !routerId) {
-		console.log('[portal] Skipping session check - missing mac or routerId');
 		showDisconnectedState();
 		return;
 	}
-	console.log('[portal] Checking session for mac=' + mac + ', routerId=' + routerId);
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
-			console.log('[portal] Session check result:', data);
 			if (data.hasSession && data.remainingSeconds > 0) {
 				showConnectedState(data.remainingSeconds);
 			} else {
@@ -176,7 +172,6 @@ function checkSessionState() {
 			}
 		})
 		.catch(function(e) {
-			console.error('[portal] Session check failed:', e);
 			showDisconnectedState();
 		});
 }
@@ -502,49 +497,41 @@ function saveVoucherAndLogin() {
 				var durationMin = data.timeAdded || 0;
 				var validityMin = data.validity || durationMin;
 
-				// If extend mode and already connected, just call coin-auth with extend flag
+					// If extend mode and already connected, just call coin-auth with extend flag
 				if (isExtendMode && isConnected) {
-					console.log('[saveVoucher] Extend mode — calling coin-auth with extend=true, duration=' + durationMin);
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId, extend: true }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
-						console.log('[saveVoucher] coin-auth extend result:', result);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
 						// Refresh session state from server
 						refreshSessionAfterExtend();
 					}).catch(function(err) {
-						console.error('[saveVoucher] coin-auth extend error:', err);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
 						refreshSessionAfterExtend();
 					});
 				} else {
 					// Initial login flow — call coin-auth then show connected state
-					console.log('[saveVoucher] Initial login — calling coin-auth with mac=' + macNoColon + ', duration=' + durationMin);
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
-						console.log('[saveVoucher] coin-auth result:', result);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						// Use validity for expiration calculation (matches MikroTik portal behavior)
-						showConnectedState(validityMin * 60);
+						showConnectedState(durationMin * 60);
 						// Submit login to MikroTik in background (via iframe)
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					}).catch(function(err) {
-						console.error('[saveVoucher] coin-auth error:', err);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						// Still show connected state even if coin-auth fails
-						showConnectedState(validityMin * 60);
+						showConnectedState(durationMin * 60);
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					});

@@ -75,32 +75,6 @@ router.post('/coin-auth', (req: Request, res: Response) => {
          VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0)`
       ).run(routerId, mac);
     }
-
-    console.log(`[coin-auth] Checking for existing voucher: routerId=${routerId}, code=${mac}`);
-    const existingVoucher = db.prepare(
-      'SELECT id, duration_minutes FROM vouchers WHERE router_id = ? AND code = ?'
-    ).get(routerId, mac) as any;
-
-    if (existingVoucher) {
-      if (isExtend) {
-        const newDuration = (existingVoucher.duration_minutes || 0) + duration;
-        console.log(`[coin-auth] EXTEND: Adding ${duration}min to existing ${existingVoucher.duration_minutes}min = ${newDuration}min`);
-        db.prepare(
-          `UPDATE vouchers SET is_used = 1, used_at = datetime('now'), duration_minutes = ? WHERE id = ?`
-        ).run(newDuration, existingVoucher.id);
-      } else {
-        console.log(`[coin-auth] Updating existing voucher: id=${existingVoucher.id}, duration=${duration}min`);
-        db.prepare(
-          `UPDATE vouchers SET is_used = 1, used_at = datetime('now'), duration_minutes = ? WHERE id = ?`
-        ).run(duration, existingVoucher.id);
-      }
-    } else {
-      console.log(`[coin-auth] Creating new voucher: duration=${duration}min`);
-      db.prepare(
-        `INSERT INTO vouchers (router_id, code, username, profile, duration_minutes, is_used, used_at)
-         VALUES (?, ?, ?, 'default', ?, 1, datetime('now'))`
-      ).run(routerId, mac, mac, duration);
-    }
   });
 
   try {

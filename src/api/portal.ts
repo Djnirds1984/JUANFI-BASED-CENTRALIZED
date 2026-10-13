@@ -80,7 +80,10 @@ router.get('/check-session', (req: Request, res: Response) => {
     const macNoColons = macWithColons.replace(/:/g, '').toUpperCase();
     const routerId = parseInt(String(req.query.routerId || '1'), 10);
 
+    console.log(`[check-session] Request: mac=${macWithColons}, macNoColons=${macNoColons}, routerId=${routerId}`);
+
     if (!macWithColons || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(macWithColons)) {
+      console.log(`[check-session] Invalid MAC format`);
       res.status(400).json({ error: 'Valid MAC is required' });
       return;
     }
@@ -92,7 +95,10 @@ router.get('/check-session', (req: Request, res: Response) => {
       'SELECT id, username FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
     ).get(routerId, macNoColons) as any;
 
+    console.log(`[check-session] hotspot_user lookup:`, hotspotUser ? `Found id=${hotspotUser.id}` : 'NOT FOUND');
+
     if (!hotspotUser) {
+      console.log(`[check-session] No hotspot_user found, returning hasSession=false`);
       res.json({ hasSession: false });
       return;
     }
@@ -105,7 +111,10 @@ router.get('/check-session', (req: Request, res: Response) => {
        ORDER BY created_at DESC LIMIT 1`
     ).get(routerId, macNoColons) as any;
 
+    console.log(`[check-session] voucher lookup:`, voucher ? `Found id=${voucher.id}, duration=${voucher.duration_minutes}min, is_used=${voucher.is_used}, used_at=${voucher.used_at}` : 'NOT FOUND');
+
     if (!voucher || voucher.duration_minutes <= 0) {
+      console.log(`[check-session] No valid voucher found, returning hasSession=false`);
       res.json({ hasSession: false });
       return;
     }
@@ -118,6 +127,8 @@ router.get('/check-session', (req: Request, res: Response) => {
        ORDER BY last_seen DESC LIMIT 1`
     ).get(macWithColons, routerId) as any;
 
+    console.log(`[check-session] device_session lookup:`, session ? `Found remaining=${session.remaining_seconds}s` : 'NOT FOUND');
+
     let hasValidTime = false;
     let remainingSeconds = 0;
 
@@ -125,6 +136,7 @@ router.get('/check-session', (req: Request, res: Response) => {
     if (session && session.remaining_seconds > 0) {
       hasValidTime = true;
       remainingSeconds = session.remaining_seconds;
+      console.log(`[check-session] Using device_sessions remaining time: ${remainingSeconds}s`);
     }
     // Priority 2: calculate from voucher duration + used_at
     else if (voucher.duration_minutes > 0 && voucher.used_at) {
@@ -134,6 +146,9 @@ router.get('/check-session', (req: Request, res: Response) => {
       if (expiresAt > now) {
         hasValidTime = true;
         remainingSeconds = Math.floor((expiresAt - now) / 1000);
+        console.log(`[check-session] Calculated from voucher: ${remainingSeconds}s remaining`);
+      } else {
+        console.log(`[check-session] Voucher expired`);
       }
     }
     // Priority 3: voucher exists with duration but used_at is NULL (just created or reset)
@@ -141,15 +156,17 @@ router.get('/check-session', (req: Request, res: Response) => {
       // Voucher was created/reset but not yet used - treat as having full time
       hasValidTime = true;
       remainingSeconds = voucher.duration_minutes * 60;
+      console.log(`[check-session] Voucher not yet used, full time: ${remainingSeconds}s`);
     }
 
+    console.log(`[check-session] Result: hasSession=${hasValidTime}, remainingSeconds=${remainingSeconds}, username=${macNoColons}`);
     res.json({
       hasSession: hasValidTime,
       remainingSeconds,
       username: macNoColons,
     });
   } catch (error: any) {
-    console.error('check-session error:', error);
+    console.error('[check-session] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });

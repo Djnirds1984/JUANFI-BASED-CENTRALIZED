@@ -484,7 +484,7 @@ function saveVoucherAndLogin() {
 			if (data.status === 'true') {
 				totalCoinReceived = 0;
 				localStorage.removeItem('totalCoinReceived');
-				var durationMin = data.validity || 0;
+				var durationMin = data.timeAdded || data.validity || 0;
 
 				// If extend mode and already connected, just call coin-auth with extend flag
 				if (isExtendMode && isConnected) {

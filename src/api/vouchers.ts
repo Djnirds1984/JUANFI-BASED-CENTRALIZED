@@ -9,10 +9,10 @@ const router = Router();
 // Public endpoint for coin-insert flow — creates a voucher + hotspot_user in the
 // RADIUS DB so the upcoming auto-login authenticates via RADIUS instead of local.
 router.post('/coin-auth', (req: Request, res: Response) => {
-  const { mac, durationMinutes, serverAddress, routerId: bodyRouterId } = req.body;
+  const { mac, durationMinutes, serverAddress, routerId: bodyRouterId, extend } = req.body;
 
   console.log(`[coin-auth] === REQUEST START ===`);
-  console.log(`[coin-auth] Request body: mac=${mac}, durationMinutes=${durationMinutes}, serverAddress=${serverAddress}, routerId=${bodyRouterId}`);
+  console.log(`[coin-auth] Request body: mac=${mac}, durationMinutes=${durationMinutes}, serverAddress=${serverAddress}, routerId=${bodyRouterId}, extend=${extend}`);
 
   if (!mac || !durationMinutes) {
     console.error(`[coin-auth] FAIL: Missing required parameters - mac=${mac}, durationMinutes=${durationMinutes}`);
@@ -53,8 +53,9 @@ router.post('/coin-auth', (req: Request, res: Response) => {
     res.status(400).json({ error: 'routerId or serverAddress is required' });
     return;
   }
+  const isExtend = extend === true;
   const duration = parseInt(durationMinutes) || 0;
-  console.log(`[coin-auth] Parsed duration: ${duration} minutes`);
+  console.log(`[coin-auth] Parsed duration: ${duration} minutes, isExtend: ${isExtend}`);
 
   const upsert = db.transaction(() => {
     console.log(`[coin-auth] Checking for existing hotspot_user: routerId=${routerId}, username=${mac}`);
@@ -77,14 +78,22 @@ router.post('/coin-auth', (req: Request, res: Response) => {
 
     console.log(`[coin-auth] Checking for existing voucher: routerId=${routerId}, code=${mac}`);
     const existingVoucher = db.prepare(
-      'SELECT id FROM vouchers WHERE router_id = ? AND code = ?'
+      'SELECT id, duration_minutes FROM vouchers WHERE router_id = ? AND code = ?'
     ).get(routerId, mac) as any;
 
     if (existingVoucher) {
-      console.log(`[coin-auth] Updating existing voucher: id=${existingVoucher.id}, duration=${duration}min`);
-      db.prepare(
-        `UPDATE vouchers SET is_used = 0, used_at = NULL, duration_minutes = ?, expires_at = NULL WHERE id = ?`
-      ).run(duration, existingVoucher.id);
+      if (isExtend) {
+        const newDuration = (existingVoucher.duration_minutes || 0) + duration;
+        console.log(`[coin-auth] EXTEND: Adding ${duration}min to existing ${existingVoucher.duration_minutes}min = ${newDuration}min`);
+        db.prepare(
+          `UPDATE vouchers SET is_used = 0, used_at = NULL, duration_minutes = ?, expires_at = NULL WHERE id = ?`
+        ).run(newDuration, existingVoucher.id);
+      } else {
+        console.log(`[coin-auth] Updating existing voucher: id=${existingVoucher.id}, duration=${duration}min`);
+        db.prepare(
+          `UPDATE vouchers SET is_used = 0, used_at = NULL, duration_minutes = ?, expires_at = NULL WHERE id = ?`
+        ).run(duration, existingVoucher.id);
+      }
     } else {
       console.log(`[coin-auth] Creating new voucher: duration=${duration}min`);
       db.prepare(
@@ -96,7 +105,7 @@ router.post('/coin-auth', (req: Request, res: Response) => {
 
   try {
     upsert();
-    console.log(`[coin-auth] === SUCCESS === Created/updated voucher for MAC ${mac}, duration=${duration}min, router=${routerId}`);
+    console.log(`[coin-auth] === SUCCESS === ${isExtend ? 'EXTEND' : 'Created/updated'} voucher for MAC ${mac}, duration=${duration}min, router=${routerId}`);
     res.json({ success: true });
   } catch (err: any) {
     console.error(`[coin-auth] === ERROR ===`, err.message);

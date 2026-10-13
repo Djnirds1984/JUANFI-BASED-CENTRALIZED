@@ -1,8 +1,7 @@
 // JuanFi Portal - Core JavaScript
-// This file handles the captive portal login flow for the centralized panel
+// Self-contained portal with disconnected/connected states
 
 // ---- Configuration ----
-// For centralized system, always use MAC as voucher code
 var macAsVoucherCode = true;
 
 // ---- CHAP parameters from URL ----
@@ -23,31 +22,52 @@ var totalCoinReceived = 0;
 var coinTimer = null;
 var topupMode = 'INTERNET';
 
+// ---- Session state ----
+var isConnected = false;
+var remainingSeconds = 0;
+var countdownTimer = null;
+var sessionExpiresAt = null;
+var isExtendMode = false;
+
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
 	document.getElementById('ip-display').textContent = ip || '-';
 	document.getElementById('mac-display').textContent = mac || '-';
 	document.sendin.action = linkLoginOnly;
-	
+
 	setupEventListeners();
 	loadVendoConfig();
-	checkAndRestoreSession();
+	checkSessionState();
 });
 
 // ---- Event Listeners ----
 function setupEventListeners() {
+	// Disconnected panel
 	document.getElementById('connectBtn').addEventListener('click', function() { doLogin(); });
 	document.getElementById('voucherInput').addEventListener('keypress', function(e) {
 		if (e.key === 'Enter') doLogin();
 	});
-	document.getElementById('insertBtn').addEventListener('click', function() { insertBtnAction(); });
+	document.getElementById('insertBtn').addEventListener('click', function() {
+		isExtendMode = false;
+		insertBtnAction();
+	});
 	document.getElementById('promoRateBtn').addEventListener('click', function() { showModal('promoModal'); loadPromoRates(); });
 	document.getElementById('promoCloseBtn').addEventListener('click', function() { hideModal('promoModal'); });
 	document.getElementById('chargingBtn').addEventListener('click', function() { showModal('chargingModal'); loadChargingStations(); });
 	document.getElementById('chargingCloseBtn').addEventListener('click', function() { hideModal('chargingModal'); });
 	document.getElementById('eloadBtn').addEventListener('click', function() { showModal('eloadModal'); });
 	document.getElementById('eloadCloseBtn').addEventListener('click', function() { hideModal('eloadModal'); });
-	
+
+	// Connected panel
+	document.getElementById('extendBtn').addEventListener('click', function() {
+		isExtendMode = true;
+		insertBtnAction();
+	});
+	document.getElementById('connectedPromoRateBtn').addEventListener('click', function() { showModal('promoModal'); loadPromoRates(); });
+	document.getElementById('pauseTimeBtn').addEventListener('click', function() { alert('Pause time feature coming soon.'); });
+	document.getElementById('logoutBtn').addEventListener('click', function() { doLogout(); });
+
+	// Coin modal
 	document.getElementById('coinSaveBtn').addEventListener('click', function() {
 		this.disabled = true;
 		saveVoucherAndLogin();
@@ -59,12 +79,97 @@ function setupEventListeners() {
 			nodeMcuPost('/cancelTopUp', 'voucher=' + voucher + '&mac=' + mac).catch(function() {});
 		}
 	});
-	
+
+	// Modal backdrop close
 	['promoModal', 'chargingModal', 'eloadModal'].forEach(function(id) {
 		document.getElementById(id).addEventListener('click', function(e) {
 			if (e.target === this) hideModal(id);
 		});
 	});
+}
+
+// ---- State Management ----
+function showDisconnectedState() {
+	isConnected = false;
+	stopCountdown();
+	document.getElementById('disconnectedPanel').style.display = '';
+	document.getElementById('connectedPanel').style.display = 'none';
+	document.getElementById('statusBadge').style.background = 'rgba(239, 68, 68, 0.1)';
+	document.getElementById('statusBadge').style.color = '#ef4444';
+	document.getElementById('statusBadge').style.borderColor = 'rgba(239, 68, 68, 0.2)';
+	document.getElementById('statusText').textContent = 'Disconnected';
+	document.getElementById('statusText').className = 'blinking1 text-danger font-weight-bold';
+}
+
+function showConnectedState(remaining) {
+	isConnected = true;
+	remainingSeconds = Math.max(0, Math.floor(remaining));
+	sessionExpiresAt = Date.now() + remainingSeconds * 1000;
+
+	document.getElementById('disconnectedPanel').style.display = 'none';
+	document.getElementById('connectedPanel').style.display = '';
+	document.getElementById('statusBadge').style.background = 'rgba(16, 185, 129, 0.1)';
+	document.getElementById('statusBadge').style.color = '#10b981';
+	document.getElementById('statusBadge').style.borderColor = 'rgba(16, 185, 129, 0.2)';
+	document.getElementById('statusText').textContent = 'Connected';
+	document.getElementById('statusText').className = 'blinking2 text-success font-weight-bold';
+
+	updateCountdownDisplay();
+	startCountdown();
+}
+
+function startCountdown() {
+	stopCountdown();
+	countdownTimer = setInterval(function() {
+		if (remainingSeconds <= 0) {
+			stopCountdown();
+			showDisconnectedState();
+			return;
+		}
+		remainingSeconds--;
+		updateCountdownDisplay();
+	}, 1000);
+}
+
+function stopCountdown() {
+	if (countdownTimer) {
+		clearInterval(countdownTimer);
+		countdownTimer = null;
+	}
+}
+
+function updateCountdownDisplay() {
+	document.getElementById('timeRemainingDisplay').textContent = secondsToDhms(remainingSeconds);
+	if (sessionExpiresAt) {
+		var expDate = new Date(sessionExpiresAt);
+		var h = expDate.getHours();
+		var m = expDate.getMinutes();
+		var ampm = h >= 12 ? 'PM' : 'AM';
+		h = h % 12 || 12;
+		document.getElementById('expirationDisplay').textContent =
+			expDate.toLocaleDateString() + ' at ' + h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
+	}
+}
+
+// ---- Session Check ----
+function checkSessionState() {
+	if (!mac || !routerId) {
+		showDisconnectedState();
+		return;
+	}
+	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+		.then(function(r) { return r.json(); })
+		.then(function(data) {
+			if (data.hasSession && data.remainingSeconds > 0) {
+				showConnectedState(data.remainingSeconds);
+			} else {
+				showDisconnectedState();
+			}
+		})
+		.catch(function(e) {
+			console.error('Session check failed:', e);
+			showDisconnectedState();
+		});
 }
 
 // ---- Vendo Config ----
@@ -74,38 +179,52 @@ function loadVendoConfig() {
 		.then(function(cfg) {
 			vendoConfig = cfg;
 			vendorIpAddress = cfg.vendorIpAddress || '';
-			var sel = document.getElementById('vendoSelected');
-			var selDiv = document.getElementById('vendoSelectDiv');
-			
-			if (cfg.isMultiVendo && cfg.multiVendoAddresses.length > 0) {
-				if (cfg.multiVendoOption === 0) {
-					selDiv.style.display = '';
-					sel.innerHTML = '';
-					cfg.multiVendoAddresses.forEach(function(v) {
-						var opt = document.createElement('option');
-						opt.value = v.vendoIp;
-						opt.textContent = v.vendoName;
-						sel.appendChild(opt);
-					});
-					var stored = localStorage.getItem('selectedVendo');
-					if (stored) { sel.value = stored; vendorIpAddress = stored; }
-					sel.addEventListener('change', function() {
-						vendorIpAddress = sel.value;
-						localStorage.setItem('selectedVendo', vendorIpAddress);
-						updateActionButtons();
-					});
-				} else {
-					selDiv.style.display = 'none';
-					cfg.multiVendoAddresses.forEach(function(v) {
-						vendorIpAddress = v.vendoIp;
-					});
-				}
-			} else {
-				selDiv.style.display = 'none';
-			}
+			populateVendoSelect('vendoSelected', 'vendoSelectDiv', cfg);
+			populateVendoSelect('connectedVendoSelected', 'connectedVendoSelectDiv', cfg);
 			updateActionButtons();
 		})
 		.catch(function(e) { console.error('Failed to load vendo config:', e); });
+}
+
+function populateVendoSelect(selectId, divId, cfg) {
+	var sel = document.getElementById(selectId);
+	var selDiv = document.getElementById(divId);
+
+	if (cfg.isMultiVendo && cfg.multiVendoAddresses.length > 0) {
+		if (cfg.multiVendoOption === 0) {
+			selDiv.style.display = '';
+			sel.innerHTML = '';
+			cfg.multiVendoAddresses.forEach(function(v) {
+				var opt = document.createElement('option');
+				opt.value = v.vendoIp;
+				opt.textContent = v.vendoName;
+				sel.appendChild(opt);
+			});
+			var stored = localStorage.getItem('selectedVendo');
+			if (stored) { sel.value = stored; vendorIpAddress = stored; }
+			sel.addEventListener('change', function() {
+				vendorIpAddress = sel.value;
+				localStorage.setItem('selectedVendo', vendorIpAddress);
+				syncVendoSelect(selectId);
+				updateActionButtons();
+			});
+		} else {
+			selDiv.style.display = 'none';
+			cfg.multiVendoAddresses.forEach(function(v) {
+				vendorIpAddress = v.vendoIp;
+			});
+		}
+	} else {
+		selDiv.style.display = 'none';
+	}
+}
+
+function syncVendoSelect(changedId) {
+	var otherId = changedId === 'vendoSelected' ? 'connectedVendoSelected' : 'vendoSelected';
+	var other = document.getElementById(otherId);
+	if (other && other.options.length > 0) {
+		other.value = vendorIpAddress;
+	}
 }
 
 function updateActionButtons() {
@@ -178,21 +297,38 @@ function errorMsg(code) { return errorCodeMap[code] || code || 'Unknown error'; 
 // ---- Login ----
 function doLogin() {
 	var vc = document.getElementById('voucherInput').value.trim();
-	
-	// When macAsVoucherCode is true and input is empty, use MAC
+
 	if (macAsVoucherCode && vc === '') {
 		var macNoColon = replaceAll(mac, ':');
 		document.getElementById('voucherInput').value = macNoColon;
 		vc = macNoColon;
 	}
-	
+
 	if (!vc) { alert('Please enter a voucher code'); return false; }
-	
+
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
-	document.sendin.dst.value = '/status';
+	// Redirect back to portal page after MikroTik auth
+	document.sendin.dst.value = window.location.pathname + window.location.search;
 	document.sendin.submit();
 	return false;
+}
+
+// ---- Logout ----
+function doLogout() {
+	if (!confirm('Are you sure you want to logout?')) return;
+	stopCountdown();
+	// Submit MikroTik logout
+	var form = document.createElement('form');
+	form.method = 'POST';
+	form.action = '/logout';
+	var input = document.createElement('input');
+	input.type = 'hidden';
+	input.name = 'erase-cookie';
+	input.value = 'true';
+	form.appendChild(input);
+	document.body.appendChild(form);
+	form.submit();
 }
 
 // ---- INSERT COIN ----
@@ -200,7 +336,7 @@ function insertBtnAction() {
 	totalCoinReceived = 0;
 	var stored = localStorage.getItem('totalCoinReceived');
 	if (stored) totalCoinReceived = parseInt(stored) || 0;
-	
+
 	document.getElementById('modalTotalCoin').textContent = '0';
 	document.getElementById('modalTotalTime').textContent = secondsToDhms(0);
 	document.getElementById('coinSaveBtn').disabled = true;
@@ -209,15 +345,17 @@ function insertBtnAction() {
 	document.getElementById('coinCodeBlock').style.display = 'none';
 	document.getElementById('coinNotice').style.display = 'none';
 	document.getElementById('coinLoader').style.display = '';
-	
+
 	if (!vendorIpAddress) { alert('No vendo machine configured'); return; }
-	
+
 	var storedVoucher = localStorage.getItem('activeVoucher') || '';
 	var postData = 'voucher=' + storedVoucher + '&mac=' + mac;
-	
+
 	showModal('coinModal');
-	document.getElementById('coinModalTitle').textContent = 'Please insert the coin';
-	
+	document.getElementById('coinModalTitle').textContent = isExtendMode
+		? 'Insert coin to extend time'
+		: 'Please insert the coin';
+
 	nodeMcuPost('/topUp', postData)
 		.then(function(resp) {
 			document.getElementById('coinLoader').style.display = 'none';
@@ -225,12 +363,12 @@ function insertBtnAction() {
 			try { data = JSON.parse(resp); } catch(e) { data = { status: 'false', errorCode: 'coin.slot.notavailable' }; }
 			if (data.status === 'true') {
 				voucher = data.voucher;
-				// Hide the generated voucher code since we use MAC as voucher
 				document.getElementById('coinCodeBlock').style.display = 'none';
 				if (vendoConfig && vendoConfig.isMultiVendo) {
-					var sel = document.getElementById('vendoSelected');
+					var sel = document.getElementById(isConnected ? 'connectedVendoSelected' : 'vendoSelected');
 					if (sel.selectedIndex >= 0) {
-						document.getElementById('coinModalTitle').textContent = 'Please insert the coin on ' + sel.options[sel.selectedIndex].text;
+						document.getElementById('coinModalTitle').textContent =
+							(isExtendMode ? 'Extend time on ' : 'Insert coin on ') + sel.options[sel.selectedIndex].text;
 					}
 				}
 				if (!coinTimer) coinTimer = setInterval(checkCoin, 1000);
@@ -252,12 +390,11 @@ function checkCoin() {
 			var data;
 			try { data = JSON.parse(resp); } catch(e) { return; }
 			document.getElementById('coinNotice').style.display = 'none';
-			
+
 			if (data.status === 'true') {
 				totalCoinReceived = parseInt(data.totalCoin) || 0;
 				document.getElementById('modalTotalCoin').textContent = data.totalCoin;
 				document.getElementById('modalTotalTime').textContent = secondsToDhms(parseInt(data.timeAdded) || 0);
-				// Hide voucher code display since we use MAC
 				document.getElementById('coinCodeBlock').style.display = 'none';
 				localStorage.setItem('activeVoucher', voucher);
 				localStorage.setItem('totalCoinReceived', totalCoinReceived);
@@ -271,14 +408,16 @@ function checkCoin() {
 					document.getElementById('coinSaveBtn').disabled = false;
 					document.getElementById('coinSaveBtn').style.opacity = '1';
 					document.getElementById('coinCancelBtn').disabled = true;
-					// Hide voucher code display
 					document.getElementById('coinCodeBlock').style.display = 'none';
 				}
 				if (remainTime === 0) {
 					hideModal('coinModal');
 					if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
 					if (totalCoinReceived > 0) {
-						alert('Coin slot expired! But processed ' + totalCoinReceived + ' coin(s). Auto-login shortly.');
+						var msg = isExtendMode
+							? 'Coin slot expired! Processed ' + totalCoinReceived + ' coin(s). Extending time..'
+							: 'Coin slot expired! But processed ' + totalCoinReceived + ' coin(s). Auto-login shortly.';
+						alert(msg);
 						setTimeout(function() { saveVoucherAndLogin(); }, 2000);
 					} else {
 						alert('Coin slot expired');
@@ -309,11 +448,11 @@ function saveVoucherAndLogin() {
 	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
 	var macNoColon = replaceAll(mac, ':');
 	localStorage.setItem('activeVoucher', voucher);
-	
+
 	var saveBtn = document.getElementById('coinSaveBtn');
 	saveBtn.disabled = true;
 	saveBtn.textContent = 'SAVING...';
-	
+
 	nodeMcuPost('/useVoucher', 'voucher=' + voucher)
 		.then(function(resp) {
 			var data;
@@ -321,29 +460,50 @@ function saveVoucherAndLogin() {
 			if (data.status === 'true') {
 				totalCoinReceived = 0;
 				localStorage.removeItem('totalCoinReceived');
-				console.log('[saveVoucher] Calling coin-auth with mac=' + macNoColon + ', duration=' + data.validity + ', routerId=' + routerId);
-				fetch(window.location.origin + '/api/vouchers/coin-auth', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity || 0, routerId: routerId }),
-				}).then(function(r) {
-					console.log('[saveVoucher] coin-auth response status:', r.status);
-					return r.json();
-				}).then(function(result) {
-					console.log('[saveVoucher] coin-auth result:', result);
-					hideModal('coinModal');
-					saveBtn.textContent = 'SAVE';
-					// Use MAC as voucher code for login
-					document.getElementById('voucherInput').value = macNoColon;
-					setTimeout(function() { doLogin(); }, 500);
-				}).catch(function(err) {
-					console.error('[saveVoucher] coin-auth error:', err);
-					hideModal('coinModal');
-					saveBtn.textContent = 'SAVE';
-					// Use MAC as voucher code for login
-					document.getElementById('voucherInput').value = macNoColon;
-					setTimeout(function() { doLogin(); }, 500);
-				});
+				var durationMin = data.validity || 0;
+
+				// If extend mode and already connected, just call coin-auth with extend flag
+				if (isExtendMode && isConnected) {
+					console.log('[saveVoucher] Extend mode — calling coin-auth with extend=true, duration=' + durationMin);
+					fetch(window.location.origin + '/api/vouchers/coin-auth', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId, extend: true }),
+					}).then(function(r) { return r.json(); })
+					.then(function(result) {
+						console.log('[saveVoucher] coin-auth extend result:', result);
+						hideModal('coinModal');
+						saveBtn.textContent = 'SAVE';
+						// Refresh session state from server
+						refreshSessionAfterExtend();
+					}).catch(function(err) {
+						console.error('[saveVoucher] coin-auth extend error:', err);
+						hideModal('coinModal');
+						saveBtn.textContent = 'SAVE';
+						refreshSessionAfterExtend();
+					});
+				} else {
+					// Initial login flow — call coin-auth then doLogin
+					console.log('[saveVoucher] Initial login — calling coin-auth with mac=' + macNoColon + ', duration=' + durationMin);
+					fetch(window.location.origin + '/api/vouchers/coin-auth', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId }),
+					}).then(function(r) { return r.json(); })
+					.then(function(result) {
+						console.log('[saveVoucher] coin-auth result:', result);
+						hideModal('coinModal');
+						saveBtn.textContent = 'SAVE';
+						document.getElementById('voucherInput').value = macNoColon;
+						setTimeout(function() { doLogin(); }, 500);
+					}).catch(function(err) {
+						console.error('[saveVoucher] coin-auth error:', err);
+						hideModal('coinModal');
+						saveBtn.textContent = 'SAVE';
+						document.getElementById('voucherInput').value = macNoColon;
+						setTimeout(function() { doLogin(); }, 500);
+					});
+				}
 			} else {
 				saveBtn.disabled = false;
 				saveBtn.textContent = 'SAVE';
@@ -357,13 +517,31 @@ function saveVoucherAndLogin() {
 			if (totalCoinReceived > 0) {
 				alert('Vendo communication failed, but coins processed. Voucher: ' + voucher);
 				hideModal('coinModal');
-				// Use MAC as voucher code for login
-				document.getElementById('voucherInput').value = macNoColon;
-				setTimeout(function() { doLogin(); }, 1000);
+				if (isExtendMode && isConnected) {
+					refreshSessionAfterExtend();
+				} else {
+					document.getElementById('voucherInput').value = macNoColon;
+					setTimeout(function() { doLogin(); }, 1000);
+				}
 			} else {
 				alert('Failed to save voucher. Please try again.');
 			}
 		});
+}
+
+function refreshSessionAfterExtend() {
+	// Re-check session to get updated remaining time
+	if (!mac || !routerId) return;
+	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+		.then(function(r) { return r.json(); })
+		.then(function(data) {
+			if (data.hasSession && data.remainingSeconds > 0) {
+				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
+				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
+				updateCountdownDisplay();
+			}
+		})
+		.catch(function(e) { console.error('Session refresh failed:', e); });
 }
 
 // ---- PROMO RATES ----
@@ -408,19 +586,4 @@ function loadChargingStations() {
 			list.innerHTML = html || '<div style="text-align:center;color:#999;">No charging stations</div>';
 		})
 		.catch(function() { list.innerHTML = '<div style="text-align:center;color:#f44336;">Failed to load</div>'; });
-}
-
-// ---- Restore session on load ----
-function checkAndRestoreSession() {
-	if (!mac || !routerId) return;
-	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
-		.then(function(r) { return r.json(); })
-		.then(function(data) {
-			if (data.hasSession && data.remainingSeconds > 0) {
-				// Auto-login with MAC as username
-				document.getElementById('voucherInput').value = data.username;
-				setTimeout(function() { doLogin(); }, 500);
-			}
-		})
-		.catch(function(e) { console.error('Session check failed:', e); });
 }

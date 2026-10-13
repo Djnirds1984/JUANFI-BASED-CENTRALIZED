@@ -448,6 +448,17 @@ function checkCoin() {
 function saveVoucherAndLogin() {
 	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
 	var macNoColon = replaceAll(mac, ':');
+	
+	// Validate MAC before proceeding
+	if (!macNoColon || macNoColon.length < 12) {
+		alert('Invalid MAC address. Please refresh the portal and try again.');
+		hideModal('coinModal');
+		var saveBtn = document.getElementById('coinSaveBtn');
+		saveBtn.disabled = false;
+		saveBtn.textContent = 'SAVE';
+		return;
+	}
+	
 	localStorage.setItem('activeVoucher', voucher);
 
 	var saveBtn = document.getElementById('coinSaveBtn');

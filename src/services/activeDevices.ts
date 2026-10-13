@@ -31,14 +31,14 @@ export function syncCoinInsertSessions(routerId: number, live: any[] | null): vo
     if (user) activeUsers.set(user.toLowerCase(), conn);
   }
 
-  // Get all active coin-insert sessions for this router
-  const coinSessions = db.prepare(
-    "SELECT id, username, session_id FROM radius_sessions WHERE router_id = ? AND status = 'active' AND session_id LIKE 'coin_%'"
+  // Get all active sessions for this router (any session_id pattern)
+  const activeSessions = db.prepare(
+    "SELECT id, username FROM radius_sessions WHERE router_id = ? AND status = 'active'"
   ).all(routerId) as any[];
 
   const existingUsernames = new Set<string>();
-  for (const session of coinSessions) {
-    existingUsernames.add(session.username.toLowerCase());
+  for (const session of activeSessions) {
+    existingUsernames.add(String(session.username).toLowerCase());
   }
 
   // Create sessions for new users that don't have a session yet
@@ -61,8 +61,8 @@ export function syncCoinInsertSessions(routerId: number, live: any[] | null): vo
     "UPDATE radius_sessions SET status = 'stopped', stopped_at = ?, updated_at = ?, terminate_cause = 'User-Request' WHERE id = ?"
   );
 
-  for (const session of coinSessions) {
-    if (!activeUsers.has(session.username.toLowerCase())) {
+  for (const session of activeSessions) {
+    if (!activeUsers.has(String(session.username).toLowerCase())) {
       update.run(now, now, session.id);
     }
   }

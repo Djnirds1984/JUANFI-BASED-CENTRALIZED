@@ -73,6 +73,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   }
   const isExtend = extend === true;
   const duration = parseInt(durationMinutes) || 0;
+  console.log(`coin-auth: request mac=${macNoColon} routerId=${routerId} authMode=${authMode} extend=${isExtend} duration=${duration}min`);
 
   const upsert = db.transaction(() => {
     const existing = db.prepare(
@@ -80,35 +81,40 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     ).get(routerId, macNoColon) as any;
 
     let expiryAt: string;
+    let hadRemaining = false;
     const now = new Date();
+    const addMs = duration * 60 * 1000;
 
     if (existing) {
-      if (isExtend && existing.expiry_at) {
-        const currentExpiry = new Date(existing.expiry_at + 'Z').getTime();
-        if (currentExpiry > now.getTime()) {
-          expiryAt = new Date(currentExpiry + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-        } else {
-          expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-        }
+      // ALWAYS stack onto unused time - whether or not the portal flagged this
+      // as an "extend". A new coin insert must ADD to any remaining time, never
+      // reset it (otherwise the leftover time is lost before the new time is
+      // applied - the captive-popup "time disappears then adds" bug).
+      const currentExpiry = existing.expiry_at
+        ? new Date(String(existing.expiry_at).replace(' ', 'T') + 'Z').getTime()
+        : 0;
+      if (currentExpiry > now.getTime()) {
+        hadRemaining = true;
+        expiryAt = new Date(currentExpiry + addMs).toISOString().replace('T', ' ').slice(0, 19);
       } else {
-        expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+        expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
       }
       db.prepare(
         `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now'),
           source = ?, profile = 'default' WHERE id = ?`
       ).run(expiryAt, authMode === 'radius' ? 'radius' : 'api', existing.id);
     } else {
-      expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+      expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
       db.prepare(
         `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source)
          VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?, ?)`
       ).run(routerId, macNoColon, expiryAt, authMode === 'radius' ? 'radius' : 'api');
     }
-    return expiryAt;
+    return { expiryAt, hadRemaining };
   });
 
   try {
-    const expiryAt = upsert();
+    const { expiryAt, hadRemaining } = upsert();
 
     // Extend/top-up: NEVER kick/disconnect the live session here.
     // The live /ip/hotspot/active session keeps running and stays online;
@@ -117,7 +123,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // send a RADIUS CoA-Request (Session-Timeout) for the live session —
     // MikroTik updates the active session in place, no re-auth needed.
     // Best-effort only — never fail the payment.
-    if (isExtend) {
+    if (isExtend || hadRemaining) {
       try {
         const sess = db.prepare(
           `SELECT session_id, nas_ip FROM radius_sessions
@@ -130,7 +136,10 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
             1,
             Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
           );
+          console.log(`coin-auth: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId}`);
           sendCoASessionTimeout(routerId, sess.session_id, sess.nas_ip, remainingSec);
+        } else {
+          console.log(`coin-auth: no active RADIUS session for ${macNoColon} on router ${routerId} - CoA skipped`);
         }
       } catch (coaErr: any) {
         console.error(`coin-auth: CoA extend failed for ${macNoColon} on router ${routerId}:`, coaErr.message);
@@ -196,6 +205,11 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
             routerUserName,
             secondsToUptimeLimit(newLimitSec)
           );
+          console.log(
+            `coin-auth: extend ${macNoColon} on router ${routerId} -> user "${routerUserName}" ` +
+            `limit ${oldLimitSec}s - uptime ${uptimeSec}s + ${duration * 60}s = ${newLimitSec}s ` +
+            `(${secondsToUptimeLimit(newLimitSec)}), reset=${resetOk} set=${setOk}`
+          );
           if (!setOk) {
             console.error(
               `coin-auth: router user "${routerUserName}" not found on router ${routerId} - time NOT added`
@@ -210,9 +224,18 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         // payment. The device can still retry login once the router syncs.
         console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
       }
+    } else {
+      console.log(
+        `coin-auth: router push SKIPPED for ${macNoColon} (authMode=${authMode}, ` +
+        `connected=${mikroTikService.isConnected(routerId)}, isExtend=${isExtend}) - time added to DB only`
+      );
     }
 
-    res.json({ success: true });
+    const remainingSeconds = Math.max(
+      0,
+      Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+    );
+    res.json({ success: true, remainingSeconds, extended: isExtend || hadRemaining });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -615,10 +615,17 @@ function saveVoucherAndLogin() {
 					.then(function(result) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						showConnectedState(durationSec);
+						if (result && result.error) {
+							alert('Could not add time: ' + result.error);
+							return;
+						}
+						// Prefer the server's stacked total (remaining + new) over just this coin.
+						var totalSec = (result && result.remainingSeconds) ? result.remainingSeconds : durationSec;
+						showConnectedState(totalSec);
 						// Submit login to MikroTik in background (via iframe)
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
+						setTimeout(function() { syncSessionTime(); }, 2500);
 					}).catch(function(err) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';

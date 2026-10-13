@@ -312,8 +312,6 @@ function doLogin() {
 	// Submit to hidden iframe so portal page stays put — no redirect to status.html
 	document.sendin.target = 'loginFrame';
 	document.sendin.submit();
-	// Wait for MikroTik auth to complete, then show connected state
-	setTimeout(function() { checkSessionState(); }, 2000);
 	return false;
 }
 
@@ -486,7 +484,7 @@ function saveVoucherAndLogin() {
 						refreshSessionAfterExtend();
 					});
 				} else {
-					// Initial login flow — call coin-auth then doLogin
+					// Initial login flow — call coin-auth then show connected state
 					console.log('[saveVoucher] Initial login — calling coin-auth with mac=' + macNoColon + ', duration=' + durationMin);
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
@@ -497,12 +495,17 @@ function saveVoucherAndLogin() {
 						console.log('[saveVoucher] coin-auth result:', result);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
+						// Directly show connected state with the time from coin response
+						showConnectedState(durationMin * 60);
+						// Submit login to MikroTik in background (via iframe)
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					}).catch(function(err) {
 						console.error('[saveVoucher] coin-auth error:', err);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
+						// Still show connected state even if coin-auth fails
+						showConnectedState(durationMin * 60);
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					});

@@ -1,6 +1,7 @@
 import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
 import { syncSessionsWithDevices } from './deviceSessions';
+import { config } from '../config';
 import crypto from 'crypto';
 
 const nowStamp = (): string => new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -250,7 +251,7 @@ export async function ensureWalledGardenForController(routerId: number): Promise
   if (walledGardenChecked.has(routerId)) return;
   walledGardenChecked.add(routerId);
 
-  const lanIp = process.env.CONTROLLER_LAN_IP ? process.env.CONTROLLER_LAN_IP.trim() : '';
+  const lanIp = config.controllerLanIp;
   if (!lanIp) return;
 
   try {

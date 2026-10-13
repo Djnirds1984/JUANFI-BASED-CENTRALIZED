@@ -43,7 +43,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined'));
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// index:false so GET / falls through to the portal route below instead of
+// serving the admin SPA's index.html (admin is served at /admin).
+app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));
 app.use('/hotspot-assets', express.static(path.join(__dirname, '..', 'hotspot')));
 app.use('/stub-assets', express.static(path.join(__dirname, '..', 'stub')));
 

@@ -125,31 +125,59 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // Best-effort only — never fail the payment.
     if (isExtend || hadRemaining) {
       try {
-        const sess = db.prepare(
-          `SELECT session_id, nas_ip FROM radius_sessions
-           WHERE router_id = ? AND username = ? AND status = 'active'
-           ORDER BY updated_at DESC LIMIT 1`
-        ).get(routerId, macNoColon) as any;
         const { sendCoASessionTimeout } = await import('../services/radiusServer');
         const remainingSec = Math.max(
           1,
           Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
         );
-        if (sess?.session_id && sess?.nas_ip) {
-          console.log(`coin-auth: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId} (session ${sess.session_id})`);
-          sendCoASessionTimeout(routerId, sess.session_id, sess.nas_ip, remainingSec, macNoColon);
+
+        // Case-insensitive match: the router may report the user in a different
+        // case than the panel identity. Ignore synthetic 'coin_' ids - MikroTik
+        // only accepts a REAL RADIUS Acct-Session-Id.
+        const sess = db.prepare(
+          `SELECT session_id, nas_ip, username FROM radius_sessions
+           WHERE router_id = ? AND LOWER(username) = LOWER(?) AND status = 'active'
+           ORDER BY updated_at DESC LIMIT 1`
+        ).get(routerId, macNoColon) as any;
+        const realSessionId = sess?.session_id && !String(sess.session_id).startsWith('coin_')
+          ? String(sess.session_id) : '';
+
+        if (realSessionId && sess?.nas_ip) {
+          console.log(`coin-auth: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId} (session ${realSessionId})`);
+          sendCoASessionTimeout(routerId, realSessionId, sess.nas_ip, remainingSec, String(sess.username || macNoColon));
         } else {
-          // No accounting session row. Try a User-Name CoA aimed at the router's
-          // own address so a live session can still be extended when RADIUS
-          // accounting is not delivering Acct-Session-Ids.
+          // No real accounting session id. Look up the LIVE active session so we
+          // can CoA by the router's actual username + the device IP
+          // (Framed-IP-Address) - MikroTik can match a session by those even
+          // without Acct-Session-Id.
           const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
           const nasIp = String(routerRow?.host || '').split(':')[0];
+          let coaUser = macNoColon;
+          let coaIp = '';
+          try {
+            if (mikroTikService.isConnected(routerId)) {
+              const live = await mikroTikService.getActiveConnections(routerId);
+              const macKey = macNoColon.toLowerCase();
+              const conn = (Array.isArray(live) ? live : []).find((c: any) =>
+                String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '') === macKey
+              );
+              if (conn) {
+                coaUser = String(conn.user || coaUser);
+                coaIp = String(conn.address || '').split('/')[0].split(':')[0];
+                console.log(`coin-auth: live active entry for ${macNoColon}: user="${coaUser}" ip=${coaIp} timeLeft=${conn['session-time-left']}`);
+              } else {
+                console.log(`coin-auth: ${macNoColon} not in the router's live active list`);
+              }
+            }
+          } catch (liveErr: any) {
+            console.log(`coin-auth: live lookup failed: ${liveErr.message}`);
+          }
           const recent = db.prepare(
             `SELECT username, session_id, status, updated_at FROM radius_sessions
              WHERE router_id = ? ORDER BY updated_at DESC LIMIT 3`
           ).all(routerId) as any[];
-          console.log(`coin-auth: no active RADIUS session for ${macNoColon} on router ${routerId} - trying User-Name CoA to ${nasIp || 'unknown'}; recent=${JSON.stringify(recent)}`);
-          if (nasIp) sendCoASessionTimeout(routerId, '', nasIp, remainingSec, macNoColon);
+          console.log(`coin-auth: no real RADIUS session for ${macNoColon} - User-Name/Framed-IP CoA user="${coaUser}" ip=${coaIp || '-'} to ${nasIp || 'unknown'}; recent=${JSON.stringify(recent)}`);
+          if (nasIp) sendCoASessionTimeout(routerId, '', nasIp, remainingSec, coaUser, coaIp || undefined);
         }
       } catch (coaErr: any) {
         console.error(`coin-auth: CoA extend failed for ${macNoColon} on router ${routerId}:`, coaErr.message);

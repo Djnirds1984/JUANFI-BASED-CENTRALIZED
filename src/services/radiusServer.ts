@@ -119,6 +119,14 @@ function encodeInteger(n: number): Buffer {
   return buf;
 }
 
+function ipToBuffer(ip: string): Buffer | null {
+  const parts = String(ip || '').split('.');
+  if (parts.length !== 4) return null;
+  const bytes = parts.map((p) => parseInt(p, 10));
+  if (bytes.some((b) => !Number.isFinite(b) || b < 0 || b > 255)) return null;
+  return Buffer.from(bytes);
+}
+
 function encodeAttributes(attrs: RadiusAttribute[]): Buffer {
   const buffers: Buffer[] = [];
   for (const attr of attrs) {
@@ -735,7 +743,7 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
  * expiry_at stay in sync after a coin top-up. Best-effort: failures are
  * logged and never affect the payment flow.
  */
-export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number, username?: string): void {
+export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number, username?: string, framedIp?: string): void {
   try {
     const db = getDb();
     const radiusClient = db.prepare(
@@ -756,6 +764,8 @@ export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp
     const attrs: RadiusAttribute[] = [];
     if (sessionId) attrs.push({ type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId });
     if (username) attrs.push({ type: RADIUS_ATTR.USER_NAME, value: username });
+    const ipBuf = framedIp ? ipToBuffer(framedIp) : null;
+    if (ipBuf) attrs.push({ type: RADIUS_ATTR.FRAMED_IP_ADDRESS, value: ipBuf });
     attrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: Math.max(1, Math.floor(timeoutSeconds)) });
 
     // CoA-Request Request-Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)

@@ -132,8 +132,9 @@ router.get('/check-session', (req: Request, res: Response) => {
     let hasValidTime = false;
     let remainingSeconds = 0;
 
-    // Priority 1: device_sessions has remaining time
-    if (session && session.remaining_seconds > 0) {
+    // Priority 1: device_sessions has remaining time (but sanity check - must be > 60s)
+    // The sync function might set a small value if MikroTik hasn't fully calculated session time yet
+    if (session && session.remaining_seconds > 60) {
       hasValidTime = true;
       remainingSeconds = session.remaining_seconds;
       console.log(`[check-session] Using device_sessions remaining time: ${remainingSeconds}s`);

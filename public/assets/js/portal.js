@@ -485,6 +485,7 @@ function saveVoucherAndLogin() {
 				totalCoinReceived = 0;
 				localStorage.removeItem('totalCoinReceived');
 				var durationMin = data.timeAdded || data.validity || 0;
+				var validityMin = data.validity || durationMin;
 
 				// If extend mode and already connected, just call coin-auth with extend flag
 				if (isExtendMode && isConnected) {
@@ -518,8 +519,8 @@ function saveVoucherAndLogin() {
 						console.log('[saveVoucher] coin-auth result:', result);
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						// Directly show connected state with the time from coin response
-						showConnectedState(durationMin * 60);
+						// Use validity for expiration calculation (matches MikroTik portal behavior)
+						showConnectedState(validityMin * 60);
 						// Submit login to MikroTik in background (via iframe)
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
@@ -528,7 +529,7 @@ function saveVoucherAndLogin() {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
 						// Still show connected state even if coin-auth fails
-						showConnectedState(durationMin * 60);
+						showConnectedState(validityMin * 60);
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					});

@@ -320,7 +320,7 @@ function doLogin() {
 
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
-	document.sendin.dst.value = '/status';
+	document.sendin.dst.value = linkStatus;
 	// Submit to hidden iframe so portal page stays put — no redirect to status.html
 	document.sendin.target = 'loginFrame';
 	document.sendin.submit();

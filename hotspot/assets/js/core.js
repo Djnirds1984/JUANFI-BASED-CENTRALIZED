@@ -519,7 +519,9 @@ function callTopupAPI(retryCount){
 	  success: function(data){
 		$("#loaderDiv").attr("class","spinner hidden");
 		if(data.status == "true"){
-			voucher = data.voucher;
+			if(!macAsVoucherCode){
+				voucher = data.voucher;
+			}
 			$('#insertCoinModal').modal('show');
 			insertingCoin = true;
 			$('#codeGenerated').html(voucher);
@@ -592,15 +594,53 @@ function saveVoucherBtnAction(){
 					var type = $( "#saveVoucherButton" ).attr('data-save-type');
 
 					if(type == "extend"){
-							$.ajax({
-							  type: "POST",
-							  url: "/logout",
-							  data: "erase-cookie=true",
-							  success: function(data){
-								  setStorageValue('reLogin', '1');
-								  window.location.href = "/login";
-							  }
-							 });
+							console.log('[extend-flow] Starting coin-auth for extend time');
+							if(typeof controllerApiUrl !== 'undefined' && typeof mac !== 'undefined'){
+								var macNoColon = replaceAll(mac, ":");
+								var coinAuthUrl = controllerApiUrl.replace('/api','') + "/api/vouchers/coin-auth";
+								console.log('[extend-flow] Calling coin-auth:', coinAuthUrl, 'MAC:', macNoColon, 'Duration:', data.validity, 'Server:', hotspotAddress);
+								$.ajax({
+									type: "POST",
+									url: coinAuthUrl,
+									data: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity, serverAddress: hotspotAddress }),
+									contentType: "application/json",
+									timeout: 5000,
+									success: function() {
+										console.log('[extend-flow] coin-auth SUCCESS, logging out and re-login');
+										$.ajax({
+											type: "POST",
+											url: "/logout",
+											data: "erase-cookie=true",
+											success: function(){
+												setStorageValue('reLogin', '1');
+												window.location.href = "/login";
+											}
+										});
+									},
+									error: function(xhr, status, err) {
+										console.error('[extend-flow] coin-auth FAILED:', status, err, '- proceeding with logout anyway');
+										$.ajax({
+											type: "POST",
+											url: "/logout",
+											data: "erase-cookie=true",
+											success: function(){
+												setStorageValue('reLogin', '1');
+												window.location.href = "/login";
+											}
+										});
+									}
+								});
+							} else {
+								$.ajax({
+								  type: "POST",
+								  url: "/logout",
+								  data: "erase-cookie=true",
+								  success: function(){
+									  setStorageValue('reLogin', '1');
+									  window.location.href = "/login";
+								  }
+								 });
+							}
 					}else{
 						console.log('[coin-flow] Starting auto-login after coin insertion');
 						if(typeof controllerApiUrl !== 'undefined' && typeof mac !== 'undefined'){
@@ -670,7 +710,9 @@ function checkCoin(){
 			$('#totalCoin').html(data.totalCoin);	
 			$('#totalTime').html(secondsToDhms(parseInt(data.timeAdded)));
 			if(topupMode == TOPUP_INTERNET){
-				$('#codeGeneratedBlock').attr('style', 'display: block');
+				if(!macAsVoucherCode){
+					$('#codeGeneratedBlock').attr('style', 'display: block');
+				}
 				$('#totalData').html(data.data);
 				$('#voucherInput').val(voucher);
 			}
@@ -712,15 +754,51 @@ function checkCoin(){
 							setTimeout(function (){
 
 								if(type == "extend"){
-									$.ajax({
-									type: "POST",
-									url: "/logout",
-									data: "erase-cookie=true",
-									success: function(data){
-										setStorageValue('reLogin', '1');
-										window.location.href = "./login.html";
+									console.log('[extend-flow] Coin slot expired, calling coin-auth for extend');
+									if(typeof controllerApiUrl !== 'undefined' && typeof mac !== 'undefined'){
+										var macNoColon = replaceAll(mac, ":");
+										var coinAuthUrl = controllerApiUrl.replace('/api','') + "/api/vouchers/coin-auth";
+										$.ajax({
+											type: "POST",
+											url: coinAuthUrl,
+											data: JSON.stringify({ mac: macNoColon, durationMinutes: data.validity, serverAddress: hotspotAddress }),
+											contentType: "application/json",
+											timeout: 5000,
+											success: function() {
+												$.ajax({
+													type: "POST",
+													url: "/logout",
+													data: "erase-cookie=true",
+													success: function(){
+														setStorageValue('reLogin', '1');
+														window.location.href = "./login.html";
+													}
+												});
+											},
+											error: function(xhr, status, err) {
+												console.error('[extend-flow] coin-auth FAILED:', status, err);
+												$.ajax({
+													type: "POST",
+													url: "/logout",
+													data: "erase-cookie=true",
+													success: function(){
+														setStorageValue('reLogin', '1');
+														window.location.href = "./login.html";
+													}
+												});
+											}
+										});
+									} else {
+										$.ajax({
+										type: "POST",
+										url: "/logout",
+										data: "erase-cookie=true",
+										success: function(){
+											setStorageValue('reLogin', '1');
+											window.location.href = "./login.html";
+										}
+										});
 									}
-									});
 								}else{
 									newLogin();
 								}

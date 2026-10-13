@@ -6,6 +6,7 @@ import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
+import { mikrotikTimeToSeconds } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -97,41 +98,46 @@ router.get('/check-session', (req: Request, res: Response) => {
       return;
     }
 
-    // The MikroTik Active Devices `session-time-left` is synced into
-    // device_sessions.remaining_seconds (and active_devices.session_time_left)
-    // by the background sync, and that is exactly what the panel's Active
-    // Devices tab displays. Read the SAME record here so the portal and the
-    // panel never disagree. Previously this endpoint derived the remaining time
-    // from hotspot_users.expiry_at (the wall-clock paid validity), which drifts
-    // away from the router's live session-time-left - that was the portal vs.
-    // database discrepancy.
-    const session = db.prepare(
-      `SELECT remaining_seconds, status, is_online, last_seen FROM device_sessions
-       WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
-       ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
-    ).get(routerId, macWithColons, macNoColons) as any;
+    const expiresAt: string | null = hotspotUser.expiry_at || null;
 
-    let remainingSeconds = 0;
-    if (session && Number(session.remaining_seconds) > 0) {
-      remainingSeconds = Math.floor(Number(session.remaining_seconds));
+    // Single source of truth for "time left" = the router's live
+    // `session-time-left`, which is exactly what the panel's Active Devices tab
+    // renders (synced into active_devices.session_time_left). MAC is stored as
+    // the router reports it, so match case-insensitively.
+    const active = db.prepare(
+      `SELECT session_time_left FROM active_devices
+       WHERE router_id = ? AND status = 'active' AND LOWER(mac_address) = ?
+       ORDER BY last_seen DESC, id DESC LIMIT 1`
+    ).get(routerId, macWithColons) as any;
+
+    let remainingSeconds: number | null = null;
+
+    if (active && active.session_time_left) {
+      const live = mikrotikTimeToSeconds(active.session_time_left);
+      if (live !== Infinity) remainingSeconds = Math.max(0, Math.floor(live));
     }
 
-    // The paid validity (expiry_at) is the upper bound: never advertise more
-    // time than the account actually owns. It is also the fallback when the
-    // router has not reported a live session-time-left yet (device offline or
-    // first sync pending).
-    let expiresAt: string | null = null;
-    if (hotspotUser.expiry_at) {
-      const expiryMs = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
-      const validitySec = Math.floor((expiryMs - Date.now()) / 1000);
-      if (validitySec <= 0) {
-        res.json({ hasSession: false, remainingSeconds: 0, expiresAt: null });
-        return;
+    // No live active-device row yet: use the synced device session record.
+    if (remainingSeconds === null) {
+      const session = db.prepare(
+        `SELECT remaining_seconds FROM device_sessions
+         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
+         ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
+      ).get(routerId, macWithColons, macNoColons) as any;
+      if (session) remainingSeconds = Math.max(0, Math.floor(Number(session.remaining_seconds) || 0));
+    }
+
+    // Last resort (device has not logged in / no live session at all): the
+    // account's wall-clock validity. This is NOT an upper bound - a stale or
+    // short expiry_at must never shrink the router's live session time.
+    if (remainingSeconds === null) {
+      if (hotspotUser.expiry_at) {
+        const expiryMs = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
+        const validitySec = Math.floor((expiryMs - Date.now()) / 1000);
+        remainingSeconds = validitySec > 0 ? validitySec : 0;
+      } else {
+        remainingSeconds = 0;
       }
-      expiresAt = hotspotUser.expiry_at;
-      remainingSeconds = remainingSeconds > 0
-        ? Math.min(remainingSeconds, validitySec)
-        : validitySec;
     }
 
     res.json({

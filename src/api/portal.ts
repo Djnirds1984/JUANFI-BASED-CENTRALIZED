@@ -97,34 +97,47 @@ router.get('/check-session', (req: Request, res: Response) => {
       return;
     }
 
-    let hasValidTime = false;
-    let remainingSeconds = 0;
+    // The MikroTik Active Devices `session-time-left` is synced into
+    // device_sessions.remaining_seconds (and active_devices.session_time_left)
+    // by the background sync, and that is exactly what the panel's Active
+    // Devices tab displays. Read the SAME record here so the portal and the
+    // panel never disagree. Previously this endpoint derived the remaining time
+    // from hotspot_users.expiry_at (the wall-clock paid validity), which drifts
+    // away from the router's live session-time-left - that was the portal vs.
+    // database discrepancy.
+    const session = db.prepare(
+      `SELECT remaining_seconds, status, is_online, last_seen FROM device_sessions
+       WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
+       ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
+    ).get(routerId, macWithColons, macNoColons) as any;
 
-    if (hotspotUser.expiry_at) {
-      const expiryMs = new Date(hotspotUser.expiry_at + 'Z').getTime();
-      const now = Date.now();
-      if (expiryMs > now) {
-        hasValidTime = true;
-        remainingSeconds = Math.floor((expiryMs - now) / 1000);
-      }
+    let remainingSeconds = 0;
+    if (session && Number(session.remaining_seconds) > 0) {
+      remainingSeconds = Math.floor(Number(session.remaining_seconds));
     }
 
-    if (!hasValidTime) {
-      const session = db.prepare(
-        `SELECT remaining_seconds FROM device_sessions
-         WHERE mac_address = ? AND router_id = ?
-         ORDER BY last_seen DESC LIMIT 1`
-      ).get(macWithColons, routerId) as any;
-
-      if (session && session.remaining_seconds > 60) {
-        hasValidTime = true;
-        remainingSeconds = session.remaining_seconds;
+    // The paid validity (expiry_at) is the upper bound: never advertise more
+    // time than the account actually owns. It is also the fallback when the
+    // router has not reported a live session-time-left yet (device offline or
+    // first sync pending).
+    let expiresAt: string | null = null;
+    if (hotspotUser.expiry_at) {
+      const expiryMs = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
+      const validitySec = Math.floor((expiryMs - Date.now()) / 1000);
+      if (validitySec <= 0) {
+        res.json({ hasSession: false, remainingSeconds: 0, expiresAt: null });
+        return;
       }
+      expiresAt = hotspotUser.expiry_at;
+      remainingSeconds = remainingSeconds > 0
+        ? Math.min(remainingSeconds, validitySec)
+        : validitySec;
     }
 
     res.json({
-      hasSession: hasValidTime,
+      hasSession: remainingSeconds > 0,
       remainingSeconds,
+      expiresAt,
       username: macNoColons,
     });
   } catch (error: any) {

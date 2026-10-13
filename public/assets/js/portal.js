@@ -34,6 +34,7 @@ var topupMode = 'INTERNET';
 var isConnected = false;
 var remainingSeconds = 0;
 var countdownTimer = null;
+var sessionSyncTimer = null;
 var sessionExpiresAt = null;
 var isExtendMode = false;
 
@@ -100,6 +101,7 @@ function setupEventListeners() {
 function showDisconnectedState() {
 	isConnected = false;
 	stopCountdown();
+	stopSessionSync();
 	document.getElementById('disconnectedPanel').style.display = '';
 	document.getElementById('connectedPanel').style.display = 'none';
 	document.getElementById('statusBadge').style.background = 'rgba(239, 68, 68, 0.1)';
@@ -124,6 +126,7 @@ function showConnectedState(remaining) {
 
 	updateCountdownDisplay();
 	startCountdown();
+	startSessionSync();
 }
 
 function startCountdown() {
@@ -143,6 +146,45 @@ function stopCountdown() {
 	if (countdownTimer) {
 		clearInterval(countdownTimer);
 		countdownTimer = null;
+	}
+}
+
+// ---- Panel session-time-left sync ----
+// The MikroTik Active Devices `session-time-left` is synced into the panel DB
+// (device_sessions.remaining_seconds / active_devices.session_time_left) and is
+// what the panel's Active Devices tab shows. Re-read it periodically so the
+// portal countdown does not drift behind the router - e.g. after a hit-less
+// top-up (CoA) that extends the live session, or when the account is paused.
+function syncSessionTime() {
+	if (!mac || !routerId) return;
+	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+		.then(function(r) { return r.json(); })
+		.then(function(data) {
+			if (data.hasSession && data.remainingSeconds > 0) {
+				// Adopt the authoritative value so the portal matches the DB/panel.
+				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
+				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
+				if (!isConnected) {
+					showConnectedState(remainingSeconds);
+				} else {
+					updateCountdownDisplay();
+				}
+			} else if (isConnected) {
+				showDisconnectedState();
+			}
+		})
+		.catch(function() {});
+}
+
+function startSessionSync() {
+	stopSessionSync();
+	sessionSyncTimer = setInterval(syncSessionTime, 10000);
+}
+
+function stopSessionSync() {
+	if (sessionSyncTimer) {
+		clearInterval(sessionSyncTimer);
+		sessionSyncTimer = null;
 	}
 }
 
@@ -609,18 +651,18 @@ function saveVoucherAndLogin() {
 }
 
 function refreshSessionAfterExtend() {
-	// Re-check session to get updated remaining time
-	if (!mac || !routerId) return;
-	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
-		.then(function(r) { return r.json(); })
-		.then(function(data) {
-			if (data.hasSession && data.remainingSeconds > 0) {
-				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
-				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
-				updateCountdownDisplay();
-			}
-		})
-		.catch(function() {});
+	// The hit-less top-up stacks the account validity (expiry_at) immediately,
+	// but the router's live session-time-left - and therefore the synced DB
+	// record the panel shows - only updates once the CoA lands and the 5s
+	// background sync runs. Re-read a few times so the portal catches up
+	// instead of staying behind the panel/database.
+	var tries = 0;
+	function poll() {
+		syncSessionTime();
+		tries++;
+		if (tries < 6) setTimeout(poll, 3000);
+	}
+	poll();
 }
 
 // ---- PROMO RATES ----

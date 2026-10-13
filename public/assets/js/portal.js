@@ -326,7 +326,17 @@ function doLogin() {
 	}
 
 	document.sendin.username.value = vc;
-	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
+	// Must match hotspot/login.html: loginOption 0 (username-only) hashes an
+	// EMPTY password; loginOption 1 hashes the voucher. Hashing vc here while
+	// the router has no password for the user = wrong CHAP response = login
+	// rejected = device stays in captive portal with no internet.
+	var loginOpt = (vendoConfig && typeof vendoConfig.loginOption !== 'undefined')
+		? parseInt(vendoConfig.loginOption, 10) : 0;
+	if (loginOpt === 0) {
+		document.sendin.password.value = hexMD5(chapId + '' + chapChallenge);
+	} else {
+		document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
+	}
 	document.sendin.dst.value = linkStatus;
 	// Submit to hidden iframe so portal page stays put — no redirect to status.html
 	document.sendin.target = 'loginFrame';

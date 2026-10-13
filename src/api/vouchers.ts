@@ -10,7 +10,7 @@ const router = Router();
 // Creates/extends the hotspot_user whose username is the device MAC
 // (no colons, UPPERCASE) so the upcoming auto-login authenticates the
 // same identity. Random NodeMCU vouchers are never used for auth here.
-router.post('/coin-auth', (req: Request, res: Response) => {
+router.post('/coin-auth', async (req: Request, res: Response) => {
   const { mac, durationMinutes, serverAddress, routerId: bodyRouterId, extend } = req.body;
 
   // Normalize: accept AA:BB:.. / AA-BB-.. / AABB.. in any case, store AABB.. UPPER.
@@ -22,26 +22,29 @@ router.post('/coin-auth', (req: Request, res: Response) => {
 
   const db = getDb();
   let routerId: number;
+  let authMode = 'api';
 
   if (bodyRouterId) {
     routerId = parseInt(bodyRouterId, 10);
     const routerRow = db.prepare(
-      'SELECT id FROM routers WHERE id = ? AND is_active = 1'
+      'SELECT id, auth_mode FROM routers WHERE id = ? AND is_active = 1'
     ).get(routerId) as any;
     if (!routerRow) {
       res.status(404).json({ error: 'Router not found or not active' });
       return;
     }
+    authMode = routerRow.auth_mode || 'api';
   } else if (serverAddress) {
     const hostOnly = serverAddress.split(':')[0];
     const routerRow = db.prepare(
-      "SELECT id FROM routers WHERE host = ? AND is_active = 1"
+      "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1"
     ).get(hostOnly) as any;
     if (!routerRow) {
       res.status(404).json({ error: 'Router not found or not active' });
       return;
     }
     routerId = routerRow.id;
+    authMode = routerRow.auth_mode || 'api';
   } else {
     res.status(400).json({ error: 'routerId or serverAddress is required' });
     return;
@@ -78,10 +81,46 @@ router.post('/coin-auth', (req: Request, res: Response) => {
          VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?)`
       ).run(routerId, macNoColon, expiryAt);
     }
+    return expiryAt;
   });
 
   try {
-    upsert();
+    const expiryAt = upsert();
+
+    // Non-RADIUS (API) mode: MikroTik authenticates against its LOCAL hotspot
+    // user list, so the MAC user must exist ON THE ROUTER or CHAP login is
+    // rejected and the device stays in the captive portal with no internet.
+    // (RADIUS mode needs no push — the router queries the panel DB.)
+    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
+      try {
+        const routerUsers = await mikroTikService.getHotspotUsers(routerId);
+        const existingOnRouter = routerUsers.find((u: any) => u.name === macNoColon);
+        const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
+        // MikroTik limit-uptime HH:MM:SS
+        const totalSec = Math.max(60, Math.floor(msLeft / 1000));
+        const uptimeLimit = `${String(Math.floor(totalSec / 3600)).padStart(2, '0')}:${String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0')}:${String(totalSec % 60).padStart(2, '0')}`;
+        if (!existingOnRouter) {
+          await mikroTikService.createHotspotUser(routerId, {
+            username: macNoColon,
+            password: '',
+            profile: 'default',
+            uptimeLimit,
+            comment: 'Coin-insert MAC user (panel portal)',
+          });
+        } else {
+          // Refresh the time allowance and re-enable in case it was disabled/expired.
+          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, uptimeLimit);
+          if (existingOnRouter['.id']) {
+            try { await mikroTikService.enableHotspotUser(routerId, existingOnRouter['.id']); } catch {}
+          }
+        }
+      } catch (mtErr: any) {
+        // Panel DB is authoritative for check-session; log but don't fail the
+        // payment. The device can still retry login once the router syncs.
+        console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
+      }
+    }
+
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

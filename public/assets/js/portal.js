@@ -308,8 +308,8 @@ function doLogin() {
 
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
-	// Redirect back to portal page after MikroTik auth
-	document.sendin.dst.value = window.location.pathname + window.location.search;
+	// Use absolute panel URL so MikroTik redirects back to portal, not its own status page
+	document.sendin.dst.value = window.location.origin + window.location.pathname + window.location.search;
 	document.sendin.submit();
 	return false;
 }

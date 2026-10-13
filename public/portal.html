@@ -1020,6 +1020,21 @@ body#loginBody {
 					.catch(function() { list.innerHTML = '<div style="text-align:center;color:#f44336;">Failed to load</div>'; });
 			}
 
+			// ---- Restore session on load ----
+			function checkAndRestoreSession() {
+				if (!mac || !routerId) return;
+				fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+					.then(function(r) { return r.json(); })
+					.then(function(data) {
+						if (data.hasSession && data.remainingSeconds > 0) {
+							// Auto-login with MAC as username
+							document.getElementById('voucherInput').value = data.username;
+							setTimeout(function() { doLogin(); }, 500);
+						}
+					})
+					.catch(function(e) { console.error('Session check failed:', e); });
+			}
+
 			// ---- Event listeners ----
 			document.getElementById('connectBtn').addEventListener('click', function() { doLogin(); });
 			document.getElementById('voucherInput').addEventListener('keypress', function(e) {
@@ -1052,6 +1067,7 @@ body#loginBody {
 			});
 
 			loadVendoConfig();
+			checkAndRestoreSession();
 		</script>
 	</div>
 </body>

@@ -73,6 +73,78 @@ router.get('/vendo-config', (req: Request, res: Response) => {
   }
 });
 
+// Public endpoint — check if MAC has valid session for auto-login
+router.get('/check-session', (req: Request, res: Response) => {
+  try {
+    const mac = String(req.query.mac || '').trim().toLowerCase().replace(/-/g, ':');
+    const routerId = parseInt(String(req.query.routerId || '1'), 10);
+
+    if (!mac || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) {
+      res.status(400).json({ error: 'Valid MAC is required' });
+      return;
+    }
+
+    const db = getDb();
+
+    // Check if hotspot_user exists for this MAC (username = MAC)
+    const hotspotUser = db.prepare(
+      'SELECT id, username FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
+    ).get(routerId, mac) as any;
+
+    if (!hotspotUser) {
+      res.json({ hasSession: false });
+      return;
+    }
+
+    // Check if voucher has remaining time
+    const voucher = db.prepare(
+      `SELECT id, duration_minutes, used_at, is_used
+       FROM vouchers
+       WHERE router_id = ? AND code = ? AND is_used = 1
+       ORDER BY used_at DESC LIMIT 1`
+    ).get(routerId, mac) as any;
+
+    if (!voucher) {
+      res.json({ hasSession: false });
+      return;
+    }
+
+    // Check device_sessions for remaining time
+    const session = db.prepare(
+      `SELECT remaining_seconds, last_seen
+       FROM device_sessions
+       WHERE mac_address = ? AND router_id = ?
+       ORDER BY last_seen DESC LIMIT 1`
+    ).get(mac, routerId) as any;
+
+    let hasValidTime = false;
+    let remainingSeconds = 0;
+
+    if (session && session.remaining_seconds > 0) {
+      hasValidTime = true;
+      remainingSeconds = session.remaining_seconds;
+    } else if (voucher.duration_minutes > 0 && voucher.used_at) {
+      // Calculate remaining time from voucher
+      const usedAt = new Date(voucher.used_at + 'Z').getTime();
+      const expiresAt = usedAt + voucher.duration_minutes * 60 * 1000;
+      const now = Date.now();
+      if (expiresAt > now) {
+        hasValidTime = true;
+        remainingSeconds = Math.floor((expiresAt - now) / 1000);
+      }
+    }
+
+    res.json({
+      hasSession: hasValidTime,
+      remainingSeconds,
+      username: mac,
+    });
+  } catch (error: any) {
+    console.error('check-session error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.use(authMiddleware);
 
 function getFolderRoot(folder?: string): string {

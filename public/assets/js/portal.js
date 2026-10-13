@@ -341,17 +341,20 @@ function doLogin() {
 function doLogout() {
 	if (!confirm('Are you sure you want to logout?')) return;
 	stopCountdown();
-	// Submit MikroTik logout
-	var form = document.createElement('form');
-	form.method = 'POST';
-	form.action = '/logout';
-	var input = document.createElement('input');
-	input.type = 'hidden';
-	input.name = 'erase-cookie';
-	input.value = 'true';
-	form.appendChild(input);
-	document.body.appendChild(form);
-	form.submit();
+
+	fetch('/api/portal/logout', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, routerId: routerId }),
+	}).then(function(r) { return r.json(); })
+	.then(function() {
+		localStorage.removeItem('activeVoucher');
+		showDisconnectedState();
+	})
+	.catch(function() {
+		localStorage.removeItem('activeVoucher');
+		showDisconnectedState();
+	});
 }
 
 // ---- INSERT COIN ----
@@ -494,7 +497,8 @@ function saveVoucherAndLogin() {
 			if (data.status === 'true') {
 				totalCoinReceived = 0;
 				localStorage.removeItem('totalCoinReceived');
-				var durationMin = data.timeAdded || 0;
+				var durationSec = parseInt(data.timeAdded) || 0;
+				var durationMin = Math.floor(durationSec / 60);
 				var validityMin = data.validity || durationMin;
 
 					// If extend mode and already connected, just call coin-auth with extend flag
@@ -524,14 +528,14 @@ function saveVoucherAndLogin() {
 					.then(function(result) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						showConnectedState(durationMin * 60);
+						showConnectedState(durationSec);
 						// Submit login to MikroTik in background (via iframe)
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					}).catch(function(err) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						showConnectedState(durationMin * 60);
+						showConnectedState(durationSec);
 						document.getElementById('voucherInput').value = macNoColon;
 						setTimeout(function() { doLogin(); }, 500);
 					});

@@ -132,6 +132,29 @@ router.get('/check-session', (req: Request, res: Response) => {
   }
 });
 
+router.post('/logout', (req: Request, res: Response) => {
+  try {
+    const mac = String(req.body.mac || req.query.mac || '').trim().toLowerCase().replace(/-/g, ':');
+    const routerId = parseInt(String(req.body.routerId || req.query.routerId || '1'), 10);
+
+    if (!mac || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) {
+      res.status(400).json({ error: 'Valid MAC is required' });
+      return;
+    }
+
+    const macNoColons = mac.replace(/:/g, '').toUpperCase();
+    const db = getDb();
+
+    db.prepare(
+      "UPDATE hotspot_users SET disabled = 1, expiry_at = NULL, updated_at = datetime('now') WHERE router_id = ? AND username = ?"
+    ).run(routerId, macNoColons);
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.use(authMiddleware);
 
 function getFolderRoot(folder?: string): string {

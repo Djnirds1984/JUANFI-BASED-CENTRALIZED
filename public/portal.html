@@ -240,7 +240,8 @@ body#loginBody {
 
 <body id="loginBody">
 
-    <form name="sendin" action="" method="post" style="display:none">
+    <iframe name="loginFrame" style="display:none"></iframe>
+    <form name="sendin" action="" method="post" target="loginFrame" style="display:none">
         <input type="hidden" name="username" />
         <input type="hidden" name="password" />
         <input type="hidden" name="dst" value="/status" />

@@ -308,9 +308,12 @@ function doLogin() {
 
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
-	// Use absolute panel URL so MikroTik redirects back to portal, not its own status page
-	document.sendin.dst.value = window.location.origin + window.location.pathname + window.location.search;
+	document.sendin.dst.value = '/status';
+	// Submit to hidden iframe so portal page stays put — no redirect to status.html
+	document.sendin.target = 'loginFrame';
 	document.sendin.submit();
+	// Wait for MikroTik auth to complete, then show connected state
+	setTimeout(function() { checkSessionState(); }, 2000);
 	return false;
 }
 

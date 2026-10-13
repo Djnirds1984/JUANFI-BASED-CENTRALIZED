@@ -362,9 +362,10 @@ export interface HotspotFile {
   size: number;
 }
 
-export function listHotspotFiles(): HotspotFile[] {
-  const root = path.join(__dirname, '..', 'hotspot');
+export function listHotspotFiles(folder?: string): HotspotFile[] {
+  const root = path.join(__dirname, '..', folder === 'stub' ? 'stub' : 'hotspot');
   const files: HotspotFile[] = [];
+  if (!fs.existsSync(root)) return files;
   const walk = (dir: string, prefix: string) => {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const e of entries) {
@@ -383,11 +384,12 @@ export function listHotspotFiles(): HotspotFile[] {
   return files;
 }
 
-export function getPortalDefaultContent(filePath: string): string | null {
-  const fullPath = path.join(__dirname, '..', 'hotspot', filePath);
-  const realHotspot = path.resolve(__dirname, '..', 'hotspot');
+export function getPortalDefaultContent(filePath: string, folder?: string): string | null {
+  const root = path.join(__dirname, '..', folder === 'stub' ? 'stub' : 'hotspot');
+  const fullPath = path.join(root, filePath);
+  const realRoot = path.resolve(root);
   const realFull = path.resolve(fullPath);
-  if (!realFull.startsWith(realHotspot + path.sep) && realFull !== realHotspot) return null;
+  if (!realFull.startsWith(realRoot + path.sep) && realFull !== realRoot) return null;
   try {
     return fs.readFileSync(realFull, 'utf8');
   } catch {

@@ -288,28 +288,28 @@ class ApiClient {
     return this.get(`/monitoring/router/${routerId}/traffic`);
   }
 
-  async getPortalFiles() {
-    return this.get('/portal');
+  async getPortalFiles(folder = 'hotspot') {
+    return this.get(`/portal?folder=${encodeURIComponent(folder)}`);
   }
 
-  async getPortalFile(name) {
-    return this.get(`/portal/file/${encodeURIComponent(name)}`);
+  async getPortalFile(name, folder = 'hotspot') {
+    return this.get(`/portal/file/${encodeURIComponent(name)}?folder=${encodeURIComponent(folder)}`);
   }
 
-  async savePortalFile(name, content) {
-    return this.put(`/portal/file/${encodeURIComponent(name)}`, { content });
+  async savePortalFile(name, content, folder = 'hotspot') {
+    return this.put(`/portal/file/${encodeURIComponent(name)}?folder=${encodeURIComponent(folder)}`, { content });
   }
 
-  async resetPortalFile(name) {
-    return this.post(`/portal/reset/${encodeURIComponent(name)}`);
+  async resetPortalFile(name, folder = 'hotspot') {
+    return this.post(`/portal/reset/${encodeURIComponent(name)}?folder=${encodeURIComponent(folder)}`);
   }
 
-  async pushPortalFile(routerId, filePath) {
-    return this.post(`/portal/push-file/${routerId}`, { file: filePath });
+  async pushPortalFile(routerId, filePath, folder = 'hotspot') {
+    return this.post(`/portal/push-file/${routerId}`, { file: filePath, folder });
   }
 
-  async pushPortalFiles(routerId) {
-    return this.post(`/portal/push/${routerId}`, {});
+  async pushPortalFiles(routerId, folder = 'hotspot') {
+    return this.post(`/portal/push/${routerId}`, { folder });
   }
 
   async getSubVendoConfig() {

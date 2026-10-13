@@ -4,22 +4,28 @@ import fs from 'fs';
 import { getPortalDefaultContent, listHotspotFiles, EDITABLE_EXTENSIONS } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
+import { config } from '../config';
+import { getDb } from '../database';
 
 const router = Router();
 
 router.use(authMiddleware);
 
-const HOTSPOT_ROOT = path.resolve(__dirname, '..', '..', 'hotspot');
-
-function resolveDiskPath(filePath: string): string {
-  return path.join(HOTSPOT_ROOT, filePath.replace(/\\/g, '/'));
+function getFolderRoot(folder?: string): string {
+  return path.resolve(__dirname, '..', '..', folder === 'stub' ? 'stub' : 'hotspot');
 }
 
-function validatePortalPath(filePath: string): boolean {
+function resolveDiskPath(filePath: string, folder?: string): string {
+  const root = getFolderRoot(folder);
+  return path.join(root, filePath.replace(/\\/g, '/'));
+}
+
+function validatePortalPath(filePath: string, folder?: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
   if (normalized.includes('..')) return false;
-  const full = path.resolve(HOTSPOT_ROOT, normalized);
-  return full.startsWith(HOTSPOT_ROOT + path.sep) || full === HOTSPOT_ROOT;
+  const root = getFolderRoot(folder);
+  const full = path.resolve(root, normalized);
+  return full.startsWith(root + path.sep) || full === root;
 }
 
 function isEditable(filePath: string): boolean {
@@ -27,11 +33,27 @@ function isEditable(filePath: string): boolean {
   return EDITABLE_EXTENSIONS.has(ext);
 }
 
+function getFolder(req: Request): string {
+  const folder = (req.query.folder as string) || (req.body && req.body.folder) || 'hotspot';
+  return folder === 'stub' ? 'stub' : 'hotspot';
+}
+
+function replaceStubPlaceholders(content: string, routerId: number): string {
+  const panelIp = config.controllerLanIp || config.host;
+  const panelPort = config.port;
+  return content
+    .replace(/ROUTER_ID_PLACEHOLDER/g, String(routerId))
+    .replace(/PANEL_URL_PLACEHOLDER/g, panelIp)
+    .replace(/:3000/g, `:${panelPort}`);
+}
+
 router.get('/', (req: Request, res: Response) => {
   try {
-    const files = listHotspotFiles();
+    const folder = getFolder(req);
+    const files = listHotspotFiles(folder);
+    const root = getFolderRoot(folder);
     const result = files.map((f) => {
-      const diskPath = resolveDiskPath(f.path);
+      const diskPath = resolveDiskPath(f.path, folder);
       let mtime: string | null = null;
       try {
         mtime = fs.statSync(diskPath).mtime.toISOString();
@@ -44,7 +66,7 @@ router.get('/', (req: Request, res: Response) => {
       };
     });
 
-    res.json({ files: result });
+    res.json({ files: result, folder });
   } catch (error) {
     console.error('Get portal files error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -53,8 +75,9 @@ router.get('/', (req: Request, res: Response) => {
 
 router.get('/file/*', (req: Request, res: Response) => {
   try {
+    const folder = getFolder(req);
     const filePath = req.params[0];
-    if (!validatePortalPath(filePath)) {
+    if (!validatePortalPath(filePath, folder)) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }
@@ -63,7 +86,7 @@ router.get('/file/*', (req: Request, res: Response) => {
       return;
     }
 
-    const diskPath = resolveDiskPath(filePath);
+    const diskPath = resolveDiskPath(filePath, folder);
     let content: string | null = null;
     let mtime: string | null = null;
 
@@ -73,7 +96,7 @@ router.get('/file/*', (req: Request, res: Response) => {
     } catch {}
 
     if (content === null) {
-      content = getPortalDefaultContent(filePath);
+      content = getPortalDefaultContent(filePath, folder);
       if (content === null) {
         res.status(404).json({ error: 'File not found' });
         return;
@@ -89,8 +112,9 @@ router.get('/file/*', (req: Request, res: Response) => {
 
 router.put('/file/*', (req: Request, res: Response) => {
   try {
+    const folder = getFolder(req);
     const filePath = req.params[0];
-    if (!validatePortalPath(filePath)) {
+    if (!validatePortalPath(filePath, folder)) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }
@@ -105,7 +129,7 @@ router.put('/file/*', (req: Request, res: Response) => {
       return;
     }
 
-    const diskPath = resolveDiskPath(filePath);
+    const diskPath = resolveDiskPath(filePath, folder);
     fs.mkdirSync(path.dirname(diskPath), { recursive: true });
     fs.writeFileSync(diskPath, content, 'utf8');
 
@@ -118,8 +142,9 @@ router.put('/file/*', (req: Request, res: Response) => {
 
 router.post('/reset/*', (req: Request, res: Response) => {
   try {
+    const folder = getFolder(req);
     const filePath = req.params[0];
-    if (!validatePortalPath(filePath)) {
+    if (!validatePortalPath(filePath, folder)) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }
@@ -128,13 +153,13 @@ router.post('/reset/*', (req: Request, res: Response) => {
       return;
     }
 
-    const content = getPortalDefaultContent(filePath);
+    const content = getPortalDefaultContent(filePath, folder);
     if (content === null) {
       res.status(500).json({ error: 'Default template not found on server' });
       return;
     }
 
-    const diskPath = resolveDiskPath(filePath);
+    const diskPath = resolveDiskPath(filePath, folder);
     fs.mkdirSync(path.dirname(diskPath), { recursive: true });
     fs.writeFileSync(diskPath, content, 'utf8');
 
@@ -158,13 +183,14 @@ router.post('/push-file/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
+    const folder = getFolder(req);
     const { file: filePath } = req.body;
     if (!filePath || typeof filePath !== 'string') {
       res.status(400).json({ error: 'file is required' });
       return;
     }
 
-    if (!validatePortalPath(filePath)) {
+    if (!validatePortalPath(filePath, folder)) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }
@@ -173,21 +199,24 @@ router.post('/push-file/:routerId', async (req: Request, res: Response) => {
     const editable = isEditable(filePath);
 
     if (editable) {
-      const diskPath = resolveDiskPath(filePath);
+      const diskPath = resolveDiskPath(filePath, folder);
       let content: string;
       try {
         content = fs.readFileSync(diskPath, 'utf8');
       } catch {
-        const def = getPortalDefaultContent(filePath);
+        const def = getPortalDefaultContent(filePath, folder);
         if (!def) {
           res.status(404).json({ error: 'File not found' });
           return;
         }
         content = def;
       }
+      if (folder === 'stub') {
+        content = replaceStubPlaceholders(content, routerId);
+      }
       await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
     } else {
-      const fullPath = path.join(HOTSPOT_ROOT, filePath);
+      const fullPath = path.join(getFolderRoot(folder), filePath);
       const data = fs.readFileSync(fullPath);
       await mikroTikService.uploadFileSFTP(routerId, routerPath, data);
     }
@@ -212,28 +241,33 @@ router.post('/push/:routerId', async (req: Request, res: Response) => {
       return;
     }
 
-    const allFiles = listHotspotFiles();
+    const folder = getFolder(req);
+    const root = getFolderRoot(folder);
+    const allFiles = listHotspotFiles(folder);
     const results: { file: string; ok: boolean; error?: string }[] = [];
 
     for (const f of allFiles) {
       try {
         const routerPath = `hotspot/${f.path}`;
         if (f.editable) {
-          const diskPath = resolveDiskPath(f.path);
+          const diskPath = resolveDiskPath(f.path, folder);
           let content: string;
           try {
             content = fs.readFileSync(diskPath, 'utf8');
           } catch {
-            const def = getPortalDefaultContent(f.path);
+            const def = getPortalDefaultContent(f.path, folder);
             if (!def) {
               results.push({ file: f.path, ok: false, error: 'File not found' });
               continue;
             }
             content = def;
           }
+          if (folder === 'stub') {
+            content = replaceStubPlaceholders(content, routerId);
+          }
           await mikroTikService.uploadFileSFTP(routerId, routerPath, content);
         } else {
-          const fullPath = path.join(HOTSPOT_ROOT, f.path);
+          const fullPath = path.join(root, f.path);
           const data = fs.readFileSync(fullPath);
           await mikroTikService.uploadFileSFTP(routerId, routerPath, data);
         }

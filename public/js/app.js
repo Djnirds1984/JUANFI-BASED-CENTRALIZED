@@ -5020,9 +5020,17 @@ const App = {
     }
     this.portalDirty = false;
 
+    // Initialize portal tab if not set
+    if (!this.portalActiveTab) {
+      this.portalActiveTab = 'mikrotik';
+    }
+
+    const activeTab = this.portalActiveTab;
+    const folder = activeTab === 'mikrotik' ? 'hotspot' : 'stub';
+
     let filesData = [];
     try {
-      const res = await api.getPortalFiles();
+      const res = await api.getPortalFiles(folder);
       filesData = res.files || [];
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -5055,7 +5063,7 @@ const App = {
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>Hotspot Portal Files</h3>
+          <h3>${activeTab === 'mikrotik' ? 'MikroTik Portal Files' : 'Panel Portal Files (Stub)'}</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
             ${routers.length > 0 ? `
               <select id="portal-router-select" class="btn btn-outline">
@@ -5064,6 +5072,14 @@ const App = {
               <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push All to Router</button>
             ` : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>'}
           </div>
+        </div>
+        <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color,#e0e0e0);padding:0 1rem;background:var(--bg-secondary,#f5f5f5)">
+          <button class="portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'mikrotik' ? 'white' : 'transparent'};color:${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'mikrotik' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
+            &#128196; MikroTik Portal
+          </button>
+          <button class="portal-tab ${activeTab === 'panel' ? 'active' : ''}" onclick="App.switchPortalTab('panel')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'panel' ? 'white' : 'transparent'};color:${activeTab === 'panel' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'panel' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'panel' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
+            &#128279; Panel Portal (Stub)
+          </button>
         </div>
         <div class="portal-main-layout">
           <div class="portal-file-list" id="portal-file-list">
@@ -5147,6 +5163,19 @@ const App = {
     }
   },
 
+  switchPortalTab(tab) {
+    if (tab === this.portalActiveTab) return;
+    if (this.portalDirty && !confirm('You have unsaved changes. Switching tabs will discard them. Continue?')) return;
+    this.portalDirty = false;
+    this.portalActiveTab = tab;
+    this.portalCurrentFile = null;
+    this.renderPortal();
+  },
+
+  _portalFolder() {
+    return this.portalActiveTab === 'panel' ? 'stub' : 'hotspot';
+  },
+
   async selectPortalFile(filePath, force = false) {
     if (!force && this.portalDirty && !confirm('You have unsaved changes. Switching files will discard them. Continue?')) {
       return;
@@ -5189,7 +5218,7 @@ const App = {
     fileInfo.textContent = filePath;
 
     try {
-      const row = await api.getPortalFile(filePath);
+      const row = await api.getPortalFile(filePath, this._portalFolder());
       this.portalCurrentFile = filePath;
       this.portalDirty = false;
       document.getElementById('portal-dirty').style.visibility = 'hidden';
@@ -5212,19 +5241,20 @@ const App = {
     const preview = document.getElementById('portal-preview');
     if (!preview || !this.portalCurrentFile) return;
     try {
-      const res = await api.getPortalFile(this.portalCurrentFile);
+      const res = await api.getPortalFile(this.portalCurrentFile, this._portalFolder());
       let html = res.content;
       if (this._portalPreviewTheme) {
         html = PortalThemes.applyTheme(html, PortalThemes.getTheme(this._portalPreviewTheme));
       }
       html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
       html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
+      const assetsBase = this.portalActiveTab === 'panel' ? '/stub-assets/' : '/hotspot-assets/';
       if (html.includes('<head>')) {
-        html = html.replace('<head>', '<head><base href="/hotspot-assets/">');
+        html = html.replace('<head>', `<head><base href="${assetsBase}">`);
       } else if (html.includes('<html')) {
-        html = html.replace(/<html[^>]*>/i, (m) => m + '<head><base href="/hotspot-assets/"></head>');
+        html = html.replace(/<html[^>]*>/i, (m) => m + `<head><base href="${assetsBase}"></head>`);
       } else {
-        html = '<base href="/hotspot-assets/">' + html;
+        html = `<base href="${assetsBase}">` + html;
       }
       preview.srcdoc = html;
     } catch (err) {
@@ -5243,7 +5273,7 @@ const App = {
     const editor = document.getElementById('portal-editor');
     if (!editor) return;
     try {
-      await api.savePortalFile(this.portalCurrentFile, editor.value);
+      await api.savePortalFile(this.portalCurrentFile, editor.value, this._portalFolder());
       this.portalDirty = false;
       document.getElementById('portal-dirty').style.visibility = 'hidden';
       this.toast(`${this.portalCurrentFile} saved`, 'success');
@@ -5260,7 +5290,7 @@ const App = {
     }
     if (this.portalDirty && !confirm('You have unsaved changes. Upload will use the last saved version. Continue?')) return;
     try {
-      const res = await api.pushPortalFile(routerId, this.portalCurrentFile);
+      const res = await api.pushPortalFile(routerId, this.portalCurrentFile, this._portalFolder());
       this.toast(res.message || `${this.portalCurrentFile} uploaded to router`, 'success');
     } catch (err) {
       this.toast(err.message, 'error');
@@ -5270,7 +5300,7 @@ const App = {
   async resetPortalFile() {
     if (!confirm(`Reset ${this.portalCurrentFile} to the default template? Unsaved changes will be lost.`)) return;
     try {
-      await api.resetPortalFile(this.portalCurrentFile);
+      await api.resetPortalFile(this.portalCurrentFile, this._portalFolder());
       await this.selectPortalFile(this.portalCurrentFile, true);
       this.toast(`${this.portalCurrentFile} reset to default`, 'success');
     } catch (err) {
@@ -5347,12 +5377,13 @@ const App = {
     if (!confirm(`Apply "${label}" theme? This will overwrite login.html, status.html, and logout.html with the themed versions. You can revert by applying the Default (JuanFi) theme.`)) return;
 
     try {
-      const loginHtml = await api.getPortalFile('login.html');
-      const statusHtml = await api.getPortalFile('status.html');
-      const logoutHtml = await api.getPortalFile('logout.html');
-      await api.savePortalFile('login.html', PortalThemes.applyTheme(loginHtml.content, theme));
-      await api.savePortalFile('status.html', PortalThemes.applyTheme(statusHtml.content, theme));
-      await api.savePortalFile('logout.html', PortalThemes.applyTheme(logoutHtml.content, theme));
+      const folder = this._portalFolder();
+      const loginHtml = await api.getPortalFile('login.html', folder);
+      const statusHtml = await api.getPortalFile('status.html', folder);
+      const logoutHtml = await api.getPortalFile('logout.html', folder);
+      await api.savePortalFile('login.html', PortalThemes.applyTheme(loginHtml.content, theme), folder);
+      await api.savePortalFile('status.html', PortalThemes.applyTheme(statusHtml.content, theme), folder);
+      await api.savePortalFile('logout.html', PortalThemes.applyTheme(logoutHtml.content, theme), folder);
       this.portalDirty = false;
       this._portalPreviewTheme = null;
       this.closePortalThemes();
@@ -5887,7 +5918,7 @@ Then join your network:
     if (!confirm(`Push ALL portal files (HTML, CSS, JS, config, images, sounds) to the router's hotspot folder? This overwrites everything in the hotspot directory.`)) return;
 
     try {
-      const res = await api.pushPortalFiles(routerId);
+      const res = await api.pushPortalFiles(routerId, this._portalFolder());
       const failed = (res.results || []).filter((r) => !r.ok);
       if (failed.length === 0) {
         this.toast(res.message || 'All files pushed to router hotspot folder', 'success');

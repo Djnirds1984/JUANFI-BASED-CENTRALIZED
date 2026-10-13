@@ -413,7 +413,7 @@ const App = {
                       <strong>${this.escapeHtml(r.name)}</strong>
                       ${r.use_rest_api ? '<span class="status-badge" style="background:#6366f1;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">REST</span>' : ''}
                       ${r.auth_mode === 'radius' ? '<span class="status-badge" style="background:#059669;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">RADIUS</span>' : ''}
-                      ${r.portal_mode === 'radius' ? '<span class="status-badge" style="background:#8b5cf6;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">Portal:RADIUS</span>' : ''}
+                      ${r.portal_mode === 'stub' ? '<span class="status-badge" style="background:#8b5cf6;color:#fff;font-size:0.625rem;padding:0.125rem 0.375rem;margin-left:0.375rem">Panel Portal</span>' : ''}
                     </td>
                     <td>${this.escapeHtml(r.host)}</td>
                     <td>${r.port}</td>
@@ -495,15 +495,15 @@ const App = {
           <label>Portal Mode</label>
           <div style="display:flex;gap:1rem;align-items:center">
             <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
-              <input type="radio" name="portal_mode" value="local" checked style="width:auto;margin:0">
-              Local (MikroTik hosts portal)
+              <input type="radio" name="portal_mode" value="mikrotik" checked style="width:auto;margin:0">
+              MikroTik-hosted
             </label>
             <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
-              <input type="radio" name="portal_mode" value="radius" style="width:auto;margin:0">
-              RADIUS (Panel hosts portal)
+              <input type="radio" name="portal_mode" value="stub" style="width:auto;margin:0">
+              Panel-hosted (stub redirect)
             </label>
           </div>
-          <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: portal files served from this panel, panel handles all auth. Requires RADIUS auth mode.</small>
+          <small style="color:var(--text-secondary);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
         </div>
         <div id="radius-secret-group" class="form-group" style="display:none">
           <label>RADIUS Shared Secret</label>
@@ -571,7 +571,7 @@ const App = {
     try {
       const router = await api.getRouter(routerId);
       const currentMode = router.auth_mode || 'api';
-      const currentPortalMode = router.portal_mode || 'local';
+      const currentPortalMode = router.portal_mode || 'mikrotik';
       this.openModal('Edit Router', `
         <form id="edit-router-form">
           <div class="form-group">
@@ -623,15 +623,15 @@ const App = {
             <label>Portal Mode</label>
             <div style="display:flex;gap:1rem;align-items:center">
               <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
-                <input type="radio" name="portal_mode" value="local" ${currentPortalMode === 'local' ? 'checked' : ''} style="width:auto;margin:0">
-                Local (MikroTik hosts portal)
+                <input type="radio" name="portal_mode" value="mikrotik" ${currentPortalMode === 'mikrotik' ? 'checked' : ''} style="width:auto;margin:0">
+                MikroTik-hosted
               </label>
               <label style="display:flex;align-items:center;gap:0.375rem;cursor:pointer">
-                <input type="radio" name="portal_mode" value="radius" ${currentPortalMode === 'radius' ? 'checked' : ''} style="width:auto;margin:0">
-                RADIUS (Panel hosts portal)
+                <input type="radio" name="portal_mode" value="stub" ${currentPortalMode === 'stub' ? 'checked' : ''} style="width:auto;margin:0">
+                Panel-hosted (stub redirect)
               </label>
             </div>
-            <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: portal files served from this panel, panel handles all auth. Requires RADIUS auth mode.</small>
+            <small style="color:var(--text-secondary);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
           </div>
           <div id="radius-secret-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
             <label>RADIUS Shared Secret</label>

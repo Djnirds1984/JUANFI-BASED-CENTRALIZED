@@ -305,6 +305,18 @@ function doLogin() {
 	}
 
 	if (!vc) { alert('Please enter a voucher code'); return false; }
+	
+	// Validate required CHAP parameters
+	if (!chapId || !chapChallenge) {
+		alert('Login parameters missing. Please access portal through MikroTik redirect.');
+		return false;
+	}
+	
+	// Validate login URL
+	if (!linkLoginOnly) {
+		alert('Login URL not configured. Please access portal through MikroTik redirect.');
+		return false;
+	}
 
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);

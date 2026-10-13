@@ -355,8 +355,13 @@ function authenticateUser(routerId: number, username: string): AuthResult {
 
     if (user) {
       if (user.expiry_at) {
-        const now = new Date().toISOString();
-        if (user.expiry_at < now) {
+        // Compare as timestamps, NOT strings. `expiry_at` is stored as
+        // `YYYY-MM-DD HH:MM:SS` (space separator) while toISOString() uses `T`;
+        // a string compare makes ' ' < 'T', so any expiry on the same calendar
+        // day was wrongly treated as expired -> Access-Reject (no time ever
+        // applied in RADIUS mode).
+        const expiryMs = new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime();
+        if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) {
           return { accept: false, replyAttributes: [] };
         }
       }
@@ -393,7 +398,7 @@ function authenticateUser(routerId: number, username: string): AuthResult {
         profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
         console.log(`[RADIUS] Hotspot user ${username} matched voucher: duration=${voucher.duration_minutes}min, Session-Timeout=${voucher.duration_minutes * 60}s`);
       } else if (user.expiry_at) {
-        const expiryMs = new Date(user.expiry_at + 'Z').getTime();
+        const expiryMs = new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime();
         const remainingSec = Math.floor((expiryMs - Date.now()) / 1000);
         if (remainingSec > 0) {
           profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
@@ -613,7 +618,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
            WHERE router_id = ? AND username = ? AND disabled = 0 LIMIT 1`
         ).get(client.router_id, user) as any;
         if (paid?.expiry_at) {
-          const remainingPaid = Math.floor((new Date(paid.expiry_at + 'Z').getTime() - Date.now()) / 1000);
+          const remainingPaid = Math.floor((new Date(String(paid.expiry_at).replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000);
           // Safety net for routers where the coin-auth CoA was missed:
           // re-sync only when the delta is significant and not sent recently.
           const lastSent = lastCoASent.get(`${client.router_id}:${session}`) || { value: 0, at: 0 };

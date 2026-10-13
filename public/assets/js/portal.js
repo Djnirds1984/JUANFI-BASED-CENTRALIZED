@@ -31,11 +31,6 @@ var isExtendMode = false;
 
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
-	console.log('[portal] === PORTAL INITIALIZED ===');
-	console.log('[portal] URL parameters - mac:', mac, 'ip:', ip, 'routerId:', routerId);
-	console.log('[portal] CHAP params - chapId:', chapId ? 'present' : 'MISSING', 'chapChallenge:', chapChallenge ? 'present' : 'MISSING');
-	console.log('[portal] linkLoginOnly:', linkLoginOnly || 'MISSING');
-	
 	document.getElementById('ip-display').textContent = ip || '-';
 	document.getElementById('mac-display').textContent = mac || '-';
 	document.sendin.action = linkLoginOnly;
@@ -187,7 +182,7 @@ function loadVendoConfig() {
 			populateVendoSelect('connectedVendoSelected', 'connectedVendoSelectDiv', cfg);
 			updateActionButtons();
 		})
-		.catch(function(e) { console.error('Failed to load vendo config:', e); });
+		.catch(function() {});
 }
 
 function populateVendoSelect(selectId, divId, cfg) {
@@ -300,34 +295,28 @@ function errorMsg(code) { return errorCodeMap[code] || code || 'Unknown error'; 
 
 // ---- Login ----
 function doLogin() {
-	console.log('[portal] doLogin called');
 	var vc = document.getElementById('voucherInput').value.trim();
-	console.log('[portal] Voucher input:', vc, 'macAsVoucherCode:', macAsVoucherCode);
 
 	if (macAsVoucherCode && vc === '') {
 		var macNoColon = replaceAll(mac, ':');
 		document.getElementById('voucherInput').value = macNoColon;
 		vc = macNoColon;
-		console.log('[portal] Using MAC as voucher code:', vc);
 	}
 
 	if (!vc) { alert('Please enter a voucher code'); return false; }
 	
 	// Validate required CHAP parameters
 	if (!chapId || !chapChallenge) {
-		console.error('[portal] Missing CHAP parameters - chapId:', chapId, 'chapChallenge:', chapChallenge);
 		alert('Login parameters missing. Please access portal through MikroTik redirect.');
 		return false;
 	}
 	
 	// Validate login URL
 	if (!linkLoginOnly) {
-		console.error('[portal] Missing linkLoginOnly parameter');
 		alert('Login URL not configured. Please access portal through MikroTik redirect.');
 		return false;
 	}
 
-	console.log('[portal] Submitting login to MikroTik - username:', vc, 'action:', linkLoginOnly);
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
 	document.sendin.dst.value = linkStatus;
@@ -467,7 +456,7 @@ function checkCoin() {
 				hideModal('coinModal');
 			}
 		})
-		.catch(function() { console.error('checkCoin error'); });
+		.catch(function() {});
 }
 
 function saveVoucherAndLogin() {
@@ -547,7 +536,6 @@ function saveVoucherAndLogin() {
 			}
 		})
 		.catch(function(err) {
-			console.error('[saveVoucher] useVoucher error:', err);
 			saveBtn.disabled = false;
 			saveBtn.textContent = 'SAVE';
 			if (totalCoinReceived > 0) {
@@ -577,7 +565,7 @@ function refreshSessionAfterExtend() {
 				updateCountdownDisplay();
 			}
 		})
-		.catch(function(e) { console.error('Session refresh failed:', e); });
+		.catch(function() {});
 }
 
 // ---- PROMO RATES ----

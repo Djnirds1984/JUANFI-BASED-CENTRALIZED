@@ -101,7 +101,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const db = getDb();
     const mode = auth_mode === 'radius' ? 'radius' : 'api';
-    const pMode = portal_mode === 'radius' ? 'radius' : 'local';
+    const pMode = portal_mode === 'stub' ? 'stub' : 'mikrotik';
     const result = db
       .prepare(
         'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -188,7 +188,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
 
     const newMode = auth_mode !== undefined ? (auth_mode === 'radius' ? 'radius' : 'api') : existing.auth_mode;
-    const newPortalMode = portal_mode !== undefined ? (portal_mode === 'radius' ? 'radius' : 'local') : existing.portal_mode;
+    const newPortalMode = portal_mode !== undefined ? (portal_mode === 'stub' ? 'stub' : 'mikrotik') : existing.portal_mode;
 
     db.prepare(
       `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, portal_mode = ?, updated_at = datetime('now') WHERE id = ?`

@@ -253,8 +253,10 @@ export function initializeDatabase(): void {
     db.exec("ALTER TABLE routers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api'");
   }
   if (!columns.some((c: any) => c.name === 'portal_mode')) {
-    db.exec("ALTER TABLE routers ADD COLUMN portal_mode TEXT NOT NULL DEFAULT 'local'");
+    db.exec("ALTER TABLE routers ADD COLUMN portal_mode TEXT NOT NULL DEFAULT 'mikrotik'");
   }
+  // Migrate old portal_mode values to new values
+  db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];
   if (!sessCols.some((c: any) => c.name === 'mac_address')) {

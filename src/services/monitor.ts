@@ -82,17 +82,6 @@ export function reconnectRouters(): void {
       .connect(conn)
       .then(async () => {
         console.log(`Connected to router: ${router.name}`);
-        if (router.portal_mode === 'radius') {
-          const radiusClient = db.prepare('SELECT shared_secret FROM radius_clients WHERE router_id = ? AND is_active = 1').get(router.id) as any;
-          const panelIp = config.controllerLanIp || config.host;
-          if (radiusClient && panelIp && panelIp !== '0.0.0.0') {
-            try {
-              await mikroTikService.configureRadiusOnRouter(router.id, panelIp, radiusClient.shared_secret);
-            } catch (err: any) {
-              console.warn(`Could not push RADIUS config to router ${router.name}: ${err.message}`);
-            }
-          }
-        }
       })
       .catch((err: any) => console.warn(`Could not connect to router ${router.name}: ${err.message}`));
   }

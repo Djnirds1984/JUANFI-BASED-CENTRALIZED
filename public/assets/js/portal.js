@@ -154,25 +154,20 @@ function updateCountdownDisplay() {
 // ---- Session Check ----
 function checkSessionState() {
 	if (!mac || !routerId) {
-		console.log('[checkSessionState] Missing mac or routerId, showing disconnected');
 		showDisconnectedState();
 		return;
 	}
-	console.log('[checkSessionState] Checking session for mac=' + mac + ', routerId=' + routerId);
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
-			console.log('[checkSessionState] Response:', JSON.stringify(data));
 			if (data.hasSession && data.remainingSeconds > 0) {
-				console.log('[checkSessionState] Has session, showing connected with ' + data.remainingSeconds + 's');
 				showConnectedState(data.remainingSeconds);
 			} else {
-				console.log('[checkSessionState] No valid session, showing disconnected');
 				showDisconnectedState();
 			}
 		})
 		.catch(function(e) {
-			console.error('[checkSessionState] Session check failed:', e);
+			console.error('Session check failed:', e);
 			showDisconnectedState();
 		});
 }

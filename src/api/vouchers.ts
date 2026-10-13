@@ -3,22 +3,18 @@ import crypto from 'crypto';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
+import { mikrotikTimeToSeconds } from '../services/deviceSessions';
 
 const router = Router();
 
-/** MikroTik time (`00:45:10`, `1d02:30:00`, `02:30:00`) -> seconds. */
+/**
+ * MikroTik time (`8m18s`, `1h2m3s`, `00:45:10`, `1d02:30:00`) -> seconds.
+ * Uses the shared parser (RouterOS returns compact durations like `8m18s`);
+ * empty / `infinity` counts as 0 here.
+ */
 function mikrotikUptimeToSeconds(value: any): number {
-  const str = String(value || '').trim();
-  if (!str) return 0;
-  const daysMatch = str.match(/^(\d+)d/);
-  const days = daysMatch ? parseInt(daysMatch[1], 10) : 0;
-  const clock = str.includes(':') ? str.slice(str.indexOf(':') - 2) : str;
-  const parts = clock.split(':').map((p) => parseInt(p, 10) || 0);
-  let seconds = days * 86400;
-  if (parts.length === 3) seconds += parts[0] * 3600 + parts[1] * 60 + parts[2];
-  else if (parts.length === 2) seconds += parts[0] * 60 + parts[1];
-  else if (parts.length === 1 && !daysMatch) seconds += parts[0] || 0;
-  return Math.max(0, seconds);
+  const seconds = mikrotikTimeToSeconds(value);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
 }
 
 /** Seconds -> MikroTik `limit-uptime` value (`00:45:10` / `1d02:30:00`). */

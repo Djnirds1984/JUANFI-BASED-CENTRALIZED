@@ -27,11 +27,34 @@ export function isValidToken(token: any): token is string {
   return typeof token === 'string' && /^[a-f0-9]{48}$/.test(token);
 }
 
-/** MikroTik time (`00:45:10`, `1d02:30:00`, `infinity`, ``) -> seconds. */
+/**
+ * MikroTik/RouterOS time -> seconds.
+ *
+ * RouterOS returns `session-time-left` / `limit-uptime` in the duration form
+ * `1w2d3h4m5s` (e.g. `8m18s`, `1h2m3s`), while some firmware/CLI paths use the
+ * clock form `HH:MM:SS` / `NdHH:MM:SS`. Handle both, plus `infinity` / ``.
+ *
+ * NOTE: reading only the leading digits (the old behaviour) turned `8m18s`
+ * into `8` seconds - which is why the portal showed ~8s while the panel showed
+ * 08:18.
+ */
 export function mikrotikTimeToSeconds(value: any): number {
-  const str = String(value || '').trim().toLowerCase();
+  const str = String(value ?? '').trim().toLowerCase();
   if (!str || str === 'infinity' || str === 'unlimited') return Infinity;
 
+  // Duration form: 1w2d3h4m5s (any subset, in that order).
+  const dur = str.match(/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (dur && (dur[1] || dur[2] || dur[3] || dur[4] || dur[5])) {
+    return (
+      (parseInt(dur[1] || '0', 10) * 604800) +
+      (parseInt(dur[2] || '0', 10) * 86400) +
+      (parseInt(dur[3] || '0', 10) * 3600) +
+      (parseInt(dur[4] || '0', 10) * 60) +
+      parseInt(dur[5] || '0', 10)
+    );
+  }
+
+  // Clock form: [Nd]HH:MM:SS or MM:SS.
   const daysMatch = str.match(/^(\d+)d/);
   const days = daysMatch ? parseInt(daysMatch[1], 10) : 0;
 

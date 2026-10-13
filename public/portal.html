@@ -928,10 +928,9 @@ body#loginBody {
 
 			function saveVoucherAndLogin() {
 				if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
+				var macNoColon = replaceAll(mac, ':');
 				localStorage.setItem('activeVoucher', voucher);
-				document.getElementById('voucherInput').value = voucher;
 
-				// Show loading state
 				var saveBtn = document.getElementById('coinSaveBtn');
 				saveBtn.disabled = true;
 				saveBtn.textContent = 'SAVING...';
@@ -943,7 +942,6 @@ body#loginBody {
 						if (data.status === 'true') {
 							totalCoinReceived = 0;
 							localStorage.removeItem('totalCoinReceived');
-							var macNoColon = replaceAll(mac, ':');
 							console.log('[saveVoucher] Calling coin-auth with mac=' + macNoColon + ', duration=' + data.validity + ', routerId=' + routerId);
 							fetch(window.location.origin + '/api/vouchers/coin-auth', {
 								method: 'POST',
@@ -956,12 +954,13 @@ body#loginBody {
 								console.log('[saveVoucher] coin-auth result:', result);
 								hideModal('coinModal');
 								saveBtn.textContent = 'SAVE';
+								document.getElementById('voucherInput').value = macNoColon;
 								setTimeout(function() { doLogin(); }, 500);
 							}).catch(function(err) {
 								console.error('[saveVoucher] coin-auth error:', err);
 								hideModal('coinModal');
 								saveBtn.textContent = 'SAVE';
-								alert('Session created locally. Logging in...');
+								document.getElementById('voucherInput').value = macNoColon;
 								setTimeout(function() { doLogin(); }, 500);
 							});
 						} else {
@@ -977,6 +976,7 @@ body#loginBody {
 						if (totalCoinReceived > 0) {
 							alert('Vendo communication failed, but coins processed. Voucher: ' + voucher);
 							hideModal('coinModal');
+							document.getElementById('voucherInput').value = macNoColon;
 							setTimeout(function() { doLogin(); }, 1000);
 						} else {
 							alert('Failed to save voucher. Please try again.');

@@ -117,13 +117,6 @@ router.post('/', async (req: Request, res: Response) => {
       ).run(routerId, secret);
     }
 
-    if (pMode === 'radius' && mode !== 'radius') {
-      const secret = radius_shared_secret || crypto.randomBytes(16).toString('hex');
-      db.prepare(
-        'INSERT INTO radius_clients (router_id, shared_secret, is_active) VALUES (?, ?, 1)'
-      ).run(routerId, secret);
-    }
-
     const routerConn: RouterConnection = {
       id: routerId,
       name,
@@ -144,18 +137,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (mode === 'radius' && hasRadiusClients()) {
       startRadiusServer();
-    }
-
-    if (pMode === 'radius' && connected) {
-      const radiusClient = db.prepare('SELECT shared_secret FROM radius_clients WHERE router_id = ? AND is_active = 1').get(routerId) as any;
-      const panelIp = config.controllerLanIp || config.host;
-      if (radiusClient && panelIp && panelIp !== '0.0.0.0') {
-        try {
-          await mikroTikService.configureRadiusOnRouter(routerId, panelIp, radiusClient.shared_secret);
-        } catch (err) {
-          console.warn('Could not push RADIUS config to router:', err);
-        }
-      }
     }
 
     res.status(201).json({

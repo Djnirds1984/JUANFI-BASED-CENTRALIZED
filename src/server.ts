@@ -68,8 +68,24 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('*', (req, res) => {
+// Admin panel routes
+app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+app.get('/admin/*', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+// Portal route (for stub mode redirect target)
+app.get('/', (req, res) => {
+  // Serve portal page - this will be implemented in Phase 5
+  // For now, serve a placeholder
+  res.sendFile(path.join(__dirname, '..', 'public', 'portal.html'));
+});
+
+// Catch-all for 404
+app.get('*', (req, res) => {
+  res.status(404).sendFile(path.join(__dirname, '..', 'public', '404.html'));
 });
 
 io.on('connection', (socket) => {

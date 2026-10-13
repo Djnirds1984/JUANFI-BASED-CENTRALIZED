@@ -9,8 +9,8 @@
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <script src="/assets/js/md5.js"></script>
-    <script src="/assets/js/portal.js"></script>
+    <!-- Portal logic lives in its own file: /assets/js/portal.js (served from public/assets/js) -->
+    <!-- Scripts are loaded with defer at the end of <body> -->
 
 <style>
 :root {
@@ -401,6 +401,9 @@ body#loginBody {
 		</style>
 
 </div>
+	<!-- Portal logic: own JS file located in public/assets/js -->
+	<script src="/assets/js/md5.js" defer></script>
+	<script src="/assets/js/portal.js" defer></script>
 </body>
 
 </html>

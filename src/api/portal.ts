@@ -12,15 +12,24 @@ const router = Router();
 router.use(authMiddleware);
 
 function getFolderRoot(folder?: string): string {
+  if (folder === 'panel-page') {
+    return path.resolve(__dirname, '..', '..', 'public');
+  }
   return path.resolve(__dirname, '..', '..', folder === 'stub' ? 'stub' : 'hotspot');
 }
 
 function resolveDiskPath(filePath: string, folder?: string): string {
   const root = getFolderRoot(folder);
+  if (folder === 'panel-page') {
+    return path.join(root, 'portal.html');
+  }
   return path.join(root, filePath.replace(/\\/g, '/'));
 }
 
 function validatePortalPath(filePath: string, folder?: string): boolean {
+  if (folder === 'panel-page') {
+    return filePath === 'portal.html';
+  }
   const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
   if (normalized.includes('..')) return false;
   const root = getFolderRoot(folder);
@@ -35,7 +44,9 @@ function isEditable(filePath: string): boolean {
 
 function getFolder(req: Request): string {
   const folder = (req.query.folder as string) || (req.body && req.body.folder) || 'hotspot';
-  return folder === 'stub' ? 'stub' : 'hotspot';
+  if (folder === 'stub') return 'stub';
+  if (folder === 'panel-page') return 'panel-page';
+  return 'hotspot';
 }
 
 function replaceStubPlaceholders(content: string, routerId: number): string {
@@ -50,6 +61,29 @@ function replaceStubPlaceholders(content: string, routerId: number): string {
 router.get('/', (req: Request, res: Response) => {
   try {
     const folder = getFolder(req);
+
+    // Special case: panel-page folder only has portal.html
+    if (folder === 'panel-page') {
+      const portalPath = path.join(getFolderRoot('panel-page'), 'portal.html');
+      let mtime: string | null = null;
+      let size = 0;
+      try {
+        const stat = fs.statSync(portalPath);
+        mtime = stat.mtime.toISOString();
+        size = stat.size;
+      } catch {}
+      res.json({
+        files: [{
+          path: 'portal.html',
+          editable: true,
+          size,
+          modified: mtime,
+        }],
+        folder: 'panel-page',
+      });
+      return;
+    }
+
     const files = listHotspotFiles(folder);
     const root = getFolderRoot(folder);
     const result = files.map((f) => {

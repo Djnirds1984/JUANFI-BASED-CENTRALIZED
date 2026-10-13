@@ -5026,7 +5026,7 @@ const App = {
     }
 
     const activeTab = this.portalActiveTab;
-    const folder = activeTab === 'mikrotik' ? 'hotspot' : 'stub';
+    const folder = activeTab === 'stub' ? 'stub' : (activeTab === 'panel-page' ? 'panel-page' : 'hotspot');
 
     let filesData = [];
     try {
@@ -5063,22 +5063,25 @@ const App = {
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>${activeTab === 'mikrotik' ? 'MikroTik Portal Files' : 'Panel Portal Files (Stub)'}</h3>
+          <h3>${activeTab === 'mikrotik' ? 'MikroTik Portal Files' : (activeTab === 'stub' ? 'Stub Portal Files' : 'Panel Portal')}</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
-            ${routers.length > 0 ? `
+            ${routers.length > 0 && activeTab !== 'panel-page' ? `
               <select id="portal-router-select" class="btn btn-outline">
                 ${routers.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
               </select>
               <button class="btn btn-primary btn-sm" onclick="App.pushPortal()">Push All to Router</button>
-            ` : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>'}
+            ` : (activeTab === 'panel-page' ? '<span class="status-badge connected">Panel-hosted portal — served directly by this panel</span>' : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>')}
           </div>
         </div>
         <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color,#e0e0e0);padding:0 1rem;background:var(--bg-secondary,#f5f5f5)">
           <button class="portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'mikrotik' ? 'white' : 'transparent'};color:${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'mikrotik' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
             &#128196; MikroTik Portal
           </button>
-          <button class="portal-tab ${activeTab === 'panel' ? 'active' : ''}" onclick="App.switchPortalTab('panel')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'panel' ? 'white' : 'transparent'};color:${activeTab === 'panel' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'panel' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'panel' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
-            &#128279; Panel Portal (Stub)
+          <button class="portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'stub' ? 'white' : 'transparent'};color:${activeTab === 'stub' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'stub' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'stub' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
+            &#128279; Stub Portal
+          </button>
+          <button class="portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'panel-page' ? 'white' : 'transparent'};color:${activeTab === 'panel-page' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'panel-page' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'panel-page' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
+            &#127912; Panel Portal
           </button>
         </div>
         <div class="portal-main-layout">
@@ -5173,7 +5176,8 @@ const App = {
   },
 
   _portalFolder() {
-    return this.portalActiveTab === 'panel' ? 'stub' : 'hotspot';
+    if (this.portalActiveTab === 'panel-page') return 'panel-page';
+    return this.portalActiveTab === 'stub' ? 'stub' : 'hotspot';
   },
 
   async selectPortalFile(filePath, force = false) {
@@ -5248,7 +5252,7 @@ const App = {
       }
       html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
       html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
-      const assetsBase = this.portalActiveTab === 'panel' ? '/stub-assets/' : '/hotspot-assets/';
+      const assetsBase = this.portalActiveTab === 'stub' ? '/stub-assets/' : '/hotspot-assets/';
       if (html.includes('<head>')) {
         html = html.replace('<head>', `<head><base href="${assetsBase}">`);
       } else if (html.includes('<html')) {

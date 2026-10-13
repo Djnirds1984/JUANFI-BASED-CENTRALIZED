@@ -6,13 +6,17 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-// Public endpoint for coin-insert flow — creates a voucher + hotspot_user in the
-// RADIUS DB so the upcoming auto-login authenticates via RADIUS instead of local.
+// Public endpoint for coin-insert flow — MAC-AS-VOUCHER ONLY.
+// Creates/extends the hotspot_user whose username is the device MAC
+// (no colons, UPPERCASE) so the upcoming auto-login authenticates the
+// same identity. Random NodeMCU vouchers are never used for auth here.
 router.post('/coin-auth', (req: Request, res: Response) => {
   const { mac, durationMinutes, serverAddress, routerId: bodyRouterId, extend } = req.body;
 
-  if (!mac || !durationMinutes) {
-    res.status(400).json({ error: 'mac and durationMinutes are required' });
+  // Normalize: accept AA:BB:.. / AA-BB-.. / AABB.. in any case, store AABB.. UPPER.
+  const macNoColon = String(mac || '').replace(/:/g, '').replace(/-/g, '').toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(macNoColon) || !durationMinutes) {
+    res.status(400).json({ error: 'mac (12 hex chars) and durationMinutes are required' });
     return;
   }
 
@@ -48,7 +52,7 @@ router.post('/coin-auth', (req: Request, res: Response) => {
   const upsert = db.transaction(() => {
     const existing = db.prepare(
       'SELECT id, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ?'
-    ).get(routerId, mac) as any;
+    ).get(routerId, macNoColon) as any;
 
     let expiryAt: string;
     const now = new Date();
@@ -72,7 +76,7 @@ router.post('/coin-auth', (req: Request, res: Response) => {
       db.prepare(
         `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at)
          VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?)`
-      ).run(routerId, mac, expiryAt);
+      ).run(routerId, macNoColon, expiryAt);
     }
   });
 

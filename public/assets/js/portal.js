@@ -245,6 +245,12 @@ function updateActionButtons() {
 }
 
 // ---- Utility Functions ----
+// Single source of truth for MAC-as-voucher identity (panel-served portal).
+// Auth (doLogin / check-session / coin-auth / logout) all use the MAC
+// without colons, UPPERCASE. Never use the NodeMCU random voucher for auth.
+function macVoucherCode() {
+	return String(mac || '').replace(/:/g, '').replace(/-/g, '').toUpperCase();
+}
 function replaceAll(str, rep) {
 	var aa = str;
 	while (aa.indexOf(rep) > 0) aa = aa.replace(rep, '');
@@ -297,10 +303,12 @@ function errorMsg(code) { return errorCodeMap[code] || code || 'Unknown error'; 
 function doLogin() {
 	var vc = document.getElementById('voucherInput').value.trim();
 
-	if (macAsVoucherCode && vc === '') {
-		var macNoColon = replaceAll(mac, ':');
-		document.getElementById('voucherInput').value = macNoColon;
-		vc = macNoColon;
+	// Panel-served portal always authenticates as MAC-as-voucher.
+	// Typing anything else is ignored so it can never conflict with the
+	// coin-insert MAC session.
+	if (macAsVoucherCode) {
+		vc = macVoucherCode();
+		document.getElementById('voucherInput').value = vc;
 	}
 
 	if (!vc) { alert('Please enter a voucher code'); return false; }
@@ -363,8 +371,14 @@ function insertBtnAction() {
 
 	if (!vendorIpAddress) { alert('No vendo machine configured'); return; }
 
-	var storedVoucher = localStorage.getItem('activeVoucher') || '';
-	var postData = 'voucher=' + storedVoucher + '&mac=' + mac;
+	// MAC-as-voucher: the coin slot tracks credit under the MAC identity.
+	// Never re-send a stored random voucher — the NodeMCU would credit the
+	// wrong account and conflict with the coin-auth MAC session.
+	if (macAsVoucherCode) {
+		voucher = macVoucherCode();
+		document.getElementById('voucherInput').value = voucher;
+	}
+	var postData = 'voucher=' + voucher + '&mac=' + mac;
 
 	showModal('coinModal');
 	document.getElementById('coinModalTitle').textContent = isExtendMode
@@ -377,7 +391,15 @@ function insertBtnAction() {
 			var data;
 			try { data = JSON.parse(resp); } catch(e) { data = { status: 'false', errorCode: 'coin.slot.notavailable' }; }
 			if (data.status === 'true') {
-				voucher = data.voucher;
+				// MAC-as-voucher: keep the MAC identity. Never adopt the
+				// NodeMCU random voucher for auth — it would conflict with
+				// the coin-auth MAC session.
+				if (!macAsVoucherCode) {
+					voucher = data.voucher;
+				} else {
+					voucher = macVoucherCode();
+					document.getElementById('voucherInput').value = voucher;
+				}
 				document.getElementById('coinCodeBlock').style.display = 'none';
 				if (vendoConfig && vendoConfig.isMultiVendo) {
 					var sel = document.getElementById(isConnected ? 'connectedVendoSelected' : 'vendoSelected');
@@ -461,8 +483,14 @@ function checkCoin() {
 
 function saveVoucherAndLogin() {
 	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
-	var macNoColon = replaceAll(mac, ':');
-	
+	// Panel MAC-as-voucher auth: identity is ALWAYS the MAC. Never the
+	// random voucher the NodeMCU returned from /topUp.
+	var macNoColon = macVoucherCode();
+	if (macAsVoucherCode) {
+		voucher = macNoColon;
+		document.getElementById('voucherInput').value = voucher;
+	}
+
 	// Validate MAC before proceeding
 	if (!macNoColon || macNoColon.length < 12) {
 		alert('Invalid MAC address. Please refresh the portal and try again.');
@@ -472,7 +500,7 @@ function saveVoucherAndLogin() {
 		saveBtn.textContent = 'SAVE';
 		return;
 	}
-	
+
 	localStorage.setItem('activeVoucher', voucher);
 
 	var saveBtn = document.getElementById('coinSaveBtn');

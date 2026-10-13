@@ -9,6 +9,70 @@ import { getDb } from '../database';
 
 const router = Router();
 
+// Public endpoint — portal page needs vendo config pre-login
+router.get('/vendo-config', (req: Request, res: Response) => {
+  try {
+    const configPath = path.join(__dirname, '..', '..', 'hotspot', 'assets', 'js', 'config.js');
+    let content = '';
+    try {
+      content = fs.readFileSync(configPath, 'utf8');
+    } catch {
+      res.status(404).json({ error: 'Config file not found' });
+      return;
+    }
+
+    const getBool = (name: string): boolean => {
+      const m = content.match(new RegExp(`var\\s+${name}\\s*=\\s*(true|false)\\s*;`));
+      return m ? m[1] === 'true' : false;
+    };
+    const getNum = (name: string): number => {
+      const m = content.match(new RegExp(`var\\s+${name}\\s*=\\s*(\\d+)\\s*;`));
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    const getStr = (name: string): string => {
+      const m = content.match(new RegExp(`var\\s+${name}\\s*=\\s*"([^"]*)"\\s*;`));
+      return m ? m[1] : '';
+    };
+
+    const addresses: Array<{ vendoName: string; vendoIp: string; chargingEnable: boolean; eloadEnable: boolean }> = [];
+    const arrayMatch = content.match(/var\s+multiVendoAddresses\s*=\s*\[([\s\S]*?)\];/);
+    if (arrayMatch) {
+      const objRe = /\{([^}]+)\}/g;
+      let objMatch;
+      while ((objMatch = objRe.exec(arrayMatch[1])) !== null) {
+        const block = objMatch[1];
+        const nameM = block.match(/vendoName:\s*"([^"]*)"/);
+        const ipM = block.match(/vendoIp:\s*"([^"]*)"/);
+        const chM = block.match(/chargingEnable:\s*(true|false)/);
+        const elM = block.match(/eloadEnable:\s*(true|false)/);
+        if (ipM) {
+          addresses.push({
+            vendoName: nameM ? nameM[1] : '',
+            vendoIp: ipM[1],
+            chargingEnable: chM ? chM[1] === 'true' : false,
+            eloadEnable: elM ? elM[1] === 'true' : false,
+          });
+        }
+      }
+    }
+
+    res.json({
+      isMultiVendo: getBool('isMultiVendo'),
+      multiVendoOption: getNum('multiVendoOption'),
+      multiVendoAddresses: addresses,
+      vendorIpAddress: getStr('vendorIpAddress'),
+      chargingEnable: getBool('chargingEnable'),
+      eloadEnable: getBool('eloadEnable'),
+      loginOption: getNum('loginOption'),
+      dataRateOption: getBool('dataRateOption'),
+      macAsVoucherCode: getBool('macAsVoucherCode'),
+    });
+  } catch (error: any) {
+    console.error('vendo-config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.use(authMiddleware);
 
 function getFolderRoot(folder?: string): string {

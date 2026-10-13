@@ -34,4 +34,6 @@ export const config = {
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
   radiusAuthPort: Math.max(1, parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10)),
   radiusAcctPort: Math.max(1, parseInt(process.env.RADIUS_ACCT_PORT || '1813', 10)),
+  // RFC 5176 CoA / Disconnect port (MikroTik default 3799).
+  radiusCoaPort: Math.max(1, parseInt(process.env.RADIUS_COA_PORT || '3799', 10)),
 };

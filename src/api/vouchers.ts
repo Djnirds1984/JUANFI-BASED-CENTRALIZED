@@ -130,27 +130,39 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
            WHERE router_id = ? AND username = ? AND status = 'active'
            ORDER BY updated_at DESC LIMIT 1`
         ).get(routerId, macNoColon) as any;
+        const { sendCoASessionTimeout } = await import('../services/radiusServer');
+        const remainingSec = Math.max(
+          1,
+          Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+        );
         if (sess?.session_id && sess?.nas_ip) {
-          const { sendCoASessionTimeout } = await import('../services/radiusServer');
-          const remainingSec = Math.max(
-            1,
-            Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
-          );
-          console.log(`coin-auth: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId}`);
-          sendCoASessionTimeout(routerId, sess.session_id, sess.nas_ip, remainingSec);
+          console.log(`coin-auth: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId} (session ${sess.session_id})`);
+          sendCoASessionTimeout(routerId, sess.session_id, sess.nas_ip, remainingSec, macNoColon);
         } else {
-          console.log(`coin-auth: no active RADIUS session for ${macNoColon} on router ${routerId} - CoA skipped`);
+          // No accounting session row. Try a User-Name CoA aimed at the router's
+          // own address so a live session can still be extended when RADIUS
+          // accounting is not delivering Acct-Session-Ids.
+          const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
+          const nasIp = String(routerRow?.host || '').split(':')[0];
+          const recent = db.prepare(
+            `SELECT username, session_id, status, updated_at FROM radius_sessions
+             WHERE router_id = ? ORDER BY updated_at DESC LIMIT 3`
+          ).all(routerId) as any[];
+          console.log(`coin-auth: no active RADIUS session for ${macNoColon} on router ${routerId} - trying User-Name CoA to ${nasIp || 'unknown'}; recent=${JSON.stringify(recent)}`);
+          if (nasIp) sendCoASessionTimeout(routerId, '', nasIp, remainingSec, macNoColon);
         }
       } catch (coaErr: any) {
         console.error(`coin-auth: CoA extend failed for ${macNoColon} on router ${routerId}:`, coaErr.message);
       }
     }
 
-    // Non-RADIUS (API) mode: MikroTik authenticates against its LOCAL hotspot
-    // user list, so the MAC user must exist ON THE ROUTER or CHAP login is
-    // rejected and the device stays in the captive portal with no internet.
-    // (RADIUS mode needs no push — the router queries the panel DB.)
-    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
+    // Push the new limit to the router's LOCAL hotspot user.
+    // - API mode: the router authenticates locally, so this is required.
+    // - RADIUS mode: normally handled by CoA above, but if the device actually
+    //   authenticated against a LOCAL user we still update it. In radius mode we
+    //   only UPDATE an existing local user (never create one) so we don't shadow
+    //   RADIUS auth.
+    if (mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
 
@@ -165,13 +177,17 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
-          await mikroTikService.createHotspotUser(routerId, {
-            username: macNoColon,
-            password: '',
-            profile: 'default',
-            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
-            comment: 'Coin-insert MAC user (panel portal)',
-          });
+          if (authMode === 'radius') {
+            console.log(`coin-auth: no local hotspot user for ${macNoColon} on router ${routerId} (radius mode) - local push skipped`);
+          } else {
+            await mikroTikService.createHotspotUser(routerId, {
+              username: macNoColon,
+              password: '',
+              profile: 'default',
+              uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
+              comment: 'Coin-insert MAC user (panel portal)',
+            });
+          }
         } else {
           // Top-up on an already-logged-in device.
           //
@@ -226,8 +242,8 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       }
     } else {
       console.log(
-        `coin-auth: router push SKIPPED for ${macNoColon} (authMode=${authMode}, ` +
-        `connected=${mikroTikService.isConnected(routerId)}, isExtend=${isExtend}) - time added to DB only`
+        `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +
+        `authMode=${authMode}, isExtend=${isExtend}) - time added to DB only`
       );
     }
 

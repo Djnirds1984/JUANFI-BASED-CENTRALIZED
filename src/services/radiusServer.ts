@@ -715,7 +715,7 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
       attrs
     );
 
-    const port = config.radiusAuthPort;
+    const port = config.radiusCoaPort; // CoA/Disconnect port (3799), NOT the auth port
     acctSocket?.send(packet, 0, packet.length, port, nasIp, (err) => {
       if (err) {
         console.error(`[RADIUS] Disconnect-Request send error: ${err.message}`);
@@ -735,7 +735,7 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
  * expiry_at stay in sync after a coin top-up. Best-effort: failures are
  * logged and never affect the payment flow.
  */
-export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number): void {
+export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number, username?: string): void {
   try {
     const db = getDb();
     const radiusClient = db.prepare(
@@ -750,10 +750,13 @@ export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp
     }
 
     const identifier = Math.floor(Math.random() * 256);
-    const attrs: RadiusAttribute[] = [
-      { type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId },
-      { type: RADIUS_ATTR.SESSION_TIMEOUT, value: Math.max(1, Math.floor(timeoutSeconds)) },
-    ];
+    // Identify the session by Acct-Session-Id when we have it; otherwise fall
+    // back to User-Name so the CoA can still match a live session when RADIUS
+    // accounting is not delivering session ids.
+    const attrs: RadiusAttribute[] = [];
+    if (sessionId) attrs.push({ type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId });
+    if (username) attrs.push({ type: RADIUS_ATTR.USER_NAME, value: username });
+    attrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: Math.max(1, Math.floor(timeoutSeconds)) });
 
     // CoA-Request Request-Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)
     // (RFC 3579 §3.1) — buildResponsePacket does exactly this when seeded
@@ -767,7 +770,7 @@ export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp
       attrs
     );
 
-    const port = config.radiusAuthPort;
+    const port = config.radiusCoaPort; // CoA/Disconnect port (3799), NOT the auth port
     acctSocket?.send(packet, 0, packet.length, port, nasIp, (err) => {
       if (err) {
         console.error(`[RADIUS] CoA-Request send error: ${err.message}`);

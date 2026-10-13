@@ -98,20 +98,36 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
       }
       db.prepare(
-        `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now') WHERE id = ?`
-      ).run(expiryAt, existing.id);
+        `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now'),
+          source = ?, profile = 'default' WHERE id = ?`
+      ).run(expiryAt, authMode === 'radius' ? 'radius' : 'api', existing.id);
     } else {
       expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
       db.prepare(
-        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at)
-         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?)`
-      ).run(routerId, macNoColon, expiryAt);
+        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source)
+         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?, ?)`
+      ).run(routerId, macNoColon, expiryAt, authMode === 'radius' ? 'radius' : 'api');
     }
     return expiryAt;
   });
 
   try {
     const expiryAt = upsert();
+
+    // Extend/top-up on an already-online device: the live /ip/hotspot/active
+    // session was authorized with the OLD Session-Timeout, so its
+    // session-time-left keeps counting down to the old expiry. Kick it so the
+    // portal's immediate re-login (see public/assets/js/portal.js extend flow)
+    // creates a fresh session with the NEW Session-Timeout from expiry_at.
+    // Best-effort only — never fail the payment if the router is offline.
+    if (isExtend && mikroTikService.isConnected(routerId)) {
+      try {
+        const macWithColons = macNoColon.replace(/([0-9A-F]{2})(?=.)/g, '$1:').toLowerCase();
+        await mikroTikService.kickActiveSession(routerId, { username: macNoColon, mac: macWithColons });
+      } catch (kickErr: any) {
+        console.error(`coin-auth: failed to kick active session ${macNoColon} on router ${routerId}:`, kickErr.message);
+      }
+    }
 
     // Non-RADIUS (API) mode: MikroTik authenticates against its LOCAL hotspot
     // user list, so the MAC user must exist ON THE ROUTER or CHAP login is

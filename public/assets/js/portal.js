@@ -5,14 +5,22 @@
 var macAsVoucherCode = true;
 
 // ---- CHAP parameters from URL ----
+// Persisted to localStorage: when the user re-opens the portal later in a
+// full browser (Chrome app) instead of the captive-portal popup, the
+// MikroTik redirect params are gone. Restoring them allows Add-Time
+// re-login (doLogin) to work without the redirect.
 var params = new URLSearchParams(window.location.search);
+function storedParam(key, urlVal) {
+	if (urlVal) { try { localStorage.setItem('portal_' + key, urlVal); } catch (e) {} return urlVal; }
+	try { return localStorage.getItem('portal_' + key) || ''; } catch (e) { return ''; }
+}
 var mac = params.get('mac') || '';
 var ip = params.get('ip') || '';
-var chapId = params.get('chap-id') || '';
-var chapChallenge = params.get('chap-challenge') || '';
-var linkLoginOnly = params.get('link-login-only') || '';
-var linkStatus = params.get('link-status') || '/status';
-var routerId = params.get('router-id') || '';
+var chapId = storedParam('chap-id', params.get('chap-id') || '');
+var chapChallenge = storedParam('chap-challenge', params.get('chap-challenge') || '');
+var linkLoginOnly = storedParam('link-login-only', params.get('link-login-only') || '');
+var linkStatus = params.get('link-status') || storedParam('link-status', '') || '/status';
+var routerId = params.get('router-id') || storedParam('router-id', '');
 
 // ---- Vendo config ----
 var vendoConfig = null;
@@ -532,6 +540,30 @@ function saveVoucherAndLogin() {
 				var validityMin = parseInt(data.validity) || durationMin;
 
 					// If extend mode and already connected, just call coin-auth with extend flag
+				// coin-auth stacks expiry_at AND kicks the old /ip/hotspot/active
+				// session (stale Session-Timeout), so the device lands back on
+				// the router login page and gets a FRESH chap-id/challenge.
+				// Re-login then picks up the NEW Session-Timeout from the panel
+				// DB, refreshing both the countdown and the router Active entry.
+				function reloginAfterExtend() {
+					document.getElementById('voucherInput').value = macNoColon;
+					refreshSessionAfterExtend();
+					// Ask the router for a fresh login page: after the kick the
+					// device is unauthenticated, so this returns fresh CHAP
+					// params; auto-submit then logs back in with the new time.
+					try {
+						var dst = linkStatus || '/status';
+						if (linkLoginOnly && linkLoginOnly.indexOf('http') === 0) {
+							window.location.href = linkLoginOnly + (linkLoginOnly.indexOf('?') >= 0 ? '&' : '?') + 'dst=' + encodeURIComponent(dst);
+						} else if (chapId && chapChallenge && linkLoginOnly) {
+							doLogin();
+						} else {
+							window.location.href = dst.charAt(0) === '/' ? dst : '/' + dst;
+						}
+					} catch (e) {
+						setTimeout(function() { doLogin(); }, 800);
+					}
+				}
 				if (isExtendMode && isConnected) {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
@@ -541,12 +573,11 @@ function saveVoucherAndLogin() {
 					.then(function(result) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						// Refresh session state from server
-						refreshSessionAfterExtend();
+						reloginAfterExtend();
 					}).catch(function(err) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						refreshSessionAfterExtend();
+						reloginAfterExtend();
 					});
 				} else {
 					// Initial login flow — call coin-auth then show connected state

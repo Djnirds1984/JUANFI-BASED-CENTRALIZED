@@ -6,6 +6,32 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
+/** MikroTik time (`00:45:10`, `1d02:30:00`, `02:30:00`) -> seconds. */
+function mikrotikUptimeToSeconds(value: any): number {
+  const str = String(value || '').trim();
+  if (!str) return 0;
+  const daysMatch = str.match(/^(\d+)d/);
+  const days = daysMatch ? parseInt(daysMatch[1], 10) : 0;
+  const clock = str.includes(':') ? str.slice(str.indexOf(':') - 2) : str;
+  const parts = clock.split(':').map((p) => parseInt(p, 10) || 0);
+  let seconds = days * 86400;
+  if (parts.length === 3) seconds += parts[0] * 3600 + parts[1] * 60 + parts[2];
+  else if (parts.length === 2) seconds += parts[0] * 60 + parts[1];
+  else if (parts.length === 1 && !daysMatch) seconds += parts[0] || 0;
+  return Math.max(0, seconds);
+}
+
+/** Seconds -> MikroTik `limit-uptime` value (`00:45:10` / `1d02:30:00`). */
+function secondsToUptimeLimit(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const clock = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return days > 0 ? `${days}d${clock}` : clock;
+}
+
 // Public endpoint for coin-insert flow — MAC-AS-VOUCHER ONLY.
 // Creates/extends the hotspot_user whose username is the device MAC
 // (no colons, UPPERCASE) so the upcoming auto-login authenticates the
@@ -96,20 +122,32 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
         const existingOnRouter = routerUsers.find((u: any) => u.name === macNoColon);
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
-        // MikroTik limit-uptime HH:MM:SS
-        const totalSec = Math.max(60, Math.floor(msLeft / 1000));
-        const uptimeLimit = `${String(Math.floor(totalSec / 3600)).padStart(2, '0')}:${String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0')}:${String(totalSec % 60).padStart(2, '0')}`;
         if (!existingOnRouter) {
           await mikroTikService.createHotspotUser(routerId, {
             username: macNoColon,
             password: '',
             profile: 'default',
-            uptimeLimit,
+            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
             comment: 'Coin-insert MAC user (panel portal)',
           });
         } else {
-          // Refresh the time allowance and re-enable in case it was disabled/expired.
-          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, uptimeLimit);
+          // Top-up: limit-uptime counts against the user's ACCUMULATED uptime,
+          // not the live session. Merely raising the limit while the user keeps
+          // old uptime means session-time-left barely moves (e.g. stuck at the
+          // first 6 min). So: read accumulated uptime + old limit, compute the
+          // total allowance (consumed + remaining + new minutes), reset the
+          // counters, then set the new total limit.
+          const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
+          const oldLimitSec = mikrotikUptimeToSeconds(existingOnRouter['limit-uptime']);
+          const consumedSec = oldLimitSec > 0
+            ? Math.max(0, oldLimitSec - Math.max(0, Math.floor(msLeft / 1000)))
+            : uptimeSec;
+          const priorRemainingSec = oldLimitSec > 0
+            ? Math.max(0, oldLimitSec - consumedSec)
+            : Math.max(0, Math.floor(msLeft / 1000));
+          const newTotalSec = Math.max(60, consumedSec + priorRemainingSec + duration * 60);
+          await mikroTikService.resetHotspotUserCounters(routerId, macNoColon);
+          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, secondsToUptimeLimit(newTotalSec));
           if (existingOnRouter['.id']) {
             try { await mikroTikService.enableHotspotUser(routerId, existingOnRouter['.id']); } catch {}
           }

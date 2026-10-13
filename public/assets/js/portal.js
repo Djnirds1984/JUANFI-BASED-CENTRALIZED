@@ -31,6 +31,11 @@ var isExtendMode = false;
 
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
+	console.log('[portal] === PORTAL INITIALIZED ===');
+	console.log('[portal] URL parameters - mac:', mac, 'ip:', ip, 'routerId:', routerId);
+	console.log('[portal] CHAP params - chapId:', chapId ? 'present' : 'MISSING', 'chapChallenge:', chapChallenge ? 'present' : 'MISSING');
+	console.log('[portal] linkLoginOnly:', linkLoginOnly || 'MISSING');
+	
 	document.getElementById('ip-display').textContent = ip || '-';
 	document.getElementById('mac-display').textContent = mac || '-';
 	document.sendin.action = linkLoginOnly;
@@ -153,13 +158,17 @@ function updateCountdownDisplay() {
 
 // ---- Session Check ----
 function checkSessionState() {
+	console.log('[portal] checkSessionState called - mac:', mac, 'routerId:', routerId);
 	if (!mac || !routerId) {
+		console.log('[portal] Skipping session check - missing mac or routerId');
 		showDisconnectedState();
 		return;
 	}
+	console.log('[portal] Checking session for mac=' + mac + ', routerId=' + routerId);
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
+			console.log('[portal] Session check result:', data);
 			if (data.hasSession && data.remainingSeconds > 0) {
 				showConnectedState(data.remainingSeconds);
 			} else {
@@ -167,7 +176,7 @@ function checkSessionState() {
 			}
 		})
 		.catch(function(e) {
-			console.error('Session check failed:', e);
+			console.error('[portal] Session check failed:', e);
 			showDisconnectedState();
 		});
 }
@@ -296,28 +305,34 @@ function errorMsg(code) { return errorCodeMap[code] || code || 'Unknown error'; 
 
 // ---- Login ----
 function doLogin() {
+	console.log('[portal] doLogin called');
 	var vc = document.getElementById('voucherInput').value.trim();
+	console.log('[portal] Voucher input:', vc, 'macAsVoucherCode:', macAsVoucherCode);
 
 	if (macAsVoucherCode && vc === '') {
 		var macNoColon = replaceAll(mac, ':');
 		document.getElementById('voucherInput').value = macNoColon;
 		vc = macNoColon;
+		console.log('[portal] Using MAC as voucher code:', vc);
 	}
 
 	if (!vc) { alert('Please enter a voucher code'); return false; }
 	
 	// Validate required CHAP parameters
 	if (!chapId || !chapChallenge) {
+		console.error('[portal] Missing CHAP parameters - chapId:', chapId, 'chapChallenge:', chapChallenge);
 		alert('Login parameters missing. Please access portal through MikroTik redirect.');
 		return false;
 	}
 	
 	// Validate login URL
 	if (!linkLoginOnly) {
+		console.error('[portal] Missing linkLoginOnly parameter');
 		alert('Login URL not configured. Please access portal through MikroTik redirect.');
 		return false;
 	}
 
+	console.log('[portal] Submitting login to MikroTik - username:', vc, 'action:', linkLoginOnly);
 	document.sendin.username.value = vc;
 	document.sendin.password.value = hexMD5(chapId + vc + chapChallenge);
 	document.sendin.dst.value = linkStatus;

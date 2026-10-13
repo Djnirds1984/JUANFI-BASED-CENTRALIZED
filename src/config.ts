@@ -19,17 +19,29 @@ function detectLanIp(): string {
   return '';
 }
 
+const port = parseInt(process.env.PORT || '3000', 10);
+
+// LAN IP of this controller as seen by hotspot clients. Used to auto-allow it
+// in each router's walled garden and to build stub portal redirect URLs.
+// Falls back to auto-detected LAN IP when not set.
+const controllerLanIp = (process.env.CONTROLLER_LAN_IP || '').trim() || detectLanIp();
+
+// Public base URL the captive-portal stubs redirect to.
+// Set PANEL_PUBLIC_URL when serving the portal through nginx / a domain, e.g.
+//   PANEL_PUBLIC_URL=http://10.0.0.252          (nginx on port 80)
+//   PANEL_PUBLIC_URL=https://portal.example.com (nginx + TLS)
+// Leave unset to point straight at the node process (http://<lan-ip>:<PORT>).
+const panelPublicUrl = (process.env.PANEL_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+
 export const config = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port,
   host: process.env.HOST || '0.0.0.0',
   jwtSecret: process.env.JWT_SECRET || 'default-secret-change-me',
   dbPath: process.env.DB_PATH || './data/mikrotik-controller.db',
   logLevel: process.env.LOG_LEVEL || 'info',
   activeDevicesSyncSec: Math.max(1, parseInt(process.env.ACTIVE_DEVICES_SYNC_SEC || '5', 10) || 5),
-  // LAN IP of this controller as seen by hotspot clients. Used to auto-allow it
-  // in each router's walled garden and to build stub portal redirect URLs.
-  // Falls back to auto-detected LAN IP when not set.
-  controllerLanIp: (process.env.CONTROLLER_LAN_IP || '').trim() || detectLanIp(),
+  controllerLanIp,
+  panelPublicUrl: panelPublicUrl || `http://${controllerLanIp || 'localhost'}:${port}`,
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
   radiusAuthPort: Math.max(1, parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10)),

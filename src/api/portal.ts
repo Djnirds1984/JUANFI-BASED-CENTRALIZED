@@ -247,12 +247,15 @@ function getFolder(req: Request): string {
 }
 
 function replaceStubPlaceholders(content: string, routerId: number): string {
-  const panelIp = config.controllerLanIp || config.host;
-  const panelPort = config.port;
+  // Full base URL including scheme + optional port, so the portal can be served
+  // through nginx (PANEL_PUBLIC_URL) instead of the raw node port.
+  const base = config.panelPublicUrl;
+  const hostOnly = base.replace(/^https?:\/\//, '');
   return content
     .replace(/ROUTER_ID_PLACEHOLDER/g, String(routerId))
-    .replace(/PANEL_URL_PLACEHOLDER/g, panelIp)
-    .replace(/:3000/g, `:${panelPort}`);
+    .replace(/https?:\/\/PANEL_URL_PLACEHOLDER:\d+/g, base)
+    .replace(/https?:\/\/PANEL_URL_PLACEHOLDER/g, base)
+    .replace(/PANEL_URL_PLACEHOLDER/g, hostOnly);
 }
 
 router.get('/', (req: Request, res: Response) => {

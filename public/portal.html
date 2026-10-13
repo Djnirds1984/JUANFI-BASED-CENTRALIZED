@@ -3,39 +3,269 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Portal</title>
+  <title>Captive Portal</title>
   <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
       display: flex;
       justify-content: center;
       align-items: center;
-      min-height: 100vh;
-      margin: 0;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      padding: 1rem;
     }
     .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      max-width: 420px;
+      width: 100%;
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #6a1b9a 0%, #9c27b0 100%);
+      color: white;
+      padding: 2rem;
       text-align: center;
+    }
+    .header h1 {
+      font-size: 1.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .header p {
+      opacity: 0.9;
+      font-size: 0.9rem;
+    }
+    .content {
       padding: 2rem;
     }
-    h1 {
-      font-size: 2.5rem;
-      margin-bottom: 1rem;
+    .form-group {
+      margin-bottom: 1.5rem;
     }
-    p {
-      font-size: 1.2rem;
-      opacity: 0.9;
+    .form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: #333;
+      font-weight: 500;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #9c27b0;
+    }
+    .btn {
+      width: 100%;
+      padding: 0.875rem;
+      background: linear-gradient(135deg, #6a1b9a 0%, #9c27b0 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(156, 39, 176, 0.4);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .message {
+      padding: 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .message.error {
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ef5350;
+    }
+    .message.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border: 1px solid #66bb6a;
+    }
+    .message.info {
+      background: #e3f2fd;
+      color: #1565c0;
+      border: 1px solid #42a5f5;
+    }
+    .device-info {
+      text-align: center;
+      color: #666;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #e0e0e0;
+    }
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Captive Portal</h1>
-    <p>Portal page will be implemented in Phase 5</p>
-    <p style="margin-top: 2rem; font-size: 0.9rem; opacity: 0.7;">
-      <a href="/admin" style="color: white; text-decoration: underline;">Admin Panel</a>
-    </p>
+    <div class="header">
+      <h1>Welcome</h1>
+      <p>Enter your voucher code to connect</p>
+    </div>
+    <div class="content">
+      <div id="message" class="message"></div>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="username">Voucher Code</label>
+          <input type="text" id="username" name="username" placeholder="Enter your voucher code" required autocomplete="off">
+        </div>
+        <button type="submit" class="btn" id="submit-btn">
+          <span id="btn-text">Connect</span>
+        </button>
+      </form>
+      <div class="device-info" id="device-info"></div>
+    </div>
   </div>
+
+  <script>
+    // Extract CHAP parameters from URL
+    const params = new URLSearchParams(window.location.search);
+    const mac = params.get('mac') || '';
+    const ip = params.get('ip') || '';
+    const chapId = params.get('chap-id') || '';
+    const chapChallenge = params.get('chap-challenge') || '';
+    const linkLoginOnly = params.get('link-login-only') || '';
+    const linkStatus = params.get('link-status') || '/status';
+    const routerId = params.get('router-id') || '';
+
+    // Display device info
+    const deviceInfo = document.getElementById('device-info');
+    if (mac || ip) {
+      deviceInfo.innerHTML = `Device: ${mac || 'Unknown'} | IP: ${ip || 'Unknown'}`;
+    }
+
+    // Show message function
+    function showMessage(text, type) {
+      const msg = document.getElementById('message');
+      msg.textContent = text;
+      msg.className = 'message ' + type;
+      msg.style.display = 'block';
+    }
+
+    // Hide message function
+    function hideMessage() {
+      document.getElementById('message').style.display = 'none';
+    }
+
+    // MD5 implementation (simplified for CHAP)
+    function hexMD5(input) {
+      // This is a placeholder - in production, use a proper MD5 library
+      // For now, we'll use the browser's built-in crypto if available
+      // Or implement a simple hash for testing
+      return md5(input);
+    }
+
+    // Simple MD5 implementation (from https://css-tricks.com/snippets/javascript/javascript-md5/)
+    var md5=function(){function h(a,b){for(var c=[1732584193,-271733879,-1732584194,271733878],d=0;d<a.length;d++)a[d]=a[d]>>>0;for(d=0;d<a.length;d+=16){var e=c.slice(0);for(var f=0;f<64;f++){var g,k,l,m,n;if(f<16)g=a[d+f]|0,k=(c[1]&c[2]|~c[1]&c[3])+c[0]+g+1732584193|0,l=7;else if(f<32)g=a[d+(5*f+1)%16]|0,k=(c[1]&c[3]|c[2]&~c[3])+c[0]+g+238833879|0,l=12;else if(f<48)g=a[d+(3*f+5)%16]|0,k=(c[1]^c[2]^c[3])+c[0]+g+1732584194|0,l=17;else g=a[d+(7*f)%16]|0,k=(c[2]^(c[1]|~c[3]))+c[0]+g+271733878|0,l=22;c[0]=c[1]+(c[0]<<l|c[0]>>>32-l)|0;c[3]=c[0];c[2]=c[3]+(c[3]<<l|c[3]>>>32-l)|0;c[1]=c[2];for(g=0;g<4;g++)c[g]=c[g]+e[g]|0}for(d=0;d<4;d++)c[d]=c[d]+b[d]|0}return c};function k(a){for(var b="",c=0;c<a.length;c++)for(var d=0;d<4;d++)b+=String.fromCharCode(a[c]>>>8*d&255);return b}function l(a){for(var b=[],c=0;c<a.length;c++)b[c]=a.charCodeAt(c);return b}function m(a){var b=a.length,c=b+8>>6<<4,d=c+16,e=Array(d-1);for(var f=0;f<b;f++)e[f>>2]|=a.charCodeAt(f)<<8*(f%4);e[f>>2]|=128<<8*(f%4);e[d-2]=b<<3;e[d-1]=b>>>29;return e}function n(a){for(var b="",c=0;c<a.length;c++)for(var d=0;d<4;d++)b+="0123456789abcdef".charAt(a[c]>>>8*d+4&15)+"0123456789abcdef".charAt(a[c]>>>8*d&15);return b}return function(a){return n(k(h(m(a),[0,0,0,0])))}}();
+
+    // Generate CHAP response
+    function generateChapResponse(chapId, username, chapChallenge) {
+      // CHAP-MD5: MD5(chap-id + password + chap-challenge)
+      // For username-only auth, password is the username
+      const input = chapId + username + chapChallenge;
+      return hexMD5(input);
+    }
+
+    // Handle form submission
+    document.getElementById('login-form').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      hideMessage();
+      
+      const username = document.getElementById('username').value.trim();
+      if (!username) {
+        showMessage('Please enter a voucher code', 'error');
+        return;
+      }
+
+      if (!linkLoginOnly) {
+        showMessage('Login endpoint not configured. Please contact administrator.', 'error');
+        return;
+      }
+
+      const submitBtn = document.getElementById('submit-btn');
+      const btnText = document.getElementById('btn-text');
+      submitBtn.disabled = true;
+      btnText.innerHTML = '<span class="spinner"></span>Connecting...';
+
+      try {
+        // Generate CHAP response
+        const chapResponse = generateChapResponse(chapId, username, chapChallenge);
+
+        // Create form data for MikroTik login
+        const formData = new URLSearchParams();
+        formData.append('username', username);
+        formData.append('password', chapResponse);
+        formData.append('dst', linkStatus);
+
+        // Submit to MikroTik login endpoint
+        const response = await fetch(linkLoginOnly, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: formData.toString(),
+          redirect: 'follow'
+        });
+
+        // Check if login was successful
+        if (response.redirected) {
+          const finalUrl = new URL(response.url);
+          if (finalUrl.pathname === linkStatus || finalUrl.pathname.includes('status')) {
+            showMessage('Login successful! Redirecting...', 'success');
+            window.location.href = response.url;
+            return;
+          }
+        }
+
+        // If we got here, login might have failed
+        const text = await response.text();
+        if (text.includes('Login incorrect') || text.includes('Error')) {
+          showMessage('Invalid voucher code. Please try again.', 'error');
+        } else {
+          showMessage('Login failed. Please try again.', 'error');
+        }
+      } catch (err) {
+        console.error('Login error:', err);
+        showMessage('Connection error. Please try again.', 'error');
+      } finally {
+        submitBtn.disabled = false;
+        btnText.textContent = 'Connect';
+      }
+    });
+
+    // Auto-focus on voucher input
+    document.getElementById('username').focus();
+  </script>
 </body>
 </html>

@@ -119,45 +119,68 @@ router.get('/check-session', (req: Request, res: Response) => {
       return;
     }
 
-    // Check device_sessions for remaining time
-    const session = db.prepare(
-      `SELECT remaining_seconds, last_seen
-       FROM device_sessions
-       WHERE mac_address = ? AND router_id = ?
-       ORDER BY last_seen DESC LIMIT 1`
-    ).get(macWithColons, routerId) as any;
+    // Priority 1: Check radius_sessions for active session (RADIUS-authenticated users)
+    const radiusSession = db.prepare(
+      `SELECT id, username, started_at, session_time
+       FROM radius_sessions
+       WHERE router_id = ? AND username = ? AND status = 'active'
+       ORDER BY started_at DESC LIMIT 1`
+    ).get(routerId, macNoColons) as any;
 
-    console.log(`[check-session] device_session lookup:`, session ? `Found remaining=${session.remaining_seconds}s` : 'NOT FOUND');
+    console.log(`[check-session] radius_session lookup:`, radiusSession ? `Found id=${radiusSession.id}, started_at=${radiusSession.started_at}` : 'NOT FOUND');
 
     let hasValidTime = false;
     let remainingSeconds = 0;
 
-    // Priority 1: device_sessions has remaining time (but sanity check - must be > 60s)
-    // The sync function might set a small value if MikroTik hasn't fully calculated session time yet
-    if (session && session.remaining_seconds > 60) {
-      hasValidTime = true;
-      remainingSeconds = session.remaining_seconds;
-      console.log(`[check-session] Using device_sessions remaining time: ${remainingSeconds}s`);
-    }
-    // Priority 2: calculate from voucher duration + used_at
-    else if (voucher.duration_minutes > 0 && voucher.used_at) {
-      const usedAt = new Date(voucher.used_at + 'Z').getTime();
-      const expiresAt = usedAt + voucher.duration_minutes * 60 * 1000;
+    if (radiusSession && voucher && voucher.duration_minutes > 0) {
+      // Calculate remaining time from voucher duration minus elapsed time
+      const startedAt = new Date(radiusSession.started_at + 'Z').getTime();
+      const expiresAt = startedAt + voucher.duration_minutes * 60 * 1000;
       const now = Date.now();
       if (expiresAt > now) {
         hasValidTime = true;
         remainingSeconds = Math.floor((expiresAt - now) / 1000);
-        console.log(`[check-session] Calculated from voucher: ${remainingSeconds}s remaining`);
+        console.log(`[check-session] Using radius_session: ${remainingSeconds}s remaining`);
       } else {
-        console.log(`[check-session] Voucher expired`);
+        console.log(`[check-session] RADIUS session expired`);
       }
     }
-    // Priority 3: voucher exists with duration but used_at is NULL (just created or reset)
-    else if (voucher.duration_minutes > 0 && !voucher.used_at) {
-      // Voucher was created/reset but not yet used - treat as having full time
-      hasValidTime = true;
-      remainingSeconds = voucher.duration_minutes * 60;
-      console.log(`[check-session] Voucher not yet used, full time: ${remainingSeconds}s`);
+
+    // Priority 2: device_sessions has remaining time (but sanity check - must be > 60s)
+    if (!hasValidTime) {
+      const session = db.prepare(
+        `SELECT remaining_seconds, last_seen
+         FROM device_sessions
+         WHERE mac_address = ? AND router_id = ?
+         ORDER BY last_seen DESC LIMIT 1`
+      ).get(macWithColons, routerId) as any;
+
+      console.log(`[check-session] device_session lookup:`, session ? `Found remaining=${session.remaining_seconds}s` : 'NOT FOUND');
+
+      if (session && session.remaining_seconds > 60) {
+        hasValidTime = true;
+        remainingSeconds = session.remaining_seconds;
+        console.log(`[check-session] Using device_sessions remaining time: ${remainingSeconds}s`);
+      }
+      // Priority 3: calculate from voucher duration + used_at
+      else if (voucher && voucher.duration_minutes > 0 && voucher.used_at) {
+        const usedAt = new Date(voucher.used_at + 'Z').getTime();
+        const expiresAt = usedAt + voucher.duration_minutes * 60 * 1000;
+        const now = Date.now();
+        if (expiresAt > now) {
+          hasValidTime = true;
+          remainingSeconds = Math.floor((expiresAt - now) / 1000);
+          console.log(`[check-session] Calculated from voucher: ${remainingSeconds}s remaining`);
+        } else {
+          console.log(`[check-session] Voucher expired`);
+        }
+      }
+      // Priority 4: voucher exists with duration but used_at is NULL (just created or reset)
+      else if (voucher && voucher.duration_minutes > 0 && !voucher.used_at) {
+        hasValidTime = true;
+        remainingSeconds = voucher.duration_minutes * 60;
+        console.log(`[check-session] Voucher not yet used, full time: ${remainingSeconds}s`);
+      }
     }
 
     console.log(`[check-session] Result: hasSession=${hasValidTime}, remainingSeconds=${remainingSeconds}, username=${macNoColons}`);

@@ -45,6 +45,7 @@ app.use(morgan('combined'));
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/hotspot-assets', express.static(path.join(__dirname, '..', 'hotspot')));
+app.use('/stub-assets', express.static(path.join(__dirname, '..', 'stub')));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/routers', routerRoutes);

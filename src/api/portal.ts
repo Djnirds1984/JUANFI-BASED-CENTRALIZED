@@ -6,7 +6,6 @@ import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
-import { mikrotikTimeToSeconds } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -98,52 +97,34 @@ router.get('/check-session', (req: Request, res: Response) => {
       return;
     }
 
-    const expiresAt: string | null = hotspotUser.expiry_at || null;
+    let hasValidTime = false;
+    let remainingSeconds = 0;
 
-    // Single source of truth for "time left" = the router's live
-    // `session-time-left`, which is exactly what the panel's Active Devices tab
-    // renders (synced into active_devices.session_time_left). MAC is stored as
-    // the router reports it, so match case-insensitively.
-    const active = db.prepare(
-      `SELECT session_time_left FROM active_devices
-       WHERE router_id = ? AND status = 'active' AND LOWER(mac_address) = ?
-       ORDER BY last_seen DESC, id DESC LIMIT 1`
-    ).get(routerId, macWithColons) as any;
-
-    let remainingSeconds: number | null = null;
-
-    if (active && active.session_time_left) {
-      const live = mikrotikTimeToSeconds(active.session_time_left);
-      if (live !== Infinity) remainingSeconds = Math.max(0, Math.floor(live));
+    if (hotspotUser.expiry_at) {
+      const expiryMs = new Date(hotspotUser.expiry_at + 'Z').getTime();
+      const now = Date.now();
+      if (expiryMs > now) {
+        hasValidTime = true;
+        remainingSeconds = Math.floor((expiryMs - now) / 1000);
+      }
     }
 
-    // No live active-device row yet: use the synced device session record.
-    if (remainingSeconds === null) {
+    if (!hasValidTime) {
       const session = db.prepare(
         `SELECT remaining_seconds FROM device_sessions
-         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
-         ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
-      ).get(routerId, macWithColons, macNoColons) as any;
-      if (session) remainingSeconds = Math.max(0, Math.floor(Number(session.remaining_seconds) || 0));
-    }
+         WHERE mac_address = ? AND router_id = ?
+         ORDER BY last_seen DESC LIMIT 1`
+      ).get(macWithColons, routerId) as any;
 
-    // Last resort (device has not logged in / no live session at all): the
-    // account's wall-clock validity. This is NOT an upper bound - a stale or
-    // short expiry_at must never shrink the router's live session time.
-    if (remainingSeconds === null) {
-      if (hotspotUser.expiry_at) {
-        const expiryMs = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
-        const validitySec = Math.floor((expiryMs - Date.now()) / 1000);
-        remainingSeconds = validitySec > 0 ? validitySec : 0;
-      } else {
-        remainingSeconds = 0;
+      if (session && session.remaining_seconds > 60) {
+        hasValidTime = true;
+        remainingSeconds = session.remaining_seconds;
       }
     }
 
     res.json({
-      hasSession: remainingSeconds > 0,
+      hasSession: hasValidTime,
       remainingSeconds,
-      expiresAt,
       username: macNoColons,
     });
   } catch (error: any) {

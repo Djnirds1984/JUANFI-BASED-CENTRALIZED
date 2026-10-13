@@ -131,23 +131,22 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
             comment: 'Coin-insert MAC user (panel portal)',
           });
         } else {
-          // Top-up: limit-uptime counts against the user's ACCUMULATED uptime,
-          // not the live session. Merely raising the limit while the user keeps
-          // old uptime means session-time-left barely moves (e.g. stuck at the
-          // first 6 min). So: read accumulated uptime + old limit, compute the
-          // total allowance (consumed + remaining + new minutes), reset the
-          // counters, then set the new total limit.
-          const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
-          const oldLimitSec = mikrotikUptimeToSeconds(existingOnRouter['limit-uptime']);
-          const consumedSec = oldLimitSec > 0
-            ? Math.max(0, oldLimitSec - Math.max(0, Math.floor(msLeft / 1000)))
-            : uptimeSec;
+          // Top-up on an already-logged-in device:
+          // - validity expiration (panel DB expiry_at) stacks: remaining + new minutes.
+          // - router session-time-left = limit-uptime MINUS accumulated uptime.
+          //   Just raising limit-uptime alone leaves session-time-left stuck
+          //   (e.g. at the first 6 min). So: add the new minutes to the CURRENT
+          //   limit and reset the accumulated uptime counter, giving a fresh
+          //   session-time-left equal to prior-remaining + new minutes.
+          const oldLimitSec = mikrotikUptimeToSeconds(
+            existingOnRouter['limit-uptime'] ?? (existingOnRouter as any)['uptime-limit']
+          );
           const priorRemainingSec = oldLimitSec > 0
-            ? Math.max(0, oldLimitSec - consumedSec)
+            ? Math.max(0, oldLimitSec - mikrotikUptimeToSeconds(existingOnRouter.uptime))
             : Math.max(0, Math.floor(msLeft / 1000));
-          const newTotalSec = Math.max(60, consumedSec + priorRemainingSec + duration * 60);
+          const newLimitSec = Math.max(60, (oldLimitSec > 0 ? oldLimitSec : priorRemainingSec) + duration * 60);
           await mikroTikService.resetHotspotUserCounters(routerId, macNoColon);
-          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, secondsToUptimeLimit(newTotalSec));
+          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, secondsToUptimeLimit(newLimitSec));
           if (existingOnRouter['.id']) {
             try { await mikroTikService.enableHotspotUser(routerId, existingOnRouter['.id']); } catch {}
           }

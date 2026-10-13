@@ -28,6 +28,8 @@ export interface HotspotUser {
   name: string;
   password: string;
   profile: string;
+  uptime?: string;
+  'limit-uptime'?: string;
   'uptime-limit'?: string;
   'bytes-in-quota'?: number;
   'bytes-out-quota'?: number;

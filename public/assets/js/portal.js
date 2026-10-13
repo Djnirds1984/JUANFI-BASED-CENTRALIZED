@@ -526,14 +526,17 @@ function saveVoucherAndLogin() {
 				localStorage.removeItem('totalCoinReceived');
 				var durationSec = parseInt(data.timeAdded) || 0;
 				var durationMin = Math.floor(durationSec / 60);
-				var validityMin = data.validity || durationMin;
+				// validity = minutes the coin insert adds to the account (validity
+				// expiration). timeAdded is only the live-session seconds counter —
+				// sending that as durationMinutes under-credits the account.
+				var validityMin = parseInt(data.validity) || durationMin;
 
 					// If extend mode and already connected, just call coin-auth with extend flag
 				if (isExtendMode && isConnected) {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId, extend: true }),
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: validityMin, routerId: routerId, extend: true }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
 						hideModal('coinModal');
@@ -550,7 +553,7 @@ function saveVoucherAndLogin() {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ mac: macNoColon, durationMinutes: durationMin, routerId: routerId }),
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: validityMin, routerId: routerId }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
 						hideModal('coinModal');

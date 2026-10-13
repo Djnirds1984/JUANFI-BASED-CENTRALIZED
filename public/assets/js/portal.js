@@ -593,6 +593,10 @@ function saveVoucherAndLogin() {
 					.then(function(result) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
+						if (result && result.error) {
+							alert('Could not add time: ' + result.error);
+							return;
+						}
 						refreshSessionAfterExtend();
 						alert('Time extended! Your session stays connected — the added time applies automatically.');
 					}).catch(function(err) {

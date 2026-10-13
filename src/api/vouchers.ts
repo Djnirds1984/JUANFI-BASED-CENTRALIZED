@@ -144,8 +144,17 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
-        const existingOnRouter = routerUsers.find((u: any) => u.name === macNoColon);
+
+        // The router may store this user with the MAC in a different shape
+        // (e.g. `12:41:20:FB:81:24`, `12-41-20-FB-81-24`, lower case) while the
+        // panel identity is the MAC without colons. Match on the normalized MAC
+        // so we extend the ACTUAL live user instead of silently creating a
+        // second, unused one (which is why "time added" had no effect).
+        const normalizeUserName = (v: any) => String(v || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+        const existingOnRouter = routerUsers.find((u: any) => normalizeUserName(u.name) === macNoColon);
+        const routerUserName = existingOnRouter ? String(existingOnRouter.name) : macNoColon;
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
+
         if (!existingOnRouter) {
           await mikroTikService.createHotspotUser(routerId, {
             username: macNoColon,
@@ -155,22 +164,43 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
             comment: 'Coin-insert MAC user (panel portal)',
           });
         } else {
-          // Top-up on an already-logged-in device:
-          // - validity expiration (panel DB expiry_at) stacks: remaining + new minutes.
-          // - router session-time-left = limit-uptime MINUS accumulated uptime.
-          //   Just raising limit-uptime alone leaves session-time-left stuck
-          //   (e.g. at the first 6 min). So: add the new minutes to the CURRENT
-          //   limit and reset the accumulated uptime counter, giving a fresh
-          //   session-time-left equal to prior-remaining + new minutes.
+          // Top-up on an already-logged-in device.
+          //
+          // expiryAt is ALREADY the stacked expiry (prior remaining + new
+          // minutes), so we must not add `duration` on top of a value derived
+          // from it (that double-credits).
+          //
+          // Live `session-time-left` = limit-uptime - accumulated uptime, so:
+          //   - known limit   -> remaining = limit - uptime, and the new limit
+          //                      must restore that remaining (+ new minutes).
+          //   - unknown limit -> trust the stacked expiry (already includes the
+          //                      added time).
+          // `reset-counters` zeroes the accumulated uptime so the new limit is
+          // shown immediately; if the reset fails we keep the old limit as the
+          // base so the uptime is still accounted for.
+          const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
           const oldLimitSec = mikrotikUptimeToSeconds(
             existingOnRouter['limit-uptime'] ?? (existingOnRouter as any)['uptime-limit']
           );
-          const priorRemainingSec = oldLimitSec > 0
-            ? Math.max(0, oldLimitSec - mikrotikUptimeToSeconds(existingOnRouter.uptime))
-            : Math.max(0, Math.floor(msLeft / 1000));
-          const newLimitSec = Math.max(60, (oldLimitSec > 0 ? oldLimitSec : priorRemainingSec) + duration * 60);
-          await mikroTikService.resetHotspotUserCounters(routerId, macNoColon);
-          await mikroTikService.setUserUptimeLimit(routerId, macNoColon, secondsToUptimeLimit(newLimitSec));
+
+          const resetOk = await mikroTikService.resetHotspotUserCounters(routerId, routerUserName);
+          const baseLimitSec = resetOk
+            ? Math.max(0, oldLimitSec - uptimeSec)
+            : oldLimitSec;
+          const newLimitSec = oldLimitSec > 0
+            ? Math.max(60, baseLimitSec + duration * 60)
+            : Math.max(60, Math.floor(msLeft / 1000));
+
+          const setOk = await mikroTikService.setUserUptimeLimit(
+            routerId,
+            routerUserName,
+            secondsToUptimeLimit(newLimitSec)
+          );
+          if (!setOk) {
+            console.error(
+              `coin-auth: router user "${routerUserName}" not found on router ${routerId} - time NOT added`
+            );
+          }
           if (existingOnRouter['.id']) {
             try { await mikroTikService.enableHotspotUser(routerId, existingOnRouter['.id']); } catch {}
           }

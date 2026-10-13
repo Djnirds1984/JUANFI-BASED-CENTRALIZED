@@ -121,9 +121,9 @@ function showConnectedState(remaining) {
 function startCountdown() {
 	stopCountdown();
 	countdownTimer = setInterval(function() {
-		if (remainingSeconds <= 0) {
+		if (!isConnected || remainingSeconds <= 0) {
 			stopCountdown();
-			showDisconnectedState();
+			if (isConnected) showDisconnectedState();
 			return;
 		}
 		remainingSeconds--;

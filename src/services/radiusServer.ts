@@ -384,6 +384,13 @@ function authenticateUser(routerId: number, username: string): AuthResult {
         profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
         profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: voucher.duration_minutes * 60 });
         console.log(`[RADIUS] Hotspot user ${username} matched voucher: duration=${voucher.duration_minutes}min, Session-Timeout=${voucher.duration_minutes * 60}s`);
+      } else if (user.expiry_at) {
+        const expiryMs = new Date(user.expiry_at + 'Z').getTime();
+        const remainingSec = Math.floor((expiryMs - Date.now()) / 1000);
+        if (remainingSec > 0) {
+          profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
+          profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: remainingSec });
+        }
       }
 
       if (voucher?.id) {

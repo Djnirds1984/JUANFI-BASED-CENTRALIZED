@@ -80,10 +80,7 @@ router.get('/check-session', (req: Request, res: Response) => {
     const macNoColons = macWithColons.replace(/:/g, '').toUpperCase();
     const routerId = parseInt(String(req.query.routerId || '1'), 10);
 
-    console.log(`[check-session] Request: mac=${macWithColons}, macNoColons=${macNoColons}, routerId=${routerId}`);
-
     if (!macWithColons || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(macWithColons)) {
-      console.log(`[check-session] Invalid MAC format`);
       res.status(400).json({ error: 'Valid MAC is required' });
       return;
     }
@@ -92,98 +89,39 @@ router.get('/check-session', (req: Request, res: Response) => {
 
     // Check if hotspot_user exists for this MAC (username = MAC without colons)
     const hotspotUser = db.prepare(
-      'SELECT id, username FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
+      'SELECT id, username, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
     ).get(routerId, macNoColons) as any;
-
-    console.log(`[check-session] hotspot_user lookup:`, hotspotUser ? `Found id=${hotspotUser.id}` : 'NOT FOUND');
 
     if (!hotspotUser) {
-      console.log(`[check-session] No hotspot_user found, returning hasSession=false`);
       res.json({ hasSession: false });
       return;
     }
-
-    // Check if voucher exists for this MAC
-    const voucher = db.prepare(
-      `SELECT id, duration_minutes, used_at, is_used
-       FROM vouchers
-       WHERE router_id = ? AND code = ?
-       ORDER BY created_at DESC LIMIT 1`
-    ).get(routerId, macNoColons) as any;
-
-    console.log(`[check-session] voucher lookup:`, voucher ? `Found id=${voucher.id}, duration=${voucher.duration_minutes}min, is_used=${voucher.is_used}, used_at=${voucher.used_at}` : 'NOT FOUND');
-
-    if (!voucher || voucher.duration_minutes <= 0) {
-      console.log(`[check-session] No valid voucher found, returning hasSession=false`);
-      res.json({ hasSession: false });
-      return;
-    }
-
-    // Priority 1: Check radius_sessions for active session (RADIUS-authenticated users)
-    const radiusSession = db.prepare(
-      `SELECT id, username, started_at, session_time
-       FROM radius_sessions
-       WHERE router_id = ? AND username = ? AND status = 'active'
-       ORDER BY started_at DESC LIMIT 1`
-    ).get(routerId, macNoColons) as any;
-
-    console.log(`[check-session] radius_session lookup:`, radiusSession ? `Found id=${radiusSession.id}, started_at=${radiusSession.started_at}` : 'NOT FOUND');
 
     let hasValidTime = false;
     let remainingSeconds = 0;
 
-    if (radiusSession && voucher && voucher.duration_minutes > 0) {
-      // Calculate remaining time from voucher duration minus elapsed time
-      const startedAt = new Date(radiusSession.started_at + 'Z').getTime();
-      const expiresAt = startedAt + voucher.duration_minutes * 60 * 1000;
+    if (hotspotUser.expiry_at) {
+      const expiryMs = new Date(hotspotUser.expiry_at + 'Z').getTime();
       const now = Date.now();
-      if (expiresAt > now) {
+      if (expiryMs > now) {
         hasValidTime = true;
-        remainingSeconds = Math.floor((expiresAt - now) / 1000);
-        console.log(`[check-session] Using radius_session: ${remainingSeconds}s remaining`);
-      } else {
-        console.log(`[check-session] RADIUS session expired`);
+        remainingSeconds = Math.floor((expiryMs - now) / 1000);
       }
     }
 
-    // Priority 2: device_sessions has remaining time (but sanity check - must be > 60s)
     if (!hasValidTime) {
       const session = db.prepare(
-        `SELECT remaining_seconds, last_seen
-         FROM device_sessions
+        `SELECT remaining_seconds FROM device_sessions
          WHERE mac_address = ? AND router_id = ?
          ORDER BY last_seen DESC LIMIT 1`
       ).get(macWithColons, routerId) as any;
 
-      console.log(`[check-session] device_session lookup:`, session ? `Found remaining=${session.remaining_seconds}s` : 'NOT FOUND');
-
       if (session && session.remaining_seconds > 60) {
         hasValidTime = true;
         remainingSeconds = session.remaining_seconds;
-        console.log(`[check-session] Using device_sessions remaining time: ${remainingSeconds}s`);
-      }
-      // Priority 3: calculate from voucher duration + used_at
-      else if (voucher && voucher.duration_minutes > 0 && voucher.used_at) {
-        const usedAt = new Date(voucher.used_at + 'Z').getTime();
-        const expiresAt = usedAt + voucher.duration_minutes * 60 * 1000;
-        const now = Date.now();
-        if (expiresAt > now) {
-          hasValidTime = true;
-          remainingSeconds = Math.floor((expiresAt - now) / 1000);
-          console.log(`[check-session] Calculated from voucher: ${remainingSeconds}s remaining`);
-        } else {
-          console.log(`[check-session] Voucher expired`);
-        }
-      }
-      // Priority 4: voucher exists with duration but used_at is NULL (just created or reset)
-      else if (voucher && voucher.duration_minutes > 0 && !voucher.used_at) {
-        hasValidTime = true;
-        remainingSeconds = voucher.duration_minutes * 60;
-        console.log(`[check-session] Voucher not yet used, full time: ${remainingSeconds}s`);
       }
     }
 
-    console.log(`[check-session] Result: hasSession=${hasValidTime}, remainingSeconds=${remainingSeconds}, username=${macNoColons}`);
     res.json({
       hasSession: hasValidTime,
       remainingSeconds,

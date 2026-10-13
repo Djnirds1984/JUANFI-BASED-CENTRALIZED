@@ -11,11 +11,7 @@ const router = Router();
 router.post('/coin-auth', (req: Request, res: Response) => {
   const { mac, durationMinutes, serverAddress, routerId: bodyRouterId, extend } = req.body;
 
-  console.log(`[coin-auth] === REQUEST START ===`);
-  console.log(`[coin-auth] Request body: mac=${mac}, durationMinutes=${durationMinutes}, serverAddress=${serverAddress}, routerId=${bodyRouterId}, extend=${extend}`);
-
   if (!mac || !durationMinutes) {
-    console.error(`[coin-auth] FAIL: Missing required parameters - mac=${mac}, durationMinutes=${durationMinutes}`);
     res.status(400).json({ error: 'mac and durationMinutes are required' });
     return;
   }
@@ -25,65 +21,65 @@ router.post('/coin-auth', (req: Request, res: Response) => {
 
   if (bodyRouterId) {
     routerId = parseInt(bodyRouterId, 10);
-    console.log(`[coin-auth] Looking up router by ID: ${routerId}`);
     const routerRow = db.prepare(
       'SELECT id FROM routers WHERE id = ? AND is_active = 1'
     ).get(routerId) as any;
     if (!routerRow) {
-      console.error(`[coin-auth] FAIL: Router not found - id=${bodyRouterId}`);
       res.status(404).json({ error: 'Router not found or not active' });
       return;
     }
-    console.log(`[coin-auth] Router found: id=${routerRow.id}`);
   } else if (serverAddress) {
     const hostOnly = serverAddress.split(':')[0];
-    console.log(`[coin-auth] Looking up router by host: ${hostOnly} (from ${serverAddress})`);
     const routerRow = db.prepare(
       "SELECT id FROM routers WHERE host = ? AND is_active = 1"
     ).get(hostOnly) as any;
     if (!routerRow) {
-      console.error(`[coin-auth] FAIL: Router not found for host: ${serverAddress}`);
       res.status(404).json({ error: 'Router not found or not active' });
       return;
     }
     routerId = routerRow.id;
-    console.log(`[coin-auth] Router found: id=${routerId}`);
   } else {
-    console.error(`[coin-auth] FAIL: No routerId or serverAddress provided`);
     res.status(400).json({ error: 'routerId or serverAddress is required' });
     return;
   }
   const isExtend = extend === true;
   const duration = parseInt(durationMinutes) || 0;
-  console.log(`[coin-auth] Parsed duration: ${duration} minutes, isExtend: ${isExtend}`);
 
   const upsert = db.transaction(() => {
-    console.log(`[coin-auth] Checking for existing hotspot_user: routerId=${routerId}, username=${mac}`);
     const existing = db.prepare(
-      'SELECT id FROM hotspot_users WHERE router_id = ? AND username = ?'
+      'SELECT id, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ?'
     ).get(routerId, mac) as any;
 
+    let expiryAt: string;
+    const now = new Date();
+
     if (existing) {
-      console.log(`[coin-auth] Updating existing hotspot_user: id=${existing.id}`);
+      if (isExtend && existing.expiry_at) {
+        const currentExpiry = new Date(existing.expiry_at + 'Z').getTime();
+        if (currentExpiry > now.getTime()) {
+          expiryAt = new Date(currentExpiry + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+        } else {
+          expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+        }
+      } else {
+        expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+      }
       db.prepare(
-        'UPDATE hotspot_users SET disabled = 0, updated_at = datetime(\'now\') WHERE id = ?'
-      ).run(existing.id);
+        `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(expiryAt, existing.id);
     } else {
-      console.log(`[coin-auth] Creating new hotspot_user`);
+      expiryAt = new Date(now.getTime() + duration * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
       db.prepare(
-        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled)
-         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0)`
-      ).run(routerId, mac);
+        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at)
+         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?)`
+      ).run(routerId, mac, expiryAt);
     }
   });
 
   try {
     upsert();
-    console.log(`[coin-auth] === SUCCESS === ${isExtend ? 'EXTEND' : 'Created/updated'} voucher for MAC ${mac}, duration=${duration}min, router=${routerId}`);
     res.json({ success: true });
   } catch (err: any) {
-    console.error(`[coin-auth] === ERROR ===`, err.message);
-    console.error(`[coin-auth] Stack:`, err.stack);
     res.status(500).json({ error: err.message });
   }
 });

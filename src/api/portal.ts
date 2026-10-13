@@ -6,6 +6,7 @@ import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
+import { mikrotikTimeToSeconds } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -74,7 +75,7 @@ router.get('/vendo-config', (req: Request, res: Response) => {
 });
 
 // Public endpoint — check if MAC has valid session for auto-login
-router.get('/check-session', (req: Request, res: Response) => {
+router.get('/check-session', async (req: Request, res: Response) => {
   try {
     const macWithColons = String(req.query.mac || '').trim().toLowerCase().replace(/-/g, ':');
     const macNoColons = macWithColons.replace(/:/g, '').toUpperCase();
@@ -97,34 +98,84 @@ router.get('/check-session', (req: Request, res: Response) => {
       return;
     }
 
-    let hasValidTime = false;
+    // The panel's Active Devices tab shows the router's live `session-time-left`
+    // (polled every second). The portal must show the SAME value, so read it the
+    // same way instead of deriving it from the account's wall-clock expiry_at.
+    // `expiry_at` is only a last-resort fallback for a device with paid time
+    // that is not currently online.
+    const macKey = macNoColons.toLowerCase();
     let remainingSeconds = 0;
+    let resolved = false;
 
-    if (hotspotUser.expiry_at) {
-      const expiryMs = new Date(hotspotUser.expiry_at + 'Z').getTime();
-      const now = Date.now();
-      if (expiryMs > now) {
-        hasValidTime = true;
-        remainingSeconds = Math.floor((expiryMs - now) / 1000);
+    // 1) Live MikroTik active session - exactly what the panel renders.
+    //    When found, its value is authoritative (0 = expired), so the fallbacks
+    //    below must NOT re-introduce stale time.
+    try {
+      if (mikroTikService.isConnected(routerId)) {
+        const live = await mikroTikService.getActiveConnections(routerId);
+        const conn = (Array.isArray(live) ? live : []).find((c: any) => {
+          const connMac = String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+          const connUser = String(c.user || '').toUpperCase();
+          return (!!connMac && connMac === macKey) || (!!connUser && connUser === macNoColons);
+        });
+        if (conn) {
+          const left = mikrotikTimeToSeconds(conn['session-time-left']);
+          if (left !== Infinity) {
+            remainingSeconds = Math.max(0, Math.floor(left));
+            resolved = true;
+          }
+        }
+      }
+    } catch (liveErr: any) {
+      console.error('check-session live lookup failed:', liveErr.message);
+    }
+
+    // 2) Synced mirror in active_devices (background sync, every few seconds).
+    if (!resolved) {
+      const active = db.prepare(
+        `SELECT session_time_left FROM active_devices
+         WHERE router_id = ? AND status = 'active'
+           AND (REPLACE(REPLACE(LOWER(mac_address), ':', ''), '-', '') = ? OR UPPER(user) = ?)
+         ORDER BY last_seen DESC, id DESC LIMIT 1`
+      ).get(routerId, macKey, macNoColons) as any;
+      if (active && active.session_time_left) {
+        const left = mikrotikTimeToSeconds(active.session_time_left);
+        if (left !== Infinity && left > 0) {
+          remainingSeconds = Math.max(0, Math.floor(left));
+          resolved = true;
+        }
       }
     }
 
-    if (!hasValidTime) {
+    // 3) Synced device session record.
+    if (!resolved) {
       const session = db.prepare(
         `SELECT remaining_seconds FROM device_sessions
-         WHERE mac_address = ? AND router_id = ?
-         ORDER BY last_seen DESC LIMIT 1`
-      ).get(macWithColons, routerId) as any;
+         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
+         ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
+      ).get(routerId, macWithColons, macNoColons) as any;
+      const secs = session ? Math.max(0, Math.floor(Number(session.remaining_seconds) || 0)) : 0;
+      if (secs > 0) {
+        remainingSeconds = secs;
+        resolved = true;
+      }
+    }
 
-      if (session && session.remaining_seconds > 60) {
-        hasValidTime = true;
-        remainingSeconds = session.remaining_seconds;
+    // 4) Last resort: the account's wall-clock validity.
+    if (!resolved) {
+      if (hotspotUser.expiry_at) {
+        const expiryMs = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
+        const validitySec = Math.floor((expiryMs - Date.now()) / 1000);
+        remainingSeconds = validitySec > 0 ? validitySec : 0;
+      } else {
+        remainingSeconds = 0;
       }
     }
 
     res.json({
-      hasSession: hasValidTime,
+      hasSession: remainingSeconds > 0,
       remainingSeconds,
+      expiresAt: hotspotUser.expiry_at || null,
       username: macNoColons,
     });
   } catch (error: any) {

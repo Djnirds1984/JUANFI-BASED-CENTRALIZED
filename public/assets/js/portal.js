@@ -34,6 +34,7 @@ var topupMode = 'INTERNET';
 var isConnected = false;
 var remainingSeconds = 0;
 var countdownTimer = null;
+var sessionSyncTimer = null;
 var sessionExpiresAt = null;
 var isExtendMode = false;
 
@@ -100,6 +101,7 @@ function setupEventListeners() {
 function showDisconnectedState() {
 	isConnected = false;
 	stopCountdown();
+	stopSessionSync();
 	document.getElementById('disconnectedPanel').style.display = '';
 	document.getElementById('connectedPanel').style.display = 'none';
 	document.getElementById('statusBadge').style.background = 'rgba(239, 68, 68, 0.1)';
@@ -124,6 +126,7 @@ function showConnectedState(remaining) {
 
 	updateCountdownDisplay();
 	startCountdown();
+	startSessionSync();
 }
 
 function startCountdown() {
@@ -143,6 +146,42 @@ function stopCountdown() {
 	if (countdownTimer) {
 		clearInterval(countdownTimer);
 		countdownTimer = null;
+	}
+}
+
+// ---- Panel session-time-left sync ----
+// The panel's Active Devices tab shows the router's live `session-time-left`.
+// Re-read the same value periodically so the portal's running countdown stays
+// equal to the panel's instead of drifting away after a top-up / pause.
+function syncSessionTime() {
+	if (!mac || !routerId) return;
+	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+		.then(function(r) { return r.json(); })
+		.then(function(data) {
+			if (data.hasSession && data.remainingSeconds > 0) {
+				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
+				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
+				if (!isConnected) {
+					showConnectedState(remainingSeconds);
+				} else {
+					updateCountdownDisplay();
+				}
+			} else if (isConnected) {
+				showDisconnectedState();
+			}
+		})
+		.catch(function() {});
+}
+
+function startSessionSync() {
+	stopSessionSync();
+	sessionSyncTimer = setInterval(syncSessionTime, 5000);
+}
+
+function stopSessionSync() {
+	if (sessionSyncTimer) {
+		clearInterval(sessionSyncTimer);
+		sessionSyncTimer = null;
 	}
 }
 

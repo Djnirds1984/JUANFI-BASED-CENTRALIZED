@@ -114,18 +114,30 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   try {
     const expiryAt = upsert();
 
-    // Extend/top-up on an already-online device: the live /ip/hotspot/active
-    // session was authorized with the OLD Session-Timeout, so its
-    // session-time-left keeps counting down to the old expiry. Kick it so the
-    // portal's immediate re-login (see public/assets/js/portal.js extend flow)
-    // creates a fresh session with the NEW Session-Timeout from expiry_at.
-    // Best-effort only — never fail the payment if the router is offline.
-    if (isExtend && mikroTikService.isConnected(routerId)) {
+    // Extend/top-up: NEVER kick/disconnect the live session here.
+    // The live /ip/hotspot/active session keeps running and stays online;
+    // the added minutes are stacked in expiry_at (wall clock). To make the
+    // router's time-left reflect the new total WITHOUT dropping the device,
+    // send a RADIUS CoA-Request (Session-Timeout) for the live session —
+    // MikroTik updates the active session in place, no re-auth needed.
+    // Best-effort only — never fail the payment.
+    if (isExtend) {
       try {
-        const macWithColons = macNoColon.replace(/([0-9A-F]{2})(?=.)/g, '$1:').toLowerCase();
-        await mikroTikService.kickActiveSession(routerId, { username: macNoColon, mac: macWithColons });
-      } catch (kickErr: any) {
-        console.error(`coin-auth: failed to kick active session ${macNoColon} on router ${routerId}:`, kickErr.message);
+        const sess = db.prepare(
+          `SELECT session_id, nas_ip FROM radius_sessions
+           WHERE router_id = ? AND username = ? AND status = 'active'
+           ORDER BY updated_at DESC LIMIT 1`
+        ).get(routerId, macNoColon) as any;
+        if (sess?.session_id && sess?.nas_ip) {
+          const { sendCoASessionTimeout } = await import('../services/radiusServer');
+          const remainingSec = Math.max(
+            1,
+            Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+          );
+          sendCoASessionTimeout(routerId, sess.session_id, sess.nas_ip, remainingSec);
+        }
+      } catch (coaErr: any) {
+        console.error(`coin-auth: CoA extend failed for ${macNoColon} on router ${routerId}:`, coaErr.message);
       }
     }
 

@@ -10,6 +10,11 @@ const RADIUS_CODES = {
   ACCOUNTING_REQUEST: 4,
   ACCOUNTING_RESPONSE: 5,
   DISCONNECT_REQUEST: 40,
+  DISCONNECT_ACK: 41,
+  DISCONNECT_NAK: 42,
+  COA_REQUEST: 43,
+  COA_ACK: 44,
+  COA_NAK: 45,
 } as const;
 
 const RADIUS_ATTR = {
@@ -72,6 +77,9 @@ interface RadiusClient {
 let authSocket: dgram.Socket | null = null;
 let acctSocket: dgram.Socket | null = null;
 let running = false;
+
+// Throttle for top-up CoA re-syncs: `${routerId}:${sessionId}` -> value/at ms
+const lastCoASent = new Map<string, { value: number; at: number }>();
 
 const MAX_LOG_ENTRIES = 500;
 
@@ -505,7 +513,7 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
   logRadiusEvent(logType, msg, client.router_id, username, rinfo.address, responseCode);
 }
 
-function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): void {
+async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): Promise<void> {
   const client = findClientByIp(rinfo.address);
   if (!client) {
     console.warn(`[RADIUS] Accounting-Request from unknown client: ${rinfo.address}`);
@@ -592,6 +600,35 @@ function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo):
          WHERE router_id = ? AND user = ? AND status = 'active'`
       ).run(bytesIn, bytesOut, client.router_id, user);
 
+      // Hit-less top-up renewal: if the user topped up (expiry_at extended)
+      // while this session runs, the router's original Session-Timeout still
+      // fires at the OLD time and logs the user out even though paid time
+      // remains. When the remaining paid time exceeds the elapsed session
+      // time + a grace window, extend the NAS session via CoA
+      // (Session-Timeout = remaining paid seconds) so MikroTik Active and
+      // the portal countdown stay in sync without any disconnect.
+      try {
+        const paid = db.prepare(
+          `SELECT expiry_at FROM hotspot_users
+           WHERE router_id = ? AND username = ? AND disabled = 0 LIMIT 1`
+        ).get(client.router_id, user) as any;
+        if (paid?.expiry_at) {
+          const remainingPaid = Math.floor((new Date(paid.expiry_at + 'Z').getTime() - Date.now()) / 1000);
+          // Safety net for routers where the coin-auth CoA was missed:
+          // re-sync only when the delta is significant and not sent recently.
+          const lastSent = lastCoASent.get(`${client.router_id}:${session}`) || { value: 0, at: 0 };
+          const nowMs = Date.now();
+          if (remainingPaid - sessTime > 120 &&
+              (Math.abs(remainingPaid - lastSent.value) > 60 || nowMs - lastSent.at > 300000)) {
+            sendCoASessionTimeout(client.router_id, session, nasIpStr, remainingPaid);
+            lastCoASent.set(`${client.router_id}:${session}`, { value: remainingPaid, at: nowMs });
+            logRadiusEvent('accounting', `Top-up CoA: Session-Timeout=${remainingPaid}s session=${session}`, client.router_id, user, rinfo.address);
+          }
+        }
+      } catch (coaErr) {
+        console.error('[RADIUS] Top-up CoA failed:', (coaErr as Error).message);
+      }
+
       checkQuotaEnforcement(client.router_id, user, bytesIn, bytesOut, session, nasIpStr, rinfo);
     }
   } catch (err) {
@@ -642,7 +679,7 @@ function checkQuotaEnforcement(
   }
 }
 
-export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp: string): void {
+export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp: string, username?: string): void {
   try {
     const db = getDb();
     const radiusClient = db.prepare(
@@ -663,6 +700,7 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
     const attrs: RadiusAttribute[] = [
       { type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId },
     ];
+    if (username) attrs.push({ type: RADIUS_ATTR.USER_NAME, value: username });
 
     const packet = buildResponsePacket(
       RADIUS_CODES.DISCONNECT_REQUEST,
@@ -682,6 +720,58 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
     });
   } catch (err) {
     console.error('[RADIUS] Disconnect error:', err);
+  }
+}
+
+/**
+ * CoA-Request (RFC 3579) that changes Session-Timeout on a LIVE session
+ * without disconnecting it. MikroTik applies the new timeout to the
+ * /ip/hotspot/active entry, so the router's time-left and the panel's
+ * expiry_at stay in sync after a coin top-up. Best-effort: failures are
+ * logged and never affect the payment flow.
+ */
+export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number): void {
+  try {
+    const db = getDb();
+    const radiusClient = db.prepare(
+      `SELECT rc.shared_secret FROM radius_clients rc
+       JOIN routers r ON r.id = rc.router_id
+       WHERE rc.router_id = ? AND rc.is_active = 1`
+    ).get(routerId) as any;
+
+    if (!radiusClient) {
+      console.error(`[RADIUS] No active client config for router ${routerId} — cannot send CoA`);
+      return;
+    }
+
+    const identifier = Math.floor(Math.random() * 256);
+    const attrs: RadiusAttribute[] = [
+      { type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId },
+      { type: RADIUS_ATTR.SESSION_TIMEOUT, value: Math.max(1, Math.floor(timeoutSeconds)) },
+    ];
+
+    // CoA-Request Request-Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)
+    // (RFC 3579 §3.1) — buildResponsePacket does exactly this when seeded
+    // with an all-zero authenticator.
+    const zeroAuth = Buffer.alloc(16);
+    const packet = buildResponsePacket(
+      RADIUS_CODES.COA_REQUEST,
+      identifier,
+      zeroAuth,
+      radiusClient.shared_secret,
+      attrs
+    );
+
+    const port = config.radiusAuthPort;
+    acctSocket?.send(packet, 0, packet.length, port, nasIp, (err) => {
+      if (err) {
+        console.error(`[RADIUS] CoA-Request send error: ${err.message}`);
+      } else {
+        console.log(`[RADIUS] CoA-Request sent to ${nasIp}:${port} session=${sessionId} Session-Timeout=${timeoutSeconds}s`);
+      }
+    });
+  } catch (err) {
+    console.error('[RADIUS] CoA error:', err);
   }
 }
 
@@ -711,7 +801,20 @@ function onAcctMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
       return;
     }
     if (packet.code === RADIUS_CODES.ACCOUNTING_REQUEST) {
-      handleAccountingRequest(packet, rinfo);
+      handleAccountingRequest(packet, rinfo).catch((err) =>
+        console.error('[RADIUS] Accounting handler error:', err)
+      );
+    } else if (
+      packet.code === RADIUS_CODES.COA_ACK || packet.code === RADIUS_CODES.COA_NAK ||
+      packet.code === RADIUS_CODES.DISCONNECT_ACK || packet.code === RADIUS_CODES.DISCONNECT_NAK
+    ) {
+      // Reply to a CoA/Disconnect we sent — log it so operators can verify
+      // the NAS accepted (or rejected) the Session-Timeout update.
+      const label = packet.code === RADIUS_CODES.COA_ACK ? 'CoA-ACK'
+        : packet.code === RADIUS_CODES.COA_NAK ? 'CoA-NAK'
+        : packet.code === RADIUS_CODES.DISCONNECT_ACK ? 'Disconnect-ACK' : 'Disconnect-NAK';
+      console.log(`[RADIUS] ${label} from ${rinfo.address}`);
+      logRadiusEvent('accounting', `${label} from ${rinfo.address}`, undefined, '', rinfo.address);
     } else {
       console.warn(`[RADIUS] Unexpected code ${packet.code} on acct port from ${rinfo.address}`);
     }

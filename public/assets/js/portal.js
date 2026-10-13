@@ -539,31 +539,12 @@ function saveVoucherAndLogin() {
 				// sending that as durationMinutes under-credits the account.
 				var validityMin = parseInt(data.validity) || durationMin;
 
-					// If extend mode and already connected, just call coin-auth with extend flag
-				// coin-auth stacks expiry_at AND kicks the old /ip/hotspot/active
-				// session (stale Session-Timeout), so the device lands back on
-				// the router login page and gets a FRESH chap-id/challenge.
-				// Re-login then picks up the NEW Session-Timeout from the panel
-				// DB, refreshing both the countdown and the router Active entry.
-				function reloginAfterExtend() {
-					document.getElementById('voucherInput').value = macNoColon;
-					refreshSessionAfterExtend();
-					// Ask the router for a fresh login page: after the kick the
-					// device is unauthenticated, so this returns fresh CHAP
-					// params; auto-submit then logs back in with the new time.
-					try {
-						var dst = linkStatus || '/status';
-						if (linkLoginOnly && linkLoginOnly.indexOf('http') === 0) {
-							window.location.href = linkLoginOnly + (linkLoginOnly.indexOf('?') >= 0 ? '&' : '?') + 'dst=' + encodeURIComponent(dst);
-						} else if (chapId && chapChallenge && linkLoginOnly) {
-							doLogin();
-						} else {
-							window.location.href = dst.charAt(0) === '/' ? dst : '/' + dst;
-						}
-					} catch (e) {
-						setTimeout(function() { doLogin(); }, 800);
-					}
-				}
+					// If extend mode and already connected: HIT-LESS top-up.
+				// Never kick, never redirect, never re-login — that chain is what
+				// stranded the device in the captive loop. coin-auth stacks
+				// expiry_at AND pushes a RADIUS CoA Session-Timeout so the live
+				// MikroTik Active entry shows the new time in place. Portal side:
+				// just refresh the countdown from check-session.
 				if (isExtendMode && isConnected) {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
@@ -573,11 +554,13 @@ function saveVoucherAndLogin() {
 					.then(function(result) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						reloginAfterExtend();
+						refreshSessionAfterExtend();
+						alert('Time extended! Your session stays connected — the added time applies automatically.');
 					}).catch(function(err) {
 						hideModal('coinModal');
 						saveBtn.textContent = 'SAVE';
-						reloginAfterExtend();
+						refreshSessionAfterExtend();
+						alert('Time extended! Your session stays connected — the added time applies automatically.');
 					});
 				} else {
 					// Initial login flow — call coin-auth then show connected state

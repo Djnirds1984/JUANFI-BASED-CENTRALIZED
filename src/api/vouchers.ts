@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
-import { mikrotikTimeToSeconds } from '../services/deviceSessions';
+import { mikrotikTimeToSeconds, initSession, bindSession } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -143,6 +143,25 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
 
   try {
     const { expiryAt, hadRemaining } = upsert();
+
+    // Bind a permanent roaming session token to this MAC + account NOW (server
+    // side), so the panel DB already holds the mac+token+time binding even if
+    // the portal's own bind never runs. On roam, /session/restore finds it and
+    // restores the remaining time on the new SSID/MAC.
+    try {
+      const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
+      const tokenRemaining = Math.max(
+        0,
+        Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+      );
+      if (macColon) {
+        const init = initSession({ mac: macColon, ip: '', server: '', routerId });
+        bindSession({ token: init.token, mac: macColon, username: macNoColon, sessionTimeLeft: tokenRemaining, routerId });
+        console.log(`coin-auth: bound session token for ${macNoColon} (remaining ${tokenRemaining}s)`);
+      }
+    } catch (bindErr: any) {
+      console.error(`coin-auth: token bind failed for ${macNoColon}:`, bindErr.message);
+    }
 
     // Extend/top-up: NEVER kick/disconnect the live session here.
     // The live /ip/hotspot/active session keeps running and stays online;

@@ -219,7 +219,28 @@ export async function restoreSession(params: {
   const session = getSessionByToken(params.token);
   if (!session) return { restore: false, reason: 'unknown-token' };
   if (!session.username) return { restore: false, reason: 'never-logged-in' };
-  if (session.status === 'expired' || session.remaining_seconds <= 0) {
+
+  // Remaining time: prefer the synced session value, but fall back to the
+  // account's PAID expiry (hotspot_users.expiry_at) so a valid account still
+  // restores even if the session-time sync lagged behind.
+  let remaining = Math.max(0, Number(session.remaining_seconds) || 0);
+  if (remaining <= 0) {
+    const db0 = getDb();
+    const key = String(session.username).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    const acct = db0.prepare(
+      `SELECT expiry_at FROM hotspot_users
+       WHERE router_id = ? AND disabled = 0
+         AND (LOWER(username) = LOWER(?)
+              OR ( ? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+       ORDER BY id DESC LIMIT 1`
+    ).get(session.router_id, session.username, key.length === 12 ? key : '', key) as any;
+    if (acct?.expiry_at) {
+      const exp = new Date(String(acct.expiry_at).replace(' ', 'T') + 'Z').getTime();
+      if (Number.isFinite(exp)) remaining = Math.max(0, Math.floor((exp - Date.now()) / 1000));
+    }
+  }
+
+  if (session.status === 'expired' || remaining <= 0) {
     return { restore: false, reason: 'no-time-remaining', username: session.username };
   }
 
@@ -245,7 +266,7 @@ export async function restoreSession(params: {
       const applied = await mikroTikService.setUserUptimeLimit(
         routerId,
         session.username,
-        secondsToLimitUptime(session.remaining_seconds)
+        secondsToLimitUptime(remaining)
       );
       if (!applied) console.warn(`restoreSession: user ${session.username} not found on router ${routerId}`);
     } catch (err) {
@@ -284,7 +305,7 @@ export async function restoreSession(params: {
     restore: true,
     username: session.username,
     password: session.password || lookupCredentials(session.username).password,
-    remaining: session.remaining_seconds,
+    remaining,
     rebind,
     token: session.session_token,
   };

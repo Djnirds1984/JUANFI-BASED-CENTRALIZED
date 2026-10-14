@@ -445,27 +445,23 @@ class MikroTikService {
     // lease comment is often a rate/tag like "10m,1,1,TEST1", not a device name.
     // Index by MAC *and* by IP so we can match whichever the active entry
     // exposes (MikroTik active entries use `mac-address`, not `mac`).
-    const hostByIp = new Map<string, any>();
-    const hostByMac = new Map<string, any>();
-    for (const host of hotspotHosts) {
-      if (host.address) hostByIp.set(this.normalizeIp(host.address), host);
-      const hmac = String(host['mac-address'] || '').toLowerCase();
-      if (hmac) hostByMac.set(hmac, host);
-    }
-
-    const leaseByMac = new Map<string, any>();
-    const leaseByIp = new Map<string, any>();
-    for (const lease of dhcpLeases) {
-      const leaseMac = String(lease['mac-address'] || '').toLowerCase();
-      const leaseIp = this.normalizeIp(lease.address || '');
-      if (leaseMac && !leaseByMac.has(leaseMac)) leaseByMac.set(leaseMac, lease);
-      if (leaseIp && !leaseByIp.has(leaseIp)) leaseByIp.set(leaseIp, lease);
-    }
-
-    const nameFrom = (obj: any): string => {
-      if (!obj) return '';
-      return String(obj['host-name'] || '').trim();
+    // Collect every known host name (from DHCP leases and the hotspot host
+    // table) keyed by MAC *and* IP. Keeping only the FIRST name-bearing entry
+    // means duplicate/older leases without a name can't shadow a good one.
+    const nameByMac = new Map<string, string>();
+    const nameByIp = new Map<string, string>();
+    const macByIp = new Map<string, string>();
+    const addSource = (rawMac: any, rawIp: any, rawName: any): void => {
+      const mac = String(rawMac || '').toLowerCase();
+      const ip = this.normalizeIp(String(rawIp || ''));
+      const name = String(rawName || '').trim();
+      if (mac && ip && !macByIp.has(ip)) macByIp.set(ip, mac);
+      if (!name) return;
+      if (mac && !nameByMac.has(mac)) nameByMac.set(mac, name);
+      if (ip && !nameByIp.has(ip)) nameByIp.set(ip, name);
     };
+    for (const host of hotspotHosts) addSource(host['mac-address'], host.address, host['host-name']);
+    for (const lease of dhcpLeases) addSource(lease['mac-address'], lease.address, lease['host-name']);
 
     const now = Date.now();
     const currentIds = new Set<string>();
@@ -504,17 +500,16 @@ class MikroTikService {
       }
 
       const ipKey = this.normalizeIp(conn.address || '');
-      // The active entry may expose the MAC as `mac-address`, not `mac`.
-      const connMac = String(conn.mac || conn['mac-address'] || '').toLowerCase();
-
-      const lease = (connMac && leaseByMac.get(connMac)) || (ipKey && leaseByIp.get(ipKey)) || undefined;
-      const host = (connMac && hostByMac.get(connMac)) || (ipKey && hostByIp.get(ipKey)) || undefined;
-
-      if (!conn.mac && lease && lease['mac-address']) conn.mac = lease['mac-address'];
-      if (!conn.mac && host && host['mac-address']) conn.mac = host['mac-address'];
+      // The active entry may expose the MAC as `mac-address`, not `mac`; if it
+      // has neither, recover the MAC from the DHCP lease for this IP.
+      const connMac = String(conn.mac || conn['mac-address'] || '').toLowerCase() || macByIp.get(ipKey) || '';
+      if (!conn.mac && connMac) conn.mac = connMac;
 
       if (!conn.hostname) {
-        const name = nameFrom(lease) || nameFrom(host) || String(conn['host-name'] || '').trim();
+        const name =
+          (connMac && nameByMac.get(connMac)) ||
+          (ipKey && nameByIp.get(ipKey)) ||
+          String(conn['host-name'] || '').trim();
         if (name) conn.hostname = name;
       }
     }

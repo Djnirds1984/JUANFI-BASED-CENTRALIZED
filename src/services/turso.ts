@@ -165,21 +165,20 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
     for (const table of SYNC_TABLES) {
       const rows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       counts[table] = rows.length;
-
-      // Delete all rows in Turso table, then re-insert from local
-      await client.execute(`DELETE FROM ${table}`);
-
       if (rows.length === 0) continue;
 
+      const key = SYNC_KEYS[table] || 'id';
       const columns = Object.keys(rows[0]);
       const placeholders = columns.map(() => '?').join(', ');
       const insertSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
+      const deleteSql = `DELETE FROM ${table} WHERE ${key} = ?`;
 
+      // UPSERT by global key. We no longer wipe the cloud table, so multiple
+      // panels MERGE into the same central database instead of overwriting
+      // each other (this is what makes it centralized across routers).
       for (const row of rows) {
-        const values = columns.map(col => {
-          if (col === 'router_id') return routerId;
-          return row[col];
-        });
+        const values = columns.map(col => (col === 'router_id' ? routerId : row[col]));
+        await client.execute({ sql: deleteSql, args: [row[key]] });
         await client.execute({ sql: insertSql, args: values });
       }
     }
@@ -194,10 +193,14 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
   }
 }
 
-const DEDUP_KEYS: Record<string, string> = {
+// GLOBAL identity per synced table. These are the merge keys for the
+// centralized (multi-router) cloud: an account is shared by USERNAME, a voucher
+// by CODE, a device session by TOKEN - NOT per router. This is what lets the
+// same account work on any router.
+const SYNC_KEYS: Record<string, string> = {
   hotspot_users: 'username',
   vouchers: 'code',
-  device_sessions: 'mac_address',
+  device_sessions: 'session_token',
 };
 
 export async function restoreFromCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
@@ -213,44 +216,40 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
 
     for (const table of SYNC_TABLES) {
       const result = await client.execute(`SELECT * FROM ${table}`);
-      let rows = result.rows;
+      let rows = result.rows as any[];
+      const key = SYNC_KEYS[table] || 'id';
+      rows = deduplicateRows(rows, key);
       counts[table] = rows.length;
-
-      const dedupKey = DEDUP_KEYS[table];
-      if (dedupKey) {
-        rows = deduplicateRows(rows, dedupKey);
-      }
-
-      localDb.exec(`DELETE FROM ${table}`);
-
       if (rows.length === 0) continue;
 
-      const columns = Object.keys(rows[0] as object);
-      const placeholders = columns.map(() => '?').join(', ');
-      const insertSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
+      // MERGE by key: keep this panel's own rows and add/update the shared
+      // accounts + device-session tokens coming from the other routers.
+      const columns = Object.keys(rows[0] as object).filter((c) => c !== 'id');
+      const updCols = columns.filter((c) => c !== key);
+      const updSql = `UPDATE ${table} SET ${updCols.map((c) => `${c} = ?`).join(', ')} WHERE ${key} = ?`;
+      const insSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
+      const stmtUpd = localDb.prepare(updSql);
+      const stmtIns = localDb.prepare(insSql);
+      // device_sessions has a unique (router_id, mac): free the slot first.
+      const freeMacStmt = table === 'device_sessions'
+        ? localDb.prepare("UPDATE device_sessions SET mac_address = '' WHERE mac_address = ? AND session_token <> ?")
+        : null;
 
-      const stmt = localDb.prepare(insertSql);
-      const insertMany = localDb.transaction((rows: any[]) => {
-        for (const row of rows) {
-          const values = columns.map(col => {
-            if (col === 'router_id') return routerId;
-            return (row as any)[col];
-          });
-          stmt.run(...values);
+      const mergeMany = localDb.transaction((batch: any[]) => {
+        for (const row of batch) {
+          const value = (col: string) => (col === 'router_id' ? routerId : row[col]);
+          if (freeMacStmt && row.mac_address) freeMacStmt.run(row.mac_address, row[key]);
+          const info = stmtUpd.run(...updCols.map(value), row[key]);
+          if (info.changes === 0) stmtIns.run(...columns.map(value));
         }
       });
-      insertMany(rows);
+      mergeMany(rows);
     }
-
-    // Clear device_sessions after restore — router sessions are stale
-    // Users will re-authenticate and create fresh sessions
-    localDb.exec(`DELETE FROM device_sessions`);
-    counts.device_sessions = 0;
 
     // Push restored users/vouchers to the MikroTik router
     const syncResult = await syncUsersToRouter();
 
-    const parts = [`Restored ${SYNC_TABLES.length} tables from Turso`, `sessions cleared`];
+    const parts = [`Merged ${SYNC_TABLES.length} tables from Turso (centralized)`];
     if (syncResult.skipped) {
       parts.push(syncResult.skipped);
     } else {

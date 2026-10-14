@@ -363,13 +363,26 @@ function findHotspotUser(routerId: number, username: string, columns: string): a
   const db = getDb();
   const mac = normalizeUserName(username);
   const macMatch = mac.length === 12 ? mac : '';
-  return db.prepare(
-    `SELECT ${columns} FROM hotspot_users
-     WHERE router_id = ? AND disabled = 0
+  const match = `disabled = 0
        AND (LOWER(username) = LOWER(?)
-            OR ( ? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+            OR ( ? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))`;
+
+  // 1) This router's account first.
+  const local = db.prepare(
+    `SELECT ${columns} FROM hotspot_users
+     WHERE router_id = ? AND ${match}
      ORDER BY id DESC LIMIT 1`
   ).get(routerId, username, macMatch, macMatch) as any;
+  if (local) return local;
+
+  // 2) CENTRALIZED fallback: the same account may have been created on another
+  // router (shared via Turso), so match by username across ALL routers. This is
+  // what lets one account authenticate on any router.
+  return db.prepare(
+    `SELECT ${columns} FROM hotspot_users
+     WHERE ${match}
+     ORDER BY id DESC LIMIT 1`
+  ).get(username, macMatch, macMatch) as any;
 }
 
 function authenticateUser(routerId: number, username: string): AuthResult {

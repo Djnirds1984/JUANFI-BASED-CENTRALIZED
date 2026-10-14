@@ -235,17 +235,16 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           // shown immediately; if the reset fails we keep the old limit as the
           // base so the uptime is still accounted for.
           const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
-          const oldLimitSec = mikrotikUptimeToSeconds(
-            existingOnRouter['limit-uptime'] ?? (existingOnRouter as any)['uptime-limit']
-          );
-
+          // Make the router's user limit reflect the panel's PAID remaining time
+          // exactly (expiryAt is already the stacked total, so `msLeft` is the
+          // new remaining). Live `session-time-left = limit-uptime - uptime`, so:
+          //   - after a successful counter reset (uptime -> 0): limit = remaining
+          //   - if the reset fails:                             limit = uptime + remaining
+          // Either way the router shows the panel's remaining, which also heals
+          // any drift/inflation left over from earlier top-ups.
+          const paidRemainingSec = Math.max(0, Math.floor(msLeft / 1000));
           const resetOk = await mikroTikService.resetHotspotUserCounters(routerId, routerUserName);
-          const baseLimitSec = resetOk
-            ? Math.max(0, oldLimitSec - uptimeSec)
-            : oldLimitSec;
-          const newLimitSec = oldLimitSec > 0
-            ? Math.max(60, baseLimitSec + duration * 60)
-            : Math.max(60, Math.floor(msLeft / 1000));
+          const newLimitSec = Math.max(60, paidRemainingSec + (resetOk ? 0 : uptimeSec));
 
           const setOk = await mikroTikService.setUserUptimeLimit(
             routerId,
@@ -254,8 +253,8 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           );
           console.log(
             `coin-auth: extend ${macNoColon} on router ${routerId} -> user "${routerUserName}" ` +
-            `limit ${oldLimitSec}s - uptime ${uptimeSec}s + ${duration * 60}s = ${newLimitSec}s ` +
-            `(${secondsToUptimeLimit(newLimitSec)}), reset=${resetOk} set=${setOk}`
+            `paidRemaining ${paidRemainingSec}s + uptime ${uptimeSec}s (reset=${resetOk}) = ` +
+            `limit ${newLimitSec}s (${secondsToUptimeLimit(newLimitSec)}), set=${setOk}`
           );
           if (!setOk) {
             console.error(

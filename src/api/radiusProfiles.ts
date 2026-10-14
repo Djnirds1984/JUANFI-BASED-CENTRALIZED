@@ -48,6 +48,34 @@ router.get('/router/:routerId/:profileId', (req: Request, res: Response) => {
   }
 });
 
+// Assign the router's DEFAULT RADIUS profile to every account that has none.
+router.post('/router/:routerId/assign-default', (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const db = getDb();
+
+    const def = db.prepare(
+      'SELECT id, name FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1'
+    ).get(routerId) as any;
+
+    if (!def) {
+      res.status(400).json({ error: 'No default RADIUS profile set for this router' });
+      return;
+    }
+
+    const info = db.prepare(
+      `UPDATE hotspot_users SET radius_profile_id = ?, profile = COALESCE(NULLIF(profile, ''), ?),
+         updated_at = datetime('now')
+       WHERE router_id = ? AND (radius_profile_id IS NULL OR radius_profile_id = 0)`
+    ).run(def.id, def.name, routerId);
+
+    res.json({ message: `Assigned default profile "${def.name}" to ${info.changes} account(s)`, updated: info.changes });
+  } catch (error: any) {
+    console.error('Assign default profile error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/router/:routerId', (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

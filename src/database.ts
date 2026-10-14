@@ -146,6 +146,15 @@ export function initializeDatabase(): void {
       -- and defaults to 1; router_id is only used for admin grouping.
     );
 
+    CREATE TABLE IF NOT EXISTS device_macs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mac_address TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL DEFAULT '',
+      router_id INTEGER,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS session_bindings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id INTEGER NOT NULL,
@@ -242,6 +251,7 @@ export function initializeDatabase(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_active_devices_mac ON active_devices(router_id, mac_address) WHERE mac_address <> '';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_sessions_mac ON device_sessions(router_id, mac_address) WHERE mac_address <> '';
     CREATE INDEX IF NOT EXISTS idx_device_sessions_username ON device_sessions(username);
+    CREATE INDEX IF NOT EXISTS idx_device_macs_username ON device_macs(username);
     CREATE INDEX IF NOT EXISTS idx_session_bindings_session ON session_bindings(session_id);
     CREATE INDEX IF NOT EXISTS idx_radius_clients_router ON radius_clients(router_id);
   `);

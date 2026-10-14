@@ -589,6 +589,10 @@ class ApiClient {
     return this.put(`/radius-profiles/router/${routerId}/${profileId}`, data);
   }
 
+  async assignDefaultRadiusProfile(routerId) {
+    return this.post(`/radius-profiles/router/${routerId}/assign-default`);
+  }
+
   async deleteRadiusProfile(routerId, profileId) {
     return this.delete(`/radius-profiles/router/${routerId}/${profileId}`);
   }

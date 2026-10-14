@@ -38,6 +38,7 @@ const RADIUS_ATTR = {
   ACCT_OUTPUT_PACKETS: 47,
   ACCT_SESSION_TIME: 48,
   ACCT_TERMINATE_CAUSE: 49,
+  CALLING_STATION_ID: 31,
   NAS_PORT_TYPE: 61,
   NAS_IDENTIFIER: 87,
   VENDOR_SPECIFIC: 26,
@@ -385,15 +386,58 @@ function findHotspotUser(routerId: number, username: string, columns: string): a
   ).get(username, macMatch, macMatch) as any;
 }
 
-function authenticateUser(routerId: number, username: string): AuthResult {
+function normalizeMacAttr(v: any): string {
+  const hex = String(v || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  if (hex.length !== 12) return '';
+  return hex.match(/.{2}/g)!.join(':');
+}
+
+/** Remember mac -> account so a device can be recognised by its MAC alone. */
+function recordDeviceMac(mac: string, username: string, routerId?: number): void {
+  if (!mac || !username) return;
+  try {
+    getDb().prepare(
+      `INSERT INTO device_macs (mac_address, username, router_id, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(mac_address) DO UPDATE SET
+         username = excluded.username, router_id = excluded.router_id, updated_at = datetime('now')`
+    ).run(mac, username, routerId ?? null);
+  } catch (err) {
+    console.error('[RADIUS] device_macs write failed:', (err as Error).message);
+  }
+}
+
+/** Resolve an account username from a MAC (the random-MAC / no-cookie path). */
+function lookupUsernameByMac(mac: string): string | null {
+  if (!mac) return null;
+  try {
+    const row = getDb().prepare('SELECT username FROM device_macs WHERE mac_address = ?').get(mac) as any;
+    return row?.username || null;
+  } catch {
+    return null;
+  }
+}
+
+function authenticateUser(routerId: number, username: string, callingMac?: string): AuthResult {
   try {
     console.log(`[RADIUS-auth] Attempting auth: routerId=${routerId}, username=${username}`);
     const db = getDb();
-    const user = findHotspotUser(
-      routerId,
-      username,
-      'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users'
-    );
+    const cols = 'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users';
+    let user = findHotspotUser(routerId, username, cols);
+
+    // No account for this username: if the router told us the device MAC
+    // (Calling-Station-Id) and we have seen that MAC before, use the account it
+    // belongs to (random-MAC / no-cookie fallback).
+    if (!user && callingMac) {
+      const alias = lookupUsernameByMac(callingMac);
+      if (alias && alias.toLowerCase() !== String(username).toLowerCase()) {
+        const alt = findHotspotUser(routerId, alias, cols);
+        if (alt) {
+          user = alt;
+          console.log(`[RADIUS-auth] matched username "${username}" -> account "${alias}" by Calling-Station-Id ${callingMac}`);
+        }
+      }
+    }
 
     console.log(`[RADIUS-auth] User lookup result:`, user ? `Found id=${user.id}, disabled=${user.disabled}` : 'NOT FOUND');
 
@@ -487,6 +531,10 @@ function authenticateUser(routerId: number, username: string): AuthResult {
 
       db.prepare('UPDATE hotspot_users SET last_login_at = datetime(\'now\') WHERE id = ?').run(user.id);
 
+      // Remember this MAC -> account so a future login (possibly a new/random
+      // MAC as the username) resolves back to the same account.
+      if (callingMac) recordDeviceMac(callingMac, user.username, routerId);
+
       return { accept: true, replyAttributes: profileAttrs, profileId, sessionTimeout: profileAttrs.find(a => a.type === RADIUS_ATTR.SESSION_TIMEOUT)?.value as number | undefined };
     }
 
@@ -507,6 +555,14 @@ function authenticateUser(routerId: number, username: string): AuthResult {
           profileAttrs = buildProfileAttributes(profile);
           profileId = profile.id;
         }
+      }
+
+      // Use the router's default RADIUS profile when the voucher has none, so
+      // RADIUS-profile attributes (rate-limit / idle-timeout) apply to vouchers too.
+      if (profileAttrs.length === 0) {
+        const def = db.prepare('SELECT * FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1')
+          .get(routerId) as any;
+        if (def) { profileAttrs = buildProfileAttributes(def); profileId = def.id; }
       }
 
       if (voucher.duration_minutes) {
@@ -555,7 +611,10 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
     return;
   }
 
-  const result = authenticateUser(client.router_id, username);
+  const callingAttr = getAttr(packet.attributes, RADIUS_ATTR.CALLING_STATION_ID);
+  const callingMac = normalizeMacAttr(typeof callingAttr?.value === 'string' ? callingAttr.value : '');
+
+  const result = authenticateUser(client.router_id, username, callingMac || undefined);
 
   const responseCode = result.accept ? RADIUS_CODES.ACCESS_ACCEPT : RADIUS_CODES.ACCESS_REJECT;
   const response = buildResponsePacket(
@@ -604,6 +663,9 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
   const sessTime = typeof sessionTime?.value === 'number' ? sessionTime.value : 0;
   const nasIpStr = typeof nasIp?.value === 'string' ? nasIp.value : rinfo.address;
 
+  const acctCallingAttr = getAttr(packet.attributes, RADIUS_ATTR.CALLING_STATION_ID);
+  const acctMac = normalizeMacAttr(typeof acctCallingAttr?.value === 'string' ? acctCallingAttr.value : '');
+
   try {
     const db = getDb();
     if (status === ACCT_STATUS.START) {
@@ -622,6 +684,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
          WHERE router_id = ? AND user = ?`
       ).run(bytesIn, bytesOut, client.router_id, user);
 
+      if (acctMac) recordDeviceMac(acctMac, user, client.router_id);
       console.log(`[RADIUS] Acct START: user=${user} session=${session} router=${client.router_id}`);
       logRadiusEvent('accounting', `Accounting-Start: session=${session} in=${bytesIn} out=${bytesOut}`, client.router_id, user, rinfo.address);
     } else if (status === ACCT_STATUS.STOP) {

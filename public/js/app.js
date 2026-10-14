@@ -4375,6 +4375,7 @@ const App = {
           <h3>RADIUS Management</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
             <button class="btn btn-outline" id="radius-purge-local" title="Remove local hotspot users named like a MAC (RADIUS mode keeps accounts in the panel)">Purge local MAC users</button>
+            <button class="btn btn-outline" id="radius-assign-default" title="Assign the default RADIUS profile to every account that has none">Assign default profile</button>
             <select id="radius-router-select" class="btn btn-outline">
               ${radiusRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
             </select>
@@ -4393,6 +4394,17 @@ const App = {
     document.getElementById('radius-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
       this.loadRadiusTab();
+    });
+
+    document.getElementById('radius-assign-default').addEventListener('click', async () => {
+      if (!confirm('Assign the default RADIUS profile to every account on this router that has none?')) return;
+      try {
+        const r = await api.assignDefaultRadiusProfile(this.selectedRouterId);
+        this.toast(r.message || 'Done', 'success');
+        this.loadRadiusTab();
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
     });
 
     document.getElementById('radius-purge-local').addEventListener('click', async () => {

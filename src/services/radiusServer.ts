@@ -409,6 +409,20 @@ function authenticateUser(routerId: number, username: string): AuthResult {
         }
       }
 
+      // No explicit profile on the account: fall back to the router's DEFAULT
+      // RADIUS profile (if one is set) so rate-limit / idle-timeout come from
+      // RADIUS instead of per-device rows. No default profile => no change.
+      if (profileAttrs.length === 0) {
+        const defaultProfile = db.prepare(
+          'SELECT * FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1'
+        ).get(routerId) as any;
+        if (defaultProfile) {
+          profileAttrs = buildProfileAttributes(defaultProfile);
+          profileId = defaultProfile.id;
+          console.log(`[RADIUS] User ${username}: using default profile "${defaultProfile.name}"`);
+        }
+      }
+
       if (profileAttrs.length === 0) {
         if (user.uptime_limit && user.uptime_limit !== '00:00:00') {
           const parts = user.uptime_limit.split(':').map(Number);

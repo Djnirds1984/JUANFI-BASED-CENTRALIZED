@@ -14,6 +14,7 @@ interface TursoConfig {
 }
 
 let autoSyncIntervalId: NodeJS.Timeout | null = null;
+let autoPullIntervalId: NodeJS.Timeout | null = null;
 
 export function getConfig(): TursoConfig | null {
   try {
@@ -360,7 +361,7 @@ export function startAutoSync(intervalMs = 10000): void {
   const config = getConfig();
   if (!config?.url || !config?.authToken) return;
 
-  console.log(`[Turso] Auto-sync started (every ${intervalMs / 1000}s)`);
+  console.log(`[Turso] Auto-sync started (push every ${intervalMs / 1000}s)`);
   autoSyncIntervalId = setInterval(async () => {
     try {
       await syncToCloud();
@@ -368,6 +369,19 @@ export function startAutoSync(intervalMs = 10000): void {
       console.error('[Turso] Auto-sync error:', err.message);
     }
   }, intervalMs);
+
+  // Also PULL periodically (merge) so accounts/sessions created on OTHER panels
+  // show up here. This is what makes it centralized across routers - without it
+  // a running panel would only ever push and never see the shared data.
+  const pullMs = Math.max(intervalMs * 3, 30000);
+  console.log(`[Turso] Auto-merge (pull) every ${pullMs / 1000}s`);
+  autoPullIntervalId = setInterval(async () => {
+    try {
+      await restoreFromCloud();
+    } catch (err: any) {
+      console.error('[Turso] Auto-merge error:', err.message);
+    }
+  }, pullMs);
 }
 
 export function stopAutoSync(): void {
@@ -375,6 +389,10 @@ export function stopAutoSync(): void {
     clearInterval(autoSyncIntervalId);
     autoSyncIntervalId = null;
     console.log('[Turso] Auto-sync stopped');
+  }
+  if (autoPullIntervalId) {
+    clearInterval(autoPullIntervalId);
+    autoPullIntervalId = null;
   }
 }
 

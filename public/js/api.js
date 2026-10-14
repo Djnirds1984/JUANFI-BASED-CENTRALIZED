@@ -131,6 +131,10 @@ class ApiClient {
     return this.delete(`/hotspot/router/${routerId}/devices/${deviceId}`);
   }
 
+  async purgeLocalMacUsers(routerId) {
+    return this.post(`/hotspot/router/${routerId}/purge-local-mac-users`);
+  }
+
   async removeActiveConnection(routerId, activeId) {
     return this.delete(`/hotspot/router/${routerId}/active/${activeId}`);
   }

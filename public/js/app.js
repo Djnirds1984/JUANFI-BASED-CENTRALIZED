@@ -4373,9 +4373,12 @@ const App = {
       <div class="card">
         <div class="card-header">
           <h3>RADIUS Management</h3>
-          <select id="radius-router-select" class="btn btn-outline">
-            ${radiusRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
-          </select>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <button class="btn btn-outline" id="radius-purge-local" title="Remove local hotspot users named like a MAC (RADIUS mode keeps accounts in the panel)">Purge local MAC users</button>
+            <select id="radius-router-select" class="btn btn-outline">
+              ${radiusRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+            </select>
+          </div>
         </div>
         <div class="tabs">
           <button class="tab ${this.radiusTab === 'profiles' ? 'active' : ''}" data-tab="profiles">Profiles</button>
@@ -4390,6 +4393,16 @@ const App = {
     document.getElementById('radius-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
       this.loadRadiusTab();
+    });
+
+    document.getElementById('radius-purge-local').addEventListener('click', async () => {
+      if (!confirm('Remove all LOCAL hotspot users whose name is a MAC from this router? In RADIUS mode accounts live in the panel, so devices then authenticate through RADIUS only. Connected devices must reconnect.')) return;
+      try {
+        const r = await api.purgeLocalMacUsers(this.selectedRouterId);
+        this.toast(r.message || 'Done', 'success');
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
     });
 
     document.querySelectorAll('#radius-tab-content').forEach(() => {});

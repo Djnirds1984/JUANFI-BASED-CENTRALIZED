@@ -213,6 +213,39 @@ router.post('/router/:routerId/:mikrotikUserId/enable', async (req: Request, res
   }
 });
 
+// Remove local hotspot users whose name looks like a MAC (12 hex). Used when a
+// router runs in RADIUS mode so devices authenticate via RADIUS ONLY and can't
+// be shadowed by leftover local users.
+router.post('/router/:routerId/purge-local-mac-users', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const users = await mikroTikService.getHotspotUsers(routerId);
+    const isMacName = (name: any) => /^[0-9a-f]{12}$/i.test(String(name || '').replace(/[^0-9a-fA-F]/g, ''));
+    const macUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isMacName(u.name));
+
+    let removed = 0;
+    for (const u of macUsers) {
+      try {
+        await mikroTikService.removeHotspotUser(routerId, u['.id']);
+        removed++;
+      } catch (e: any) {
+        console.error(`purge-local-mac-users: failed to remove ${u.name}:`, e.message);
+      }
+    }
+
+    res.json({ message: `Removed ${removed} local MAC user(s) from the router`, removed, total: macUsers.length });
+  } catch (error: any) {
+    console.error('Purge local MAC users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/active', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

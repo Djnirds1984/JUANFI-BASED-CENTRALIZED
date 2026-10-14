@@ -76,6 +76,14 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   console.log(`coin-auth: request mac=${macNoColon} routerId=${routerId} authMode=${authMode} extend=${isExtend} duration=${duration}min`);
 
   const upsert = db.transaction(() => {
+    // RADIUS mode: give the coin-insert account the router's DEFAULT RADIUS
+    // profile so rate-limit / idle-timeout come from the profile (the coin's
+    // own paid time still becomes the Session-Timeout).
+    const defaultProfile = authMode === 'radius'
+      ? (db.prepare('SELECT id, name FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1')
+          .get(routerId) as any)
+      : null;
+
     // Match tolerating the router's username casing / MAC separators so we
     // update the EXISTING account instead of inserting a duplicate row (which
     // left the real account disabled/expired and auth kept failing).
@@ -108,14 +116,27 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       }
       db.prepare(
         `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now'),
-          source = ?, profile = 'default' WHERE id = ?`
-      ).run(expiryAt, authMode === 'radius' ? 'radius' : 'api', existing.id);
+          source = ?, profile = COALESCE(NULLIF(profile, ''), ?),
+          radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?`
+      ).run(
+        expiryAt,
+        authMode === 'radius' ? 'radius' : 'api',
+        defaultProfile?.name || 'default',
+        defaultProfile?.id ?? null,
+        existing.id
+      );
     } else {
       expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
       db.prepare(
-        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source)
-         VALUES (?, ?, '', 'default', 'Coin-insert MAC user', 0, ?, ?)`
-      ).run(routerId, macNoColon, expiryAt, authMode === 'radius' ? 'radius' : 'api');
+        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source, radius_profile_id)
+         VALUES (?, ?, '', ?, 'Coin-insert MAC user', 0, ?, ?, ?)`
+      ).run(
+        routerId, macNoColon,
+        defaultProfile?.name || 'default',
+        expiryAt,
+        authMode === 'radius' ? 'radius' : 'api',
+        defaultProfile?.id ?? null
+      );
     }
     return { expiryAt, hadRemaining };
   });
@@ -194,13 +215,13 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       }
     }
 
-    // Push the new limit to the router's LOCAL hotspot user.
-    // - API mode: the router authenticates locally, so this is required.
-    // - RADIUS mode: normally handled by CoA above, but if the device actually
-    //   authenticated against a LOCAL user we still update it. In radius mode we
-    //   only UPDATE an existing local user (never create one) so we don't shadow
-    //   RADIUS auth.
-    if (mikroTikService.isConnected(routerId)) {
+    // Push the new limit to the router's LOCAL hotspot user - API mode ONLY.
+    //
+    // In RADIUS mode the router authenticates AND accounts via RADIUS, so we
+    // must NOT create or update local users: MikroTik checks the local user list
+    // first, so a local MAC user lets the device bypass RADIUS (and RADIUS
+    // accounting) entirely. Live extensions go through the CoA above.
+    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
 
@@ -215,17 +236,13 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
-          if (authMode === 'radius') {
-            console.log(`coin-auth: no local hotspot user for ${macNoColon} on router ${routerId} (radius mode) - local push skipped`);
-          } else {
-            await mikroTikService.createHotspotUser(routerId, {
-              username: macNoColon,
-              password: '',
-              profile: 'default',
-              uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
-              comment: 'Coin-insert MAC user (panel portal)',
-            });
-          }
+          await mikroTikService.createHotspotUser(routerId, {
+            username: macNoColon,
+            password: '',
+            profile: 'default',
+            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
+            comment: 'Coin-insert MAC user (panel portal)',
+          });
         } else {
           // Top-up on an already-logged-in device.
           //
@@ -277,6 +294,8 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         // payment. The device can still retry login once the router syncs.
         console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
       }
+    } else if (authMode === 'radius') {
+      console.log(`coin-auth: RADIUS mode - no local hotspot user written for ${macNoColon} (RADIUS auth + CoA only)`);
     } else {
       console.log(
         `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +

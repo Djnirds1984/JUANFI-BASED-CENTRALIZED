@@ -4381,6 +4381,7 @@ const App = {
           <button class="tab ${this.radiusTab === 'profiles' ? 'active' : ''}" data-tab="profiles">Profiles</button>
           <button class="tab ${this.radiusTab === 'sessions' ? 'active' : ''}" data-tab="sessions">Sessions</button>
           <button class="tab ${this.radiusTab === 'active' ? 'active' : ''}" data-tab="active">Active</button>
+          <button class="tab ${this.radiusTab === 'logs' ? 'active' : ''}" data-tab="logs">Logs</button>
         </div>
         <div id="radius-tab-content">Loading...</div>
       </div>
@@ -4416,6 +4417,8 @@ const App = {
         await this.loadRadiusSessions(container);
       } else if (this.radiusTab === 'active') {
         await this.loadRadiusActiveSessions(container);
+      } else if (this.radiusTab === 'logs') {
+        await this.loadRadiusLogs(container);
       }
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
@@ -4959,6 +4962,90 @@ const App = {
       clearInterval(this._radiusActiveInterval);
       this._radiusActiveInterval = null;
     }
+    if (this._radiusLogsInterval) {
+      clearInterval(this._radiusLogsInterval);
+      this._radiusLogsInterval = null;
+    }
+  },
+
+  // Live RADIUS log console (auth accepts/rejects, accounting, CoA, warnings).
+  async loadRadiusLogs(container) {
+    if (!container) container = document.getElementById('radius-tab-content');
+    this.clearRadiusPollers();
+
+    const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+    const typeColor = (t) => {
+      switch (t) {
+        case 'accept': return '#22c55e';
+        case 'reject': return '#ef4444';
+        case 'accounting': return '#818cf8';
+        case 'warning': return '#f59e0b';
+        case 'error': return '#ef4444';
+        default: return '#94a3b8';
+      }
+    };
+
+    container.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
+        <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">
+          RADIUS Log <span style="color:#22c55e">&#9679;</span> <span style="color:var(--text-muted);font-weight:400;text-transform:none">live</span>
+        </h4>
+        <div style="display:flex;align-items:center;gap:0.75rem">
+          <label style="font-size:0.8rem;color:var(--text-muted);cursor:pointer">
+            <input type="checkbox" id="radius-log-autoscroll" checked style="vertical-align:middle"> Auto-scroll
+          </label>
+          <button class="btn btn-sm btn-outline" id="radius-log-clear">Clear</button>
+        </div>
+      </div>
+      <div id="radius-log-box" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+           background:#0b1220;color:#cbd5e1;border:1px solid var(--border);border-radius:8px;padding:0.75rem;
+           height:60vh;overflow:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word"></div>
+    `;
+
+    const box = document.getElementById('radius-log-box');
+    const autoChk = document.getElementById('radius-log-autoscroll');
+
+    const refresh = async () => {
+      try {
+        const logs = await api.getRadiusLogs(this.selectedRouterId, 300);
+        if (!box || !box.parentNode) return; // tab switched away
+        const rows = (logs || []).slice().reverse(); // oldest -> newest (console tail)
+        const wasBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+        const prevTop = box.scrollTop;
+
+        box.innerHTML = rows.length === 0
+          ? '<div style="color:#64748b">No RADIUS log entries yet.</div>'
+          : rows.map((l) => {
+              const time = esc(l.created_at || '');
+              const color = typeColor(l.log_type);
+              const type = esc(String(l.log_type || 'info').toUpperCase());
+              const user = l.username ? ` <span style="color:#e2e8f0">${esc(l.username)}</span>` : '';
+              const code = l.response_code ? ` <span style="color:#64748b">[${esc(l.response_code)}]</span>` : '';
+              const src = l.source_ip ? ` <span style="color:#475569">(${esc(l.source_ip)})</span>` : '';
+              return `<div><span style="color:#64748b">${time}</span> <span style="color:${color};font-weight:600">${type}</span>${user}${code}${src} <span>${esc(l.message)}</span></div>`;
+            }).join('');
+
+        if (autoChk && autoChk.checked && wasBottom) box.scrollTop = box.scrollHeight;
+        else box.scrollTop = prevTop;
+      } catch (err) {
+        // keep the last view; a transient error shouldn't wipe the log
+      }
+    };
+
+    document.getElementById('radius-log-clear').addEventListener('click', async () => {
+      if (!confirm('Clear the RADIUS log for this router?')) return;
+      try {
+        await api.clearRadiusLogs(this.selectedRouterId);
+        await refresh();
+        this.toast('RADIUS log cleared', 'success');
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
+    });
+
+    await refresh();
+    if (box) box.scrollTop = box.scrollHeight;
+    this._radiusLogsInterval = setInterval(refresh, 2000);
   },
 
   showAddRadiusUserModal() {

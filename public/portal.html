@@ -402,7 +402,10 @@ body#loginBody {
 
 </div>
 	<!-- Portal logic: own JS file located in public/assets/js -->
+	<!-- Roaming session token bridge (panel-hosted portal). -->
+	<script>window.controllerApiUrl = '/api'; window.sessionCookieName = 'juanfi_sid';</script>
 	<script src="/assets/js/md5.js" defer></script>
+	<script src="/assets/js/session.js" defer></script>
 	<script src="/assets/js/portal.js" defer></script>
 </body>
 

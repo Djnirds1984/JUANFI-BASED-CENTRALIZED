@@ -300,9 +300,10 @@ export function bindSession(params: {
   username: string;
   server?: string;
   sessionTimeLeft?: any;
+  routerId?: number;
 }): { ok: boolean; token: string } {
   const db = getDb();
-  const routerId = 1;
+  const routerId = params.routerId || 1;
   const mac = normalizeMac(params.mac);
   const username = String(params.username || '');
   const now = nowStamp();

@@ -97,7 +97,7 @@ router.get('/token-frame', (_req: Request, res: Response) => {
             if(r&&r.token){setCookie(COOKIE_NAME,r.token,TEN_YEARS);e.source.postMessage({type:'token',token:r.token},'*');}
           }catch(ex){}
         };
-        X.send(JSON.stringify({mac:d.mac,ip:d.ip||'',server:d.server||''}));
+        X.send(JSON.stringify({mac:d.mac,ip:d.ip||'',server:d.server||'',routerId:d.routerId||''}));
       }
     }else if(d.type==='set-token'){
       if(d.token&&TOKEN_RE.test(d.token))setCookie(COOKIE_NAME,d.token,TEN_YEARS);
@@ -188,6 +188,7 @@ router.post('/bind', (req: Request, res: Response) => {
       username,
       server: req.body?.server,
       sessionTimeLeft: req.body?.sessionTimeLeft,
+      routerId: parseInt(req.body?.routerId || '1', 10) || 1,
     });
 
     res.json(result);

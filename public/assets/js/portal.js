@@ -21,6 +21,8 @@ var chapChallenge = storedParam('chap-challenge', params.get('chap-challenge') |
 var linkLoginOnly = storedParam('link-login-only', params.get('link-login-only') || '');
 var linkStatus = params.get('link-status') || storedParam('link-status', '') || '/status';
 var routerId = params.get('router-id') || storedParam('router-id', '');
+// Roaming token bridge (session.js) reads these at call time.
+window.controllerRouterId = routerId || '';
 
 // ---- Vendo config ----
 var vendoConfig = null;
@@ -37,6 +39,7 @@ var countdownTimer = null;
 var sessionSyncTimer = null;
 var sessionExpiresAt = null;
 var isExtendMode = false;
+var tokenBound = false;
 
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
@@ -209,12 +212,18 @@ function checkSessionState() {
 		.then(function(data) {
 			if (sessionIsOnline(data)) {
 				showConnectedState(data.remainingSeconds);
+				if (!tokenBound) {
+					tokenBound = true;
+					bindRoamingToken(macVoucherCode(), data.remainingSeconds);
+				}
 			} else {
 				showDisconnectedState();
+				tryRoamingRestore();
 			}
 		})
 		.catch(function(e) {
 			showDisconnectedState();
+			tryRoamingRestore();
 		});
 }
 
@@ -227,6 +236,36 @@ function sessionIsOnline(data) {
 	if (!data || !data.hasSession || !(data.remainingSeconds > 0)) return false;
 	if (data.liveChecked === true && data.online === false) return false;
 	return true;
+}
+
+// ---- Roaming session token (cross-SSID) ----
+function juanFiSessionAvailable() {
+	return (typeof window.JuanFiSession !== 'undefined') && window.JuanFiSession.isConfigured();
+}
+
+// Persist the token <-> MAC/username binding + remaining time so a later roam
+// to another SSID (new MAC) can restore the session.
+function bindRoamingToken(username, remainingSecs) {
+	if (!mac || !juanFiSessionAvailable()) return;
+	try {
+		window.JuanFiSession.bind(mac, username || macVoucherCode(), '', remainingSecs);
+	} catch (e) {}
+}
+
+// Roam: this browser already owns a token (possibly from another SSID with a
+// different MAC). If the panel restores it, re-login with the ORIGINAL username
+// so the account + remaining time follow the device.
+function tryRoamingRestore() {
+	if (!mac || !juanFiSessionAvailable()) return;
+	window.JuanFiSession.ensureToken(mac, ip, '').then(function(token) {
+		if (!token) return null;
+		return window.JuanFiSession.restore(mac, ip, '').then(function(res) {
+			if (!res || res.restore !== true || !res.username) return null;
+			tokenBound = true;
+			doLogin(res.username);
+			return true;
+		});
+	}).catch(function() {});
 }
 
 // ---- Vendo Config ----
@@ -358,15 +397,22 @@ var errorCodeMap = {
 function errorMsg(code) { return errorCodeMap[code] || code || 'Unknown error'; }
 
 // ---- Login ----
-function doLogin() {
-	var vc = document.getElementById('voucherInput').value.trim();
-
-	// Panel-served portal always authenticates as MAC-as-voucher.
-	// Typing anything else is ignored so it can never conflict with the
-	// coin-insert MAC session.
-	if (macAsVoucherCode) {
-		vc = macVoucherCode();
+function doLogin(loginAs) {
+	var vc;
+	if (loginAs) {
+		// Roam restore: log in with the ORIGINAL identity from the session token
+		// (not the new MAC) so the account is found on the router/RADIUS.
+		vc = String(loginAs);
 		document.getElementById('voucherInput').value = vc;
+	} else {
+		vc = document.getElementById('voucherInput').value.trim();
+		// Panel-served portal always authenticates as MAC-as-voucher.
+		// Typing anything else is ignored so it can never conflict with the
+		// coin-insert MAC session.
+		if (macAsVoucherCode) {
+			vc = macVoucherCode();
+			document.getElementById('voucherInput').value = vc;
+		}
 	}
 
 	if (!vc) { alert('Please enter a voucher code'); return false; }
@@ -399,6 +445,9 @@ function doLogin() {
 	// Submit to hidden iframe so portal page stays put — no redirect to status.html
 	document.sendin.target = 'loginFrame';
 	document.sendin.submit();
+
+	// Keep the roaming token bound to this identity so a later roam restores it.
+	setTimeout(function() { bindRoamingToken(vc); }, 2500);
 	return false;
 }
 
@@ -406,6 +455,7 @@ function doLogin() {
 function doLogout() {
 	if (!confirm('Are you sure you want to logout?')) return;
 	stopCountdown();
+	if (juanFiSessionAvailable()) { try { window.JuanFiSession.reportState('logout'); } catch (e) {} }
 
 	fetch('/api/portal/logout', {
 		method: 'POST',

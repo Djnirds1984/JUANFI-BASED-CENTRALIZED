@@ -440,21 +440,33 @@ class MikroTikService {
       })(),
     ]);
 
+    // Hostname sources, best-effort:
+    //   1. DHCP lease `host-name` (the name the client sent) - most reliable
+    //   2. DHCP lease `comment` (operator-set)
+    //   3. hotspot-host table `host-name` / `comment`
+    // Index them by MAC *and* by IP so we can match whichever the active entry
+    // exposes (MikroTik active entries use `mac-address`, not `mac`).
     const hostByIp = new Map<string, any>();
+    const hostByMac = new Map<string, any>();
     for (const host of hotspotHosts) {
-      if (host.address) {
-        hostByIp.set(this.normalizeIp(host.address), host);
-      }
+      if (host.address) hostByIp.set(this.normalizeIp(host.address), host);
+      const hmac = String(host['mac-address'] || '').toLowerCase();
+      if (hmac) hostByMac.set(hmac, host);
     }
 
     const leaseByMac = new Map<string, any>();
     const leaseByIp = new Map<string, any>();
     for (const lease of dhcpLeases) {
-      const leaseMac = (lease['mac-address'] || '').toLowerCase();
+      const leaseMac = String(lease['mac-address'] || '').toLowerCase();
       const leaseIp = this.normalizeIp(lease.address || '');
       if (leaseMac && !leaseByMac.has(leaseMac)) leaseByMac.set(leaseMac, lease);
       if (leaseIp && !leaseByIp.has(leaseIp)) leaseByIp.set(leaseIp, lease);
     }
+
+    const nameFrom = (obj: any): string => {
+      if (!obj) return '';
+      return String(obj['host-name'] || obj.comment || '').trim();
+    };
 
     const now = Date.now();
     const currentIds = new Set<string>();
@@ -493,24 +505,18 @@ class MikroTikService {
       }
 
       const ipKey = this.normalizeIp(conn.address || '');
-      const lease = (conn.mac && leaseByMac.get(String(conn.mac).toLowerCase())) || leaseByIp.get(ipKey);
-      if (lease) {
-        if (!conn.mac && lease['mac-address']) {
-          conn.mac = lease['mac-address'];
-        }
-        if (!conn.hostname && lease['host-name']) {
-          conn.hostname = lease['host-name'];
-        }
-      }
+      // The active entry may expose the MAC as `mac-address`, not `mac`.
+      const connMac = String(conn.mac || conn['mac-address'] || '').toLowerCase();
 
-      const host = ipKey ? hostByIp.get(ipKey) : undefined;
-      if (host) {
-        if (host['mac-address'] && !conn.mac) {
-          conn.mac = host['mac-address'];
-        }
-        if (host['host-name'] && !conn.hostname) {
-          conn.hostname = host['host-name'];
-        }
+      const lease = (connMac && leaseByMac.get(connMac)) || (ipKey && leaseByIp.get(ipKey)) || undefined;
+      const host = (connMac && hostByMac.get(connMac)) || (ipKey && hostByIp.get(ipKey)) || undefined;
+
+      if (!conn.mac && lease && lease['mac-address']) conn.mac = lease['mac-address'];
+      if (!conn.mac && host && host['mac-address']) conn.mac = host['mac-address'];
+
+      if (!conn.hostname) {
+        const name = nameFrom(lease) || nameFrom(host) || String(conn['host-name'] || '').trim();
+        if (name) conn.hostname = name;
       }
     }
 

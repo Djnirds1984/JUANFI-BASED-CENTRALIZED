@@ -166,7 +166,10 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
                 coaIp = String(conn.address || '').split('/')[0].split(':')[0];
                 console.log(`coin-auth: live active entry for ${macNoColon}: user="${coaUser}" ip=${coaIp} timeLeft=${conn['session-time-left']}`);
               } else {
-                console.log(`coin-auth: ${macNoColon} not in the router's live active list`);
+                const macs = (Array.isArray(live) ? live : [])
+                  .map((c: any) => String(c.mac || c['mac-address'] || c.user || '').toLowerCase())
+                  .filter(Boolean);
+                console.log(`coin-auth: ${macNoColon} not in the router's live active list (live=${macs.join(',') || 'none'})`);
               }
             }
           } catch (liveErr: any) {

@@ -158,7 +158,7 @@ function syncSessionTime() {
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
-			if (data.hasSession && data.remainingSeconds > 0) {
+			if (sessionIsOnline(data)) {
 				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
 				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
 				if (!isConnected) {
@@ -207,7 +207,7 @@ function checkSessionState() {
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
-			if (data.hasSession && data.remainingSeconds > 0) {
+			if (sessionIsOnline(data)) {
 				showConnectedState(data.remainingSeconds);
 			} else {
 				showDisconnectedState();
@@ -216,6 +216,17 @@ function checkSessionState() {
 		.catch(function(e) {
 			showDisconnectedState();
 		});
+}
+
+// A session counts as "connected" only when the device is actually online on
+// the router. `hasSession` alone can be true while offline (stored paid time);
+// showing the connected panel then leads to a top-up that tries to extend a
+// session that does not exist. When we could not check the router, fall back to
+// the stored time.
+function sessionIsOnline(data) {
+	if (!data || !data.hasSession || !(data.remainingSeconds > 0)) return false;
+	if (data.liveChecked === true && data.online === false) return false;
+	return true;
 }
 
 // ---- Vendo Config ----

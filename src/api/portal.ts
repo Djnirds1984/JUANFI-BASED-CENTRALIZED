@@ -110,8 +110,11 @@ router.get('/check-session', async (req: Request, res: Response) => {
     // 1) Live MikroTik active session - exactly what the panel renders.
     //    When found, its value is authoritative (0 = expired), so the fallbacks
     //    below must NOT re-introduce stale time.
+    let liveChecked = false;
+    let online = false;
     try {
       if (mikroTikService.isConnected(routerId)) {
+        liveChecked = true;
         const live = await mikroTikService.getActiveConnections(routerId);
         const conn = (Array.isArray(live) ? live : []).find((c: any) => {
           const connMac = String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '');
@@ -119,6 +122,7 @@ router.get('/check-session', async (req: Request, res: Response) => {
           return (!!connMac && connMac === macKey) || (!!connUser && connUser === macNoColons);
         });
         if (conn) {
+          online = true;
           const left = mikrotikTimeToSeconds(conn['session-time-left']);
           if (left !== Infinity) {
             remainingSeconds = Math.max(0, Math.floor(left));
@@ -172,10 +176,18 @@ router.get('/check-session', async (req: Request, res: Response) => {
       }
     }
 
+    // `online` is true only when the device has a LIVE session on the router.
+    // `hasSession` only means "time is available" (it can be true while the
+    // device is offline, from the stored paid validity). The portal must use
+    // `online` to decide connected vs disconnected, otherwise a device that is
+    // not logged in sees the connected panel and its top-up tries to extend a
+    // session that does not exist.
     res.json({
       hasSession: remainingSeconds > 0,
       remainingSeconds,
       expiresAt: hotspotUser.expiry_at || null,
+      online,
+      liveChecked,
       username: macNoColons,
     });
   } catch (error: any) {

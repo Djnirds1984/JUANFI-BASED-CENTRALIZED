@@ -33,7 +33,7 @@ export function syncCoinInsertSessions(routerId: number, live: any[] | null): vo
 
   // Get all active sessions for this router (any session_id pattern)
   const activeSessions = db.prepare(
-    "SELECT id, username FROM radius_sessions WHERE router_id = ? AND status = 'active'"
+    "SELECT id, username, session_id, started_at FROM radius_sessions WHERE router_id = ? AND status = 'active'"
   ).all(routerId) as any[];
 
   const existingUsernames = new Set<string>();
@@ -41,29 +41,56 @@ export function syncCoinInsertSessions(routerId: number, live: any[] | null): vo
     existingUsernames.add(String(session.username).toLowerCase());
   }
 
-  // Create sessions for new users that don't have a session yet
+  // Real NAS IP = the router itself (the fallback previously stored the device
+  // IP here, which made the column wrong and broke Disconnect targeting).
+  const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
+  const nasIp = String(routerRow?.host || '').split(':')[0];
+
+  // Elapsed seconds since the session started (UTC).
+  const elapsedSecs = (startedAt: any): number => {
+    const start = new Date(String(startedAt || '').replace(' ', 'T') + 'Z').getTime();
+    if (!Number.isFinite(start)) return 0;
+    return Math.max(0, Math.floor((Date.now() - start) / 1000));
+  };
+
+  // Create sessions for new users that don't have a session yet. `session_time`
+  // starts at 0 and is refreshed on each sync (no more hardcoded 8h), and the
+  // live byte counters are stored so Download/Upload are real.
   const insert = db.prepare(`
-    INSERT INTO radius_sessions (router_id, username, session_id, nas_ip, status, started_at, updated_at, mac_address, session_time)
-    VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, 28800)
+    INSERT INTO radius_sessions (router_id, username, session_id, nas_ip, status, started_at, updated_at,
+                                 mac_address, session_time, input_octets, output_octets)
+    VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, 0, ?, ?)
   `);
 
   for (const [username, conn] of activeUsers) {
     if (!existingUsernames.has(username)) {
       const sessionId = 'coin_' + crypto.randomBytes(8).toString('hex');
       const mac = String(conn.mac || conn['mac-address'] || '');
-      const ip = cleanIp(conn.address);
-      insert.run(routerId, username, sessionId, ip, mac);
+      insert.run(routerId, username, sessionId, nasIp, mac, toInt(conn['bytes-in']), toInt(conn['bytes-out']));
     }
   }
 
-  // Mark sessions as stopped if the user is no longer active
-  const update = db.prepare(
-    "UPDATE radius_sessions SET status = 'stopped', stopped_at = ?, updated_at = ?, terminate_cause = 'User-Request' WHERE id = ?"
+  // Refresh the elapsed duration + octets of live (panel-created) sessions.
+  const touch = db.prepare(
+    'UPDATE radius_sessions SET session_time = ?, input_octets = ?, output_octets = ?, updated_at = ? WHERE id = ?'
+  );
+  // Freeze the final duration when the device goes away.
+  const stop = db.prepare(
+    "UPDATE radius_sessions SET status = 'stopped', stopped_at = ?, session_time = ?, updated_at = ?, terminate_cause = 'User-Request' WHERE id = ?"
   );
 
   for (const session of activeSessions) {
-    if (!activeUsers.has(String(session.username).toLowerCase())) {
-      update.run(now, now, session.id);
+    const conn = activeUsers.get(String(session.username).toLowerCase());
+    if (conn) {
+      // Only the panel-created rows; never overwrite real RADIUS accounting data.
+      if (!String(session.session_id || '').startsWith('coin_')) continue;
+      touch.run(
+        elapsedSecs(session.started_at),
+        toInt(conn['bytes-in']), toInt(conn['bytes-out']),
+        now, session.id
+      );
+    } else if (String(session.session_id || '').startsWith('coin_')) {
+      stop.run(now, elapsedSecs(session.started_at), now, session.id);
     }
   }
 }

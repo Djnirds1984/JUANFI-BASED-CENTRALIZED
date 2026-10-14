@@ -106,6 +106,7 @@ export function initializeDatabase(): void {
       mac_address TEXT NOT NULL DEFAULT '',
       ip_address TEXT NOT NULL DEFAULT '',
       hostname TEXT NOT NULL DEFAULT '',
+      custom_hostname TEXT NOT NULL DEFAULT '',
       user TEXT NOT NULL DEFAULT '',
       server TEXT NOT NULL DEFAULT '',
       login_by TEXT NOT NULL DEFAULT '',
@@ -257,6 +258,11 @@ export function initializeDatabase(): void {
   }
   // Migrate old portal_mode values to new values
   db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
+
+  const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];
+  if (!deviceCols.some((c: any) => c.name === 'custom_hostname')) {
+    db.exec("ALTER TABLE active_devices ADD COLUMN custom_hostname TEXT NOT NULL DEFAULT ''");
+  }
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];
   if (!sessCols.some((c: any) => c.name === 'mac_address')) {

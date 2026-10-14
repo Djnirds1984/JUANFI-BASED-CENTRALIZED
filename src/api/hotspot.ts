@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
-import { syncActiveDevices, listActiveDevices, deleteActiveDevice } from '../services/activeDevices';
+import { syncActiveDevices, listActiveDevices, deleteActiveDevice, updateActiveDevice } from '../services/activeDevices';
 import { syncSessionsWithDevices, listSessions, deleteSession } from '../services/deviceSessions';
 import { authMiddleware } from '../middleware/auth';
 
@@ -268,6 +268,34 @@ router.get('/router/:routerId/devices', async (req: Request, res: Response) => {
 
     res.json(listActiveDevices(routerId));
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Edit a stored device (currently the hostname override).
+router.put('/router/:routerId/devices/:deviceId', (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const deviceId = parseInt(req.params.deviceId);
+
+    if (!Number.isFinite(deviceId)) {
+      res.status(400).json({ error: 'Invalid device id' });
+      return;
+    }
+    if (typeof req.body?.hostname !== 'string') {
+      res.status(400).json({ error: 'hostname (string) is required' });
+      return;
+    }
+
+    const updated = updateActiveDevice(routerId, deviceId, { hostname: req.body.hostname });
+    if (!updated) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    res.json({ message: 'Device updated', device: updated });
+  } catch (error: any) {
+    console.error('Update active device error:', error);
     res.status(500).json({ error: error.message });
   }
 });

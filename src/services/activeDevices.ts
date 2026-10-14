@@ -202,7 +202,10 @@ export function listActiveDevices(routerId: number): any[] {
       '.id': row.mikrotik_active_id || '',
       'mac-address': row.mac_address || '',
       address: row.ip_address || '',
-      'host-name': row.hostname || '-',
+      // Operator-editable override wins over the router-reported name.
+      'host-name': row.custom_hostname || row.hostname || '-',
+      hostname: row.hostname || '',
+      'custom-hostname': row.custom_hostname || '',
       user: row.user || '',
       server: row.server || '',
       uptime: row.uptime || '',
@@ -218,6 +221,27 @@ export function listActiveDevices(routerId: number): any[] {
       'ended-at': row.ended_at || '',
     };
   });
+}
+
+/**
+ * Set/clear the operator-editable hostname override for a stored device. The
+ * override is kept in a separate column so the background sync (which refreshes
+ * the router-reported `hostname`) never clobbers it. Pass an empty hostname to
+ * clear the override.
+ */
+export function updateActiveDevice(
+  routerId: number,
+  deviceId: number,
+  patch: { hostname?: string }
+): any | null {
+  const db = getDb();
+  const row = db.prepare('SELECT id FROM active_devices WHERE id = ? AND router_id = ?')
+    .get(deviceId, routerId) as any;
+  if (!row) return null;
+
+  const custom = String(patch.hostname ?? '').trim();
+  db.prepare('UPDATE active_devices SET custom_hostname = ? WHERE id = ?').run(custom, deviceId);
+  return { id: deviceId, 'custom-hostname': custom };
 }
 
 export function deleteActiveDevice(routerId: number, deviceId: number): boolean {

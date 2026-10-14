@@ -123,6 +123,10 @@ class ApiClient {
     return this.get(`/hotspot/router/${routerId}/devices`);
   }
 
+  async updateActiveDevice(routerId, deviceId, data) {
+    return this.put(`/hotspot/router/${routerId}/devices/${deviceId}`, data);
+  }
+
   async deleteActiveDevice(routerId, deviceId) {
     return this.delete(`/hotspot/router/${routerId}/devices/${deviceId}`);
   }

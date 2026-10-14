@@ -1222,11 +1222,13 @@ const App = {
         ? '<span class="device-status device-status-active">Active</span>'
         : '<span class="device-status device-status-offline">Offline</span>';
 
+      const editBtn = `<button class="btn btn-sm btn-outline" onclick="App.editActiveDevice(${parseInt(d.id, 10) || 0}, this)">Edit</button>`;
+
       const actions = isActive
-        ? (d['.id']
+        ? `${editBtn} ` + (d['.id']
           ? `<button class="btn btn-sm btn-danger" onclick="App.disconnectActiveUser('${d['.id']}', '${this.escapeHtml(d.user || d.address)}')">Disconnect</button>`
           : '')
-        : `<button class="btn btn-sm btn-outline" onclick="App.removeStoredActiveDevice(${parseInt(d.id, 10) || 0}, '${this.escapeHtml(d['mac-address'] || d.address || 'device')}')">Remove</button>`;
+        : `${editBtn} <button class="btn btn-sm btn-outline" onclick="App.removeStoredActiveDevice(${parseInt(d.id, 10) || 0}, '${this.escapeHtml(d['mac-address'] || d.address || 'device')}')">Remove</button>`;
 
       const muted = isActive ? '' : ' style="opacity:.6"';
 
@@ -1415,6 +1417,35 @@ const App = {
     result += secs.toString().padStart(2, '0');
     
     return result.trim();
+  },
+
+  // Edit a stored active device's hostname (persistent override).
+  async editActiveDevice(deviceId, btn) {
+    if (!deviceId) return;
+
+    // Read the current name from the row (Hostname is the 3rd column) so we
+    // never have to inject it into HTML.
+    let current = '';
+    const row = btn && btn.closest ? btn.closest('tr') : null;
+    if (row && row.children[2]) {
+      current = row.children[2].textContent.trim();
+      if (current === '-') current = '';
+    }
+
+    const value = window.prompt('Hostname for this device (leave blank to clear):', current);
+    if (value === null) return;
+
+    try {
+      await api.updateActiveDevice(this.selectedRouterId, deviceId, { hostname: value.trim() });
+      this.toast('Hostname updated', 'success');
+      if (this.currentPage === 'radius') {
+        this.loadRadiusTab();
+      } else {
+        this.loadHotspotTab();
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async disconnectActiveUser(activeId, userName) {

@@ -56,7 +56,7 @@ export async function testConnection(): Promise<{ success: boolean; message: str
   }
 }
 
-const SYNC_TABLES = ['hotspot_users', 'vouchers', 'device_sessions'];
+const SYNC_TABLES = ['hotspot_users', 'vouchers', 'device_sessions', 'device_macs'];
 
 const TABLE_SCHEMAS: Record<string, string> = {
   hotspot_users: `
@@ -102,6 +102,16 @@ const TABLE_SCHEMAS: Record<string, string> = {
       radius_profile_id INTEGER,
       price REAL NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `,
+  device_macs: `
+    CREATE TABLE IF NOT EXISTS device_macs (
+      id INTEGER PRIMARY KEY,
+      mac_address TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL DEFAULT '',
+      router_id INTEGER,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `,
   device_sessions: `
@@ -202,6 +212,7 @@ const SYNC_KEYS: Record<string, string> = {
   hotspot_users: 'username',
   vouchers: 'code',
   device_sessions: 'session_token',
+  device_macs: 'mac_address',
 };
 
 export async function restoreFromCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {

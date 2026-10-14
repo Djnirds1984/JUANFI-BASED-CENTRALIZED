@@ -933,21 +933,21 @@ export function hasRadiusClients(): boolean {
   }
 }
 
-export function getRadiusLogs(routerId?: number, limit: number = 100): any[] {
+export function getRadiusLogs(routerId?: number, limit: number = 100, username?: string): any[] {
   try {
     const db = getDb();
-    if (routerId) {
-      return db.prepare(
-        `SELECT rl.*, r.name as router_name FROM radius_logs rl
-         LEFT JOIN routers r ON r.id = rl.router_id
-         WHERE rl.router_id = ? ORDER BY rl.created_at DESC LIMIT ?`
-      ).all(routerId, limit);
-    }
+    const clauses: string[] = [];
+    const params: any[] = [];
+    if (routerId) { clauses.push('rl.router_id = ?'); params.push(routerId); }
+    // Case-insensitive so a per-user view matches regardless of the router's casing.
+    if (username) { clauses.push('LOWER(rl.username) = LOWER(?)'); params.push(String(username)); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(limit);
     return db.prepare(
       `SELECT rl.*, r.name as router_name FROM radius_logs rl
        LEFT JOIN routers r ON r.id = rl.router_id
-       ORDER BY rl.created_at DESC LIMIT ?`
-    ).all(limit);
+       ${where} ORDER BY rl.created_at DESC LIMIT ?`
+    ).all(...params);
   } catch (err) {
     console.error('[RADIUS] Error reading logs:', err);
     return [];

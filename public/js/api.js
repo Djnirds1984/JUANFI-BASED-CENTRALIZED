@@ -554,10 +554,11 @@ class ApiClient {
     return this.post(`/routers/${routerId}/radius/test`);
   }
 
-  async getRadiusLogs(routerId, limit = 100) {
+  async getRadiusLogs(routerId, limit = 100, username) {
     const params = new URLSearchParams();
     if (routerId) params.set('router_id', routerId);
     if (limit) params.set('limit', limit);
+    if (username) params.set('username', username);
     return this.get(`/routers/radius/logs?${params.toString()}`);
   }
 

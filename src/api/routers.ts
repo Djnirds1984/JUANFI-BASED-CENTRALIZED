@@ -46,7 +46,8 @@ router.get('/radius/logs', (req: Request, res: Response) => {
   try {
     const routerId = req.query.router_id ? parseInt(req.query.router_id as string) : undefined;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
-    const logs = getRadiusLogs(routerId, Math.min(limit, 500));
+    const username = req.query.username ? String(req.query.username) : undefined;
+    const logs = getRadiusLogs(routerId, Math.min(limit, 500), username);
     res.json(logs);
   } catch (error) {
     console.error('Get RADIUS logs error:', error);

@@ -4969,9 +4969,12 @@ const App = {
   },
 
   // Live RADIUS log console (auth accepts/rejects, accounting, CoA, warnings).
+  // Can be filtered to a single user (a "user log"): type a username, or click
+  // one in the stream; the filter is applied server-side.
   async loadRadiusLogs(container) {
     if (!container) container = document.getElementById('radius-tab-content');
     this.clearRadiusPollers();
+    if (typeof this._radiusLogUsername !== 'string') this._radiusLogUsername = '';
 
     const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
     const typeColor = (t) => {
@@ -4989,12 +4992,17 @@ const App = {
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
         <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">
           RADIUS Log <span style="color:#22c55e">&#9679;</span> <span style="color:var(--text-muted);font-weight:400;text-transform:none">live</span>
+          <span id="radius-log-filter-note" style="margin-left:0.5rem;font-size:0.75rem;font-weight:400;text-transform:none;color:var(--primary)"></span>
         </h4>
-        <div style="display:flex;align-items:center;gap:0.75rem">
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+          <span style="font-size:0.8rem;color:var(--text-muted)">User</span>
+          <input id="radius-log-user" type="text" placeholder="filter by username..." value="${esc(this._radiusLogUsername)}"
+                 style="padding:0.35rem 0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.8rem;width:180px">
+          <button class="btn btn-sm btn-outline" id="radius-log-user-clear">Clear user</button>
           <label style="font-size:0.8rem;color:var(--text-muted);cursor:pointer">
             <input type="checkbox" id="radius-log-autoscroll" checked style="vertical-align:middle"> Auto-scroll
           </label>
-          <button class="btn btn-sm btn-outline" id="radius-log-clear">Clear</button>
+          <button class="btn btn-sm btn-outline" id="radius-log-clear">Clear log</button>
         </div>
       </div>
       <div id="radius-log-box" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
@@ -5004,25 +5012,35 @@ const App = {
 
     const box = document.getElementById('radius-log-box');
     const autoChk = document.getElementById('radius-log-autoscroll');
+    const userInput = document.getElementById('radius-log-user');
+    const note = document.getElementById('radius-log-filter-note');
 
     const refresh = async () => {
       try {
-        const logs = await api.getRadiusLogs(this.selectedRouterId, 300);
+        const logs = await api.getRadiusLogs(this.selectedRouterId, 300, this._radiusLogUsername || undefined);
         if (!box || !box.parentNode) return; // tab switched away
         const rows = (logs || []).slice().reverse(); // oldest -> newest (console tail)
         const wasBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
         const prevTop = box.scrollTop;
 
+        if (note) {
+          note.textContent = this._radiusLogUsername
+            ? '- user "' + this._radiusLogUsername + '" (' + rows.length + ')'
+            : '';
+        }
+
         box.innerHTML = rows.length === 0
-          ? '<div style="color:#64748b">No RADIUS log entries yet.</div>'
+          ? '<div style="color:#64748b">' + (this._radiusLogUsername ? 'No log entries for this user yet.' : 'No RADIUS log entries yet.') + '</div>'
           : rows.map((l) => {
               const time = esc(l.created_at || '');
               const color = typeColor(l.log_type);
               const type = esc(String(l.log_type || 'info').toUpperCase());
-              const user = l.username ? ` <span style="color:#e2e8f0">${esc(l.username)}</span>` : '';
-              const code = l.response_code ? ` <span style="color:#64748b">[${esc(l.response_code)}]</span>` : '';
-              const src = l.source_ip ? ` <span style="color:#475569">(${esc(l.source_ip)})</span>` : '';
-              return `<div><span style="color:#64748b">${time}</span> <span style="color:${color};font-weight:600">${type}</span>${user}${code}${src} <span>${esc(l.message)}</span></div>`;
+              const user = l.username
+                ? ' <span class="radius-log-user" title="Show this user\'s log" style="color:#e2e8f0;cursor:pointer;border-bottom:1px dotted #64748b">' + esc(l.username) + '</span>'
+                : '';
+              const code = l.response_code ? ' <span style="color:#64748b">[' + esc(l.response_code) + ']</span>' : '';
+              const src = l.source_ip ? ' <span style="color:#475569">(' + esc(l.source_ip) + ')</span>' : '';
+              return '<div><span style="color:#64748b">' + time + '</span> <span style="color:' + color + ';font-weight:600">' + type + '</span>' + user + code + src + ' <span>' + esc(l.message) + '</span></div>';
             }).join('');
 
         if (autoChk && autoChk.checked && wasBottom) box.scrollTop = box.scrollHeight;
@@ -5031,6 +5049,29 @@ const App = {
         // keep the last view; a transient error shouldn't wipe the log
       }
     };
+
+    // Click a username in the stream to open that user's log.
+    box.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.classList && t.classList.contains('radius-log-user')) {
+        this._radiusLogUsername = (t.textContent || '').trim();
+        if (userInput) userInput.value = this._radiusLogUsername;
+        refresh();
+      }
+    });
+
+    if (userInput) {
+      userInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { this._radiusLogUsername = userInput.value.trim(); refresh(); }
+      });
+      userInput.addEventListener('change', () => { this._radiusLogUsername = userInput.value.trim(); refresh(); });
+    }
+
+    document.getElementById('radius-log-user-clear').addEventListener('click', () => {
+      this._radiusLogUsername = '';
+      if (userInput) userInput.value = '';
+      refresh();
+    });
 
     document.getElementById('radius-log-clear').addEventListener('click', async () => {
       if (!confirm('Clear the RADIUS log for this router?')) return;

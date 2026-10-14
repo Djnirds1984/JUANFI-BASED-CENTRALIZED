@@ -440,11 +440,10 @@ class MikroTikService {
       })(),
     ]);
 
-    // Hostname sources, best-effort:
-    //   1. DHCP lease `host-name` (the name the client sent) - most reliable
-    //   2. DHCP lease `comment` (operator-set)
-    //   3. hotspot-host table `host-name` / `comment`
-    // Index them by MAC *and* by IP so we can match whichever the active entry
+    // Hostname comes from the DHCP lease / hotspot-host `host-name` field (the
+    // name the client itself sent). We deliberately do NOT use `comment` - a
+    // lease comment is often a rate/tag like "10m,1,1,TEST1", not a device name.
+    // Index by MAC *and* by IP so we can match whichever the active entry
     // exposes (MikroTik active entries use `mac-address`, not `mac`).
     const hostByIp = new Map<string, any>();
     const hostByMac = new Map<string, any>();
@@ -465,7 +464,7 @@ class MikroTikService {
 
     const nameFrom = (obj: any): string => {
       if (!obj) return '';
-      return String(obj['host-name'] || obj.comment || '').trim();
+      return String(obj['host-name'] || '').trim();
     };
 
     const now = Date.now();

@@ -607,6 +607,10 @@ class ApiClient {
     return this.post(`/radius-sessions/router/${routerId}/${sessionId}/terminate`);
   }
 
+  async extendRadiusSession(routerId, sessionId, minutes) {
+    return this.post(`/radius-sessions/router/${routerId}/${sessionId}/extend`, { minutes });
+  }
+
   async deleteRadiusSession(routerId, sessionId) {
     return this.delete(`/radius-sessions/router/${routerId}/${sessionId}`);
   }

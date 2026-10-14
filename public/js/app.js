@@ -4803,6 +4803,7 @@ const App = {
                 <td>${fmtBytes(s.output_octets)}</td>
                 <td>${this.escapeHtml(s.nas_ip || '-')}</td>
                 <td>
+                  <button class="btn btn-sm btn-primary" onclick="App.extendRadiusSession(${s.id}, this)">Add time</button>
                   ${s.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="App.terminateRadiusSession(${s.id})">Disconnect</button>` : ''}
                   <button class="btn btn-sm btn-outline" onclick="App.deleteRadiusSession(${s.id})">Remove</button>
                 </td>
@@ -5159,6 +5160,28 @@ const App = {
         this.toast(err.message, 'error');
       }
     });
+  },
+
+  // Admin top-up: add time to the USER behind a session (not a voucher/coin).
+  async extendRadiusSession(sessionId, btn) {
+    if (!sessionId) return;
+
+    let username = '';
+    const row = btn && btn.closest ? btn.closest('tr') : null;
+    if (row && row.children[0]) username = row.children[0].textContent.trim();
+
+    const val = window.prompt('Add time (minutes) for ' + (username || 'this user') + ':', '30');
+    if (val === null) return;
+    const minutes = parseInt(val, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) { alert('Enter a positive number of minutes'); return; }
+
+    try {
+      const r = await api.extendRadiusSession(this.selectedRouterId, sessionId, minutes);
+      this.toast(r.message || 'Time added', 'success');
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async terminateRadiusSession(sessionId) {

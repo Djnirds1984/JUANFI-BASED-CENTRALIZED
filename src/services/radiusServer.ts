@@ -348,16 +348,39 @@ function buildProfileAttributes(profile: any): RadiusAttribute[] {
   return attrs;
 }
 
+/** Normalize a hotspot username so a MAC matches regardless of case/separators. */
+function normalizeUserName(v: any): string {
+  return String(v || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+}
+
+/**
+ * Look up an enabled hotspot user tolerating the router's username casing and
+ * MAC separators (`82:84:66:2B:A8:98` == `8284662ba898`). An exact-string match
+ * rejected valid logins whenever the router reported the user in a different
+ * case than the panel stored it, and made coin top-ups create a second row.
+ */
+function findHotspotUser(routerId: number, username: string, columns: string): any {
+  const db = getDb();
+  const mac = normalizeUserName(username);
+  const macMatch = mac.length === 12 ? mac : '';
+  return db.prepare(
+    `SELECT ${columns} FROM hotspot_users
+     WHERE router_id = ? AND disabled = 0
+       AND (LOWER(username) = LOWER(?)
+            OR ( ? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC LIMIT 1`
+  ).get(routerId, username, macMatch, macMatch) as any;
+}
+
 function authenticateUser(routerId: number, username: string): AuthResult {
   try {
     console.log(`[RADIUS-auth] Attempting auth: routerId=${routerId}, username=${username}`);
     const db = getDb();
-    const user = db.prepare(
-      `SELECT id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled,
-              radius_profile_id, first_login_at, expiry_at, shared_users
-       FROM hotspot_users
-       WHERE router_id = ? AND username = ? AND disabled = 0`
-    ).get(routerId, username) as any;
+    const user = findHotspotUser(
+      routerId,
+      username,
+      'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users'
+    );
 
     console.log(`[RADIUS-auth] User lookup result:`, user ? `Found id=${user.id}, disabled=${user.disabled}` : 'NOT FOUND');
 
@@ -557,11 +580,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
   try {
     const db = getDb();
     if (status === ACCT_STATUS.START) {
-      const profileRow = db.prepare(
-        `SELECT hu.radius_profile_id FROM hotspot_users hu
-         WHERE hu.router_id = ? AND hu.username = ? AND hu.disabled = 0
-         LIMIT 1`
-      ).get(client.router_id, user) as any;
+      const profileRow = findHotspotUser(client.router_id, user, 'radius_profile_id');
 
       db.prepare(
         `INSERT OR REPLACE INTO radius_sessions
@@ -621,10 +640,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
       // (Session-Timeout = remaining paid seconds) so MikroTik Active and
       // the portal countdown stay in sync without any disconnect.
       try {
-        const paid = db.prepare(
-          `SELECT expiry_at FROM hotspot_users
-           WHERE router_id = ? AND username = ? AND disabled = 0 LIMIT 1`
-        ).get(client.router_id, user) as any;
+        const paid = findHotspotUser(client.router_id, user, 'expiry_at');
         if (paid?.expiry_at) {
           const remainingPaid = Math.floor((new Date(String(paid.expiry_at).replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000);
           // Safety net for routers where the coin-auth CoA was missed:
@@ -667,10 +683,7 @@ function checkQuotaEnforcement(
 ): void {
   try {
     const db = getDb();
-    const user = db.prepare(
-      `SELECT id, bytes_in_quota, bytes_out_quota FROM hotspot_users
-       WHERE router_id = ? AND username = ? AND disabled = 0`
-    ).get(routerId, username) as any;
+    const user = findHotspotUser(routerId, username, 'id, bytes_in_quota, bytes_out_quota');
 
     if (!user) return;
 

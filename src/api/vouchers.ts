@@ -76,9 +76,16 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   console.log(`coin-auth: request mac=${macNoColon} routerId=${routerId} authMode=${authMode} extend=${isExtend} duration=${duration}min`);
 
   const upsert = db.transaction(() => {
+    // Match tolerating the router's username casing / MAC separators so we
+    // update the EXISTING account instead of inserting a duplicate row (which
+    // left the real account disabled/expired and auth kept failing).
     const existing = db.prepare(
-      'SELECT id, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ?'
-    ).get(routerId, macNoColon) as any;
+      `SELECT id, expiry_at FROM hotspot_users
+       WHERE router_id = ?
+         AND (LOWER(username) = LOWER(?)
+              OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
+       ORDER BY id DESC LIMIT 1`
+    ).get(routerId, macNoColon, macNoColon) as any;
 
     let expiryAt: string;
     let hadRemaining = false;

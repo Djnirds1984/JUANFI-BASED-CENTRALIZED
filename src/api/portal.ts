@@ -208,9 +208,13 @@ router.post('/logout', (req: Request, res: Response) => {
     const macNoColons = mac.replace(/:/g, '').toUpperCase();
     const db = getDb();
 
+    // Case/separator tolerant so logout targets the real account row.
     db.prepare(
-      "UPDATE hotspot_users SET disabled = 1, expiry_at = NULL, updated_at = datetime('now') WHERE router_id = ? AND username = ?"
-    ).run(routerId, macNoColons);
+      `UPDATE hotspot_users SET disabled = 1, expiry_at = NULL, updated_at = datetime('now')
+       WHERE router_id = ?
+         AND (LOWER(username) = LOWER(?)
+              OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)`
+    ).run(routerId, macNoColons, macNoColons);
 
     res.json({ success: true });
   } catch (error: any) {

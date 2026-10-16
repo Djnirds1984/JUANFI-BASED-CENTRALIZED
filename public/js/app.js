@@ -168,6 +168,16 @@ const App = {
     this._paymentRates = rates;
 
     const inp = 'width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)';
+    const PAY_METHODS = [
+      { id: 'qrph', label: 'QR Ph' },
+      { id: 'gcash', label: 'GCash' },
+      { id: 'paymaya', label: 'Maya (PayMaya)' },
+      { id: 'grab_pay', label: 'GrabPay' },
+      { id: 'card', label: 'Card' },
+      { id: 'billease', label: 'BillEase' },
+      { id: 'dob', label: 'DOB' },
+    ];
+    const activeMethods = String(s.methods || 'qrph').split(',').map((x) => x.trim());
     content.innerHTML = `
       <div class="card">
         <div class="card-header"><h3>Online Payment — PayMongo / GCash</h3></div>
@@ -184,6 +194,14 @@ const App = {
             <div style="flex:1;min-width:100px"><label style="display:block;margin-bottom:0.25rem">Currency</label><input name="currency" value="${this.escapeHtml(s.currency || 'PHP')}" style="${inp}"></div>
           </div>
           <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Description</label><input name="description" value="${this.escapeHtml(s.description || 'Internet Time')}" style="${inp}"></div>
+          <div style="margin:0.75rem 0">
+            <label style="display:block;margin-bottom:0.25rem">Payment methods — tick what your PayMongo account offers</label>
+            <div style="display:flex;flex-wrap:wrap;gap:1rem">
+              ${PAY_METHODS.map((m) => `<label style="font-size:0.85rem;cursor:pointer"><input type="checkbox" name="pm_${m.id}" ${activeMethods.indexOf(m.id) >= 0 ? 'checked' : ''}> ${m.label}</label>`).join('')}
+            </div>
+            <small style="color:var(--text-muted)">e.g. if only QR Ph is enabled on your account, tick only <strong>QR Ph</strong>.</small>
+          </div>
+          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Portal button label</label><input name="button_label" value="${this.escapeHtml(s.button_label || 'PAY GCASH')}" style="${inp}"></div>
           <button class="btn btn-primary" type="submit" style="margin-top:0.5rem">Save</button>
         </form>
         <div style="padding:1rem;border-top:1px solid var(--border);color:var(--text-muted);font-size:0.85rem;line-height:1.7">
@@ -271,6 +289,8 @@ const App = {
         minutes: parseInt(f.minutes.value, 10) || 0,
         currency: f.currency.value.trim() || 'PHP',
         description: f.description.value.trim(),
+        button_label: f.button_label.value.trim() || 'PAY GCASH',
+        methods: PAY_METHODS.filter((m) => f['pm_' + m.id] && f['pm_' + m.id].checked).map((m) => m.id).join(',') || 'qrph',
       };
       try {
         await api.updatePaymentSettings(payload);

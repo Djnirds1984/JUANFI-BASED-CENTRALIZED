@@ -266,6 +266,8 @@ export function initializeDatabase(): void {
       amount REAL NOT NULL DEFAULT 0,
       minutes INTEGER NOT NULL DEFAULT 0,
       description TEXT NOT NULL DEFAULT 'Internet Time',
+      methods TEXT NOT NULL DEFAULT 'qrph',
+      button_label TEXT NOT NULL DEFAULT 'PAY GCASH',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -313,6 +315,14 @@ export function initializeDatabase(): void {
   }
   // Migrate old portal_mode values to new values
   db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
+
+  const payCols = db.prepare("PRAGMA table_info('payment_settings')").all() as any[];
+  if (payCols.length && !payCols.some((c: any) => c.name === 'methods')) {
+    db.exec("ALTER TABLE payment_settings ADD COLUMN methods TEXT NOT NULL DEFAULT 'qrph'");
+  }
+  if (payCols.length && !payCols.some((c: any) => c.name === 'button_label')) {
+    db.exec("ALTER TABLE payment_settings ADD COLUMN button_label TEXT NOT NULL DEFAULT 'PAY GCASH'");
+  }
 
   const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];
   if (!deviceCols.some((c: any) => c.name === 'custom_hostname')) {

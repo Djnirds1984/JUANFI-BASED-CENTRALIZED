@@ -763,7 +763,7 @@ function loadPaymentConfig() {
 			// added online even while the device already has a session.
 			['payGcashBtn', 'payGcashBtnConnected'].forEach(function(id) {
 				var b = document.getElementById(id);
-				if (b) { b.style.display = ''; b.textContent = 'PAY GCASH'; }
+				if (b) { b.style.display = ''; b.textContent = (cfg.button_label || 'PAY GCASH').toUpperCase(); }
 			});
 		})
 		.catch(function() {});

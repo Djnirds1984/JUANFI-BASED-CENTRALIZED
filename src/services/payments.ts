@@ -20,6 +20,16 @@ export interface PaymentSettings {
   amount: number;
   minutes: number;
   description: string;
+  methods: string;
+  button_label: string;
+}
+
+// Payment method types accepted by PayMongo Checkout Sessions.
+export const PAYMONGO_METHODS = ['qrph', 'gcash', 'paymaya', 'grab_pay', 'card', 'billease', 'dob'];
+
+function parseMethods(v: any): string {
+  const arr = String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return (arr.length ? arr : ['qrph']).join(',');
 }
 
 export function getPaymentSettings(): PaymentSettings {
@@ -36,6 +46,8 @@ export function getPaymentSettings(): PaymentSettings {
     amount: Number(row.amount) || 0,
     minutes: parseInt(row.minutes, 10) || 0,
     description: row.description || 'Internet Time',
+    methods: parseMethods(row.methods),
+    button_label: row.button_label || 'PAY GCASH',
   };
 }
 
@@ -52,14 +64,17 @@ export function savePaymentSettings(patch: Partial<PaymentSettings>): PaymentSet
     amount: patch.amount !== undefined ? Number(patch.amount) || 0 : cur.amount,
     minutes: patch.minutes !== undefined ? parseInt(String(patch.minutes), 10) || 0 : cur.minutes,
     description: patch.description !== undefined ? String(patch.description) : cur.description,
+    methods: patch.methods !== undefined ? parseMethods(patch.methods) : cur.methods,
+    button_label: patch.button_label !== undefined ? String(patch.button_label) : cur.button_label,
   };
   db.prepare(
     `UPDATE payment_settings SET enabled = ?, provider = ?, public_key = ?, secret_key = ?,
        webhook_secret = ?, currency = ?, amount = ?, minutes = ?, description = ?,
+       methods = ?, button_label = ?,
        updated_at = datetime('now') WHERE id = 1`
   ).run(
     next.enabled ? 1 : 0, next.provider, next.public_key, next.secret_key, next.webhook_secret,
-    next.currency, next.amount, next.minutes, next.description
+    next.currency, next.amount, next.minutes, next.description, next.methods, next.button_label
   );
   return next;
 }
@@ -189,7 +204,7 @@ export async function createPayMongoCheckout(params: {
             quantity: 1,
           },
         ],
-        payment_method_types: ['gcash'],
+        payment_method_types: (settings.methods || 'qrph').split(',').map((m) => m.trim()).filter(Boolean),
         success_url: params.successUrl,
         cancel_url: params.cancelUrl,
         description: params.description || settings.description || 'Internet Time',

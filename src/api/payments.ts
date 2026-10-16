@@ -23,6 +23,8 @@ router.get('/config', (_req: Request, res: Response) => {
     currency: s.currency,
     minutes: s.minutes,
     description: s.description,
+    button_label: s.button_label || 'PAY GCASH',
+    methods: s.methods,
     rates: listPaymentRates(true).filter((r) => r.amount > 0 && r.minutes > 0),
   });
 });

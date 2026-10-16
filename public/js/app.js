@@ -4376,6 +4376,10 @@ const App = {
           <div style="display:flex;gap:0.5rem;align-items:center">
             <button class="btn btn-outline" id="radius-purge-local" title="Remove local hotspot users named like a MAC (RADIUS mode keeps accounts in the panel)">Purge local MAC users</button>
             <button class="btn btn-outline" id="radius-assign-default" title="Assign the default RADIUS profile to every account that has none">Assign default profile</button>
+            <select id="radius-local-mode" class="btn btn-outline" title="RADIUS user mode for this router">
+              <option value="0">Pure RADIUS</option>
+              <option value="1">Hybrid (local users)</option>
+            </select>
             <select id="radius-router-select" class="btn btn-outline">
               ${radiusRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
             </select>
@@ -4394,6 +4398,20 @@ const App = {
     document.getElementById('radius-router-select').addEventListener('change', (e) => {
       this.selectedRouterId = parseInt(e.target.value);
       this.loadRadiusTab();
+    });
+
+    const localModeSel = document.getElementById('radius-local-mode');
+    const selRouter = radiusRouters.find((r) => r.id === this.selectedRouterId);
+    if (localModeSel && selRouter) localModeSel.value = Number(selRouter.radius_local_users) === 1 ? '1' : '0';
+
+    document.getElementById('radius-local-mode').addEventListener('change', async (e) => {
+      const hybrid = parseInt(e.target.value, 10) ? 1 : 0;
+      try {
+        await api.updateRouter(this.selectedRouterId, { radius_local_users: hybrid });
+        this.toast(hybrid ? 'Hybrid RADIUS mode (reuses local users)' : 'Pure RADIUS mode (no local users)', 'success');
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
     });
 
     document.getElementById('radius-assign-default').addEventListener('click', async () => {

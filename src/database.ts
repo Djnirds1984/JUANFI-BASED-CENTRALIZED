@@ -266,6 +266,11 @@ export function initializeDatabase(): void {
   if (!columns.some((c: any) => c.name === 'portal_mode')) {
     db.exec("ALTER TABLE routers ADD COLUMN portal_mode TEXT NOT NULL DEFAULT 'mikrotik'");
   }
+  if (!columns.some((c: any) => c.name === 'radius_local_users')) {
+    // 0 = PURE RADIUS (never touch the router's local user list),
+    // 1 = HYBRID (reuse/refresh an existing local user as a fallback).
+    db.exec("ALTER TABLE routers ADD COLUMN radius_local_users INTEGER NOT NULL DEFAULT 0");
+  }
   // Migrate old portal_mode values to new values
   db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
 

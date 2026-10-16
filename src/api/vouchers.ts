@@ -45,21 +45,23 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   const db = getDb();
   let routerId: number;
   let authMode = 'api';
+  let hybridLocalUsers = false; // router.radius_local_users: 1 = hybrid fallback
 
   if (bodyRouterId) {
     routerId = parseInt(bodyRouterId, 10);
     const routerRow = db.prepare(
-      'SELECT id, auth_mode FROM routers WHERE id = ? AND is_active = 1'
+      'SELECT id, auth_mode, radius_local_users FROM routers WHERE id = ? AND is_active = 1'
     ).get(routerId) as any;
     if (!routerRow) {
       res.status(404).json({ error: 'Router not found or not active' });
       return;
     }
     authMode = routerRow.auth_mode || 'api';
+    hybridLocalUsers = Number(routerRow.radius_local_users) === 1;
   } else if (serverAddress) {
     const hostOnly = serverAddress.split(':')[0];
     const routerRow = db.prepare(
-      "SELECT id, auth_mode FROM routers WHERE host = ? AND is_active = 1"
+      "SELECT id, auth_mode, radius_local_users FROM routers WHERE host = ? AND is_active = 1"
     ).get(hostOnly) as any;
     if (!routerRow) {
       res.status(404).json({ error: 'Router not found or not active' });
@@ -67,6 +69,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     }
     routerId = routerRow.id;
     authMode = routerRow.auth_mode || 'api';
+    hybridLocalUsers = Number(routerRow.radius_local_users) === 1;
   } else {
     res.status(400).json({ error: 'routerId or serverAddress is required' });
     return;
@@ -240,7 +243,10 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // must NOT create or update local users: MikroTik checks the local user list
     // first, so a local MAC user lets the device bypass RADIUS (and RADIUS
     // accounting) entirely. Live extensions go through the CoA above.
-    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
+    // Pure RADIUS (radius_local_users=0): never touch the router's local list.
+    // Hybrid (radius_local_users=1): reuse/refresh an existing local user.
+    const writeLocalUsers = authMode !== 'radius' || hybridLocalUsers;
+    if (writeLocalUsers && mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
 
@@ -255,13 +261,17 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
-          await mikroTikService.createHotspotUser(routerId, {
-            username: macNoColon,
-            password: '',
-            profile: 'default',
-            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
-            comment: 'Coin-insert MAC user (panel portal)',
-          });
+          if (authMode === 'radius') {
+            console.log(`coin-auth: hybrid RADIUS - no local user for ${macNoColon} to reuse (RADIUS auth + CoA)`);
+          } else {
+            await mikroTikService.createHotspotUser(routerId, {
+              username: macNoColon,
+              password: '',
+              profile: 'default',
+              uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
+              comment: 'Coin-insert MAC user (panel portal)',
+            });
+          }
         } else {
           // Top-up on an already-logged-in device.
           //
@@ -277,6 +287,9 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           // `reset-counters` zeroes the accumulated uptime so the new limit is
           // shown immediately; if the reset fails we keep the old limit as the
           // base so the uptime is still accounted for.
+          if (authMode === 'radius') {
+            console.log(`coin-auth: hybrid RADIUS - reusing existing local user "${routerUserName}" for ${macNoColon}`);
+          }
           const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
           // Make the router's user limit reflect the panel's PAID remaining time
           // exactly (expiryAt is already the stacked total, so `msLeft` is the
@@ -316,7 +329,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     } else if (authMode === 'radius') {
       // FULL RADIUS: the router authenticates AND accounts via RADIUS, so we
       // never create/update a local user - extension is done with the CoA above.
-      console.log(`coin-auth: full-RADIUS mode - no local user written for ${macNoColon} (RADIUS auth + CoA only)`);
+      console.log(`coin-auth: pure RADIUS - no local user written for ${macNoColon} (RADIUS auth + CoA only)`);
     } else {
       console.log(
         `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +

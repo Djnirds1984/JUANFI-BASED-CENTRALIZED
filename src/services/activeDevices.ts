@@ -310,8 +310,10 @@ export async function ensureRadiusOnlyLocalUsers(routerId: number): Promise<void
   if (radiusOnlyChecked.has(routerId)) return;
 
   const db = getDb();
-  const row = db.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
+  const row = db.prepare('SELECT auth_mode, radius_local_users FROM routers WHERE id = ?').get(routerId) as any;
   if (!row || row.auth_mode !== 'radius') return;
+  // Hybrid mode keeps a local user as a fallback - do not purge it.
+  if (Number(row.radius_local_users) === 1) return;
 
   radiusOnlyChecked.add(routerId);
   try {

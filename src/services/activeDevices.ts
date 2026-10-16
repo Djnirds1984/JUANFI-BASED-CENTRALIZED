@@ -298,6 +298,40 @@ let syncInFlight = false;
  */
 const walledGardenChecked = new Set<number>();
 
+/*
+ * FULL RADIUS: on a radius-mode router, leftover LOCAL hotspot users (named like
+ * a MAC) are checked by MikroTik BEFORE RADIUS, so once their limit runs out
+ * they block the device even after a top-up. Remove them once per router so
+ * RADIUS is the only authentication path.
+ */
+const radiusOnlyChecked = new Set<number>();
+
+export async function ensureRadiusOnlyLocalUsers(routerId: number): Promise<void> {
+  if (radiusOnlyChecked.has(routerId)) return;
+
+  const db = getDb();
+  const row = db.prepare('SELECT auth_mode FROM routers WHERE id = ?').get(routerId) as any;
+  if (!row || row.auth_mode !== 'radius') return;
+
+  radiusOnlyChecked.add(routerId);
+  try {
+    const users = await mikroTikService.getHotspotUsers(routerId);
+    const isMacName = (name: any) => /^[0-9a-f]{12}$/i.test(String(name || '').replace(/[^0-9a-fA-F]/g, ''));
+    const macUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isMacName(u.name));
+    let removed = 0;
+    for (const u of macUsers) {
+      try { await mikroTikService.removeHotspotUser(routerId, u['.id']); removed++; } catch { /* keep going */ }
+    }
+    if (removed > 0) {
+      console.log(`[RADIUS] full-RADIUS: removed ${removed} local MAC user(s) on router ${routerId} (RADIUS is now the only auth path)`);
+    }
+  } catch (err) {
+    radiusOnlyChecked.delete(routerId);
+    console.error(`[RADIUS] local-user cleanup failed for router ${routerId}:`, (err as Error).message);
+  }
+}
+
+
 export async function ensureWalledGardenForController(routerId: number): Promise<void> {
   if (walledGardenChecked.has(routerId)) return;
   walledGardenChecked.add(routerId);
@@ -338,6 +372,12 @@ export async function syncActiveDevicesOnce(): Promise<void> {
 
     try {
       await ensureWalledGardenForController(router.id);
+    } catch (err) {
+      // ignore - handled inside
+    }
+
+    try {
+      await ensureRadiusOnlyLocalUsers(router.id);
     } catch (err) {
       // ignore - handled inside
     }

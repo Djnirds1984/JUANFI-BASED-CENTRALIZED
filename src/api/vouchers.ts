@@ -240,7 +240,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // must NOT create or update local users: MikroTik checks the local user list
     // first, so a local MAC user lets the device bypass RADIUS (and RADIUS
     // accounting) entirely. Live extensions go through the CoA above.
-    if (mikroTikService.isConnected(routerId)) {
+    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
 
@@ -255,19 +255,13 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
-          if (authMode === 'radius') {
-            // No local record for this MAC: RADIUS handles everything (we do NOT
-            // create a local user, so new devices stay RADIUS-only).
-            console.log(`coin-auth: RADIUS mode - no local user for ${macNoColon} (RADIUS auth + CoA only)`);
-          } else {
-            await mikroTikService.createHotspotUser(routerId, {
-              username: macNoColon,
-              password: '',
-              profile: 'default',
-              uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
-              comment: 'Coin-insert MAC user (panel portal)',
-            });
-          }
+          await mikroTikService.createHotspotUser(routerId, {
+            username: macNoColon,
+            password: '',
+            profile: 'default',
+            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
+            comment: 'Coin-insert MAC user (panel portal)',
+          });
         } else {
           // Top-up on an already-logged-in device.
           //
@@ -283,12 +277,6 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           // `reset-counters` zeroes the accumulated uptime so the new limit is
           // shown immediately; if the reset fails we keep the old limit as the
           // base so the uptime is still accounted for.
-          if (authMode === 'radius') {
-            // The router still has a LOCAL user for this MAC (checked before
-            // RADIUS). Reuse/refresh it so the device can log back in after its
-            // time ran out - otherwise the exhausted local record blocks login.
-            console.log(`coin-auth: reusing existing local user "${routerUserName}" for ${macNoColon}`);
-          }
           const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
           // Make the router's user limit reflect the panel's PAID remaining time
           // exactly (expiryAt is already the stacked total, so `msLeft` is the
@@ -325,6 +313,10 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         // payment. The device can still retry login once the router syncs.
         console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
       }
+    } else if (authMode === 'radius') {
+      // FULL RADIUS: the router authenticates AND accounts via RADIUS, so we
+      // never create/update a local user - extension is done with the CoA above.
+      console.log(`coin-auth: full-RADIUS mode - no local user written for ${macNoColon} (RADIUS auth + CoA only)`);
     } else {
       console.log(
         `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +

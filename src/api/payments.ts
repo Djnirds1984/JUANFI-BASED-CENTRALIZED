@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
+import { getDb as getDb2 } from '../database';
 import {
   getPaymentSettings, savePaymentSettings, isPaymentEnabled,
   createPaymentRecord, makeReference, createPayMongoCheckout,
   verifyPayMongoSignature, handlePayMongoEvent, getPaymentByReference,
-  listPayments, creditPayment,
+  listPayments, creditPayment, verifyPayment,
   listPaymentRates, getPaymentRate, createPaymentRate, updatePaymentRate, deletePaymentRate,
 } from '../services/payments';
 
@@ -57,7 +58,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
     createPaymentRecord({ reference, routerId, mac, amount, minutes });
 
     const base = (config.panelPublicUrl || '').replace(/\/+$/, '');
-    const q = `mac=${encodeURIComponent(mac)}${routerId ? `&router-id=${routerId}` : ''}`;
+    const q = `mac=${encodeURIComponent(mac)}&ref=${encodeURIComponent(reference)}${routerId ? `&router-id=${routerId}` : ''}`;
     const out = await createPayMongoCheckout({
       reference,
       amount,
@@ -69,6 +70,10 @@ router.post('/checkout', async (req: Request, res: Response) => {
       successUrl: `${base}/?pay=success&${q}`,
       cancelUrl: `${base}/?pay=cancel&${q}`,
     });
+
+    try {
+      getDb2().prepare('UPDATE payments SET provider_ref = ? WHERE reference = ?').run(out.providerRef, reference);
+    } catch { /* non-fatal */ }
 
     res.json({ checkoutUrl: out.checkoutUrl, reference, providerRef: out.providerRef, amount, minutes });
   } catch (error: any) {
@@ -84,6 +89,21 @@ router.get('/status/:reference', (req: Request, res: Response) => {
     return;
   }
   res.json({ reference: p.reference, status: p.status, minutes: p.minutes, mac: p.mac_address });
+});
+
+// No-webhook path: confirm a payment with PayMongo and credit it (works behind NAT).
+router.post('/verify', async (req: Request, res: Response) => {
+  try {
+    const reference = String(req.body?.reference || '').trim();
+    if (!reference) {
+      res.status(400).json({ error: 'reference is required' });
+      return;
+    }
+    res.json(await verifyPayment(reference));
+  } catch (error: any) {
+    console.error('payment verify error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // PayMongo webhook (public; signature-verified with the configured secret).

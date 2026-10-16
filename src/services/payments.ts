@@ -277,7 +277,50 @@ export async function creditPayment(reference: string, providerRef?: string): Pr
   return { ok: true, message: `Credited ${payment.minutes} min` };
 }
 
-/** Handle a PayMongo webhook payload. */
+/** Ask PayMongo whether the checkout session has been paid (outbound only). */
+export async function getPayMongoCheckoutPaid(providerRef: string): Promise<boolean> {
+  const settings = getPaymentSettings();
+  if (!settings.secret_key || !providerRef) return false;
+  const auth = 'Basic ' + Buffer.from(settings.secret_key + ':').toString('base64');
+  try {
+    const res = await fetch(`https://api.paymongo.com/v1/checkout_sessions/${providerRef}`, {
+      headers: { Authorization: auth },
+    });
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('[payments] checkout status error:', json?.errors?.[0]?.detail || res.status);
+      return false;
+    }
+    const payments = json?.data?.attributes?.payments || [];
+    return payments.some((p: any) => {
+      const st = p?.attributes?.status;
+      return st === 'paid' || st === 'succeeded';
+    });
+  } catch (err: any) {
+    console.error('[payments] verify error:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Verify a payment with PayMongo and credit it if paid.
+ * This is the no-webhook path: the portal calls it after the customer returns
+ * from GCash, so it works behind NAT (only outbound internet is needed).
+ */
+export async function verifyPayment(reference: string): Promise<{ ok: boolean; status: string; minutes?: number }> {
+  const payment = getPaymentByReference(reference);
+  if (!payment) return { ok: false, status: 'not-found' };
+  if (payment.status === 'paid') return { ok: true, status: 'paid', minutes: payment.minutes };
+  if (!payment.provider_ref) return { ok: false, status: 'no-provider-ref' };
+
+  const paid = await getPayMongoCheckoutPaid(payment.provider_ref);
+  if (!paid) return { ok: false, status: 'pending' };
+
+  await creditPayment(reference, payment.provider_ref);
+  return { ok: true, status: 'paid', minutes: payment.minutes };
+}
+
+/** Mark a payment paid and credit the device (stacks time + CoA via coin-auth). */
 export async function handlePayMongoEvent(payload: any): Promise<{ ok: boolean; message: string }> {
   try {
     const eventType = payload?.data?.attributes?.type || '';

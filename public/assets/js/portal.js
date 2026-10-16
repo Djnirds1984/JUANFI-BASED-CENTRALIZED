@@ -57,9 +57,8 @@ document.addEventListener('DOMContentLoaded', function() {
 	// Returned from PayMongo (GCash).
 	var pay = params.get('pay');
 	if (pay === 'success') {
-		alert('Payment received! Your time will be credited shortly.');
-		setTimeout(function() { syncSessionTime(); }, 2500);
-		setTimeout(function() { syncSessionTime(); }, 8000);
+		var ref = params.get('ref') || '';
+		if (ref) { verifyPayment(ref); } else { alert('Payment received! Your time will be credited shortly.'); }
 	} else if (pay === 'cancel') {
 		alert('Payment cancelled.');
 	}
@@ -779,6 +778,30 @@ function showPayRates() {
 	});
 	panel.innerHTML = html;
 	panel.style.display = '';
+}
+
+function verifyPayment(reference) {
+	fetch('/api/payments/verify', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ reference: reference }),
+	})
+		.then(function(r) { return r.json(); })
+		.then(function(d) {
+			if (d && d.ok) {
+				alert('Payment received! ' + (d.minutes || '') + ' minutes credited.');
+				syncSessionTime();
+			} else {
+				alert('We are still confirming your payment. Please wait a moment and refresh.');
+				var n = 0;
+				var t = setInterval(function() {
+					n++;
+					syncSessionTime();
+					if (n >= 6) clearInterval(t);
+				}, 5000);
+			}
+		})
+		.catch(function() { alert('We are still confirming your payment. Please refresh in a moment.'); });
 }
 
 function payOnline(rateId) {

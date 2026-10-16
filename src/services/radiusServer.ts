@@ -323,6 +323,7 @@ interface AuthResult {
   replyAttributes: RadiusAttribute[];
   profileId?: number;
   sessionTimeout?: number;
+  reason?: string;
 }
 
 function buildProfileAttributes(profile: any): RadiusAttribute[] {
@@ -450,7 +451,7 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         // applied in RADIUS mode).
         const expiryMs = new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime();
         if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) {
-          return { accept: false, replyAttributes: [] };
+          return { accept: false, replyAttributes: [], reason: 'expired' };
         }
       }
 
@@ -580,7 +581,7 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
     }
 
     console.log(`[RADIUS-auth] REJECT: No user or voucher found for routerId=${routerId}, username=${username}`);
-    return { accept: false, replyAttributes: [] };
+    return { accept: false, replyAttributes: [], reason: 'not-found' };
   } catch (err) {
     console.error('[RADIUS] Auth error:', err);
     return { accept: false, replyAttributes: [] };
@@ -1129,7 +1130,7 @@ export async function testRadiusConnectivity(routerId: number): Promise<{
           passCount++;
           testResults.push(`"${c.username}" PASS`);
         } else {
-          testResults.push(`"${c.username}" FAIL`);
+          testResults.push(`"${c.username}" FAIL${authResult.reason ? ' (' + authResult.reason + ')' : ''}`);
         }
       }
       result.authTestUser = testCandidates[0].username;

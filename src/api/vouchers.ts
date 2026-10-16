@@ -314,7 +314,31 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
       }
     } else if (authMode === 'radius') {
-      console.log(`coin-auth: RADIUS mode - no local hotspot user written for ${macNoColon} (RADIUS auth + CoA only)`);
+      // RADIUS mode. A leftover LOCAL hotspot user would let MikroTik authenticate
+      // the device locally (bypassing RADIUS) and - once its limit is used up -
+      // block the device AFTER a top-up, showing 0 time in the portal. Remove any
+      // local user for this MAC so RADIUS is the only path.
+      try {
+        if (mikroTikService.isConnected(routerId)) {
+          const routerUsers = await mikroTikService.getHotspotUsers(routerId);
+          const blocking = (Array.isArray(routerUsers) ? routerUsers : []).filter((u: any) =>
+            u['.id'] && String(u.name || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macNoColon
+          );
+          for (const u of blocking) {
+            try {
+              await mikroTikService.removeHotspotUser(routerId, u['.id']);
+              console.log(`coin-auth: removed blocking local user "${u.name}" for ${macNoColon} (RADIUS mode)`);
+            } catch (rmErr: any) {
+              console.error(`coin-auth: could not remove local user "${u.name}":`, rmErr.message);
+            }
+          }
+          if (blocking.length === 0) {
+            console.log(`coin-auth: RADIUS mode - no local user for ${macNoColon} (RADIUS auth + CoA only)`);
+          }
+        }
+      } catch (cleanErr: any) {
+        console.log(`coin-auth: local-user cleanup failed: ${cleanErr.message}`);
+      }
     } else {
       console.log(
         `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +

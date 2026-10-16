@@ -81,6 +81,7 @@ function setupEventListeners() {
 	document.getElementById('chargingCloseBtn').addEventListener('click', function() { hideModal('chargingModal'); });
 	document.getElementById('eloadBtn').addEventListener('click', function() { showModal('eloadModal'); });
 	document.getElementById('payGcashBtn').addEventListener('click', function() { showPayRates(); });
+	document.getElementById('payGcashBtnConnected').addEventListener('click', function() { showPayRates(); });
 	document.getElementById('eloadCloseBtn').addEventListener('click', function() { hideModal('eloadModal'); });
 
 	// Connected panel
@@ -753,21 +754,29 @@ function loadPaymentConfig() {
 		.then(function(r) { return r.json(); })
 		.then(function(cfg) {
 			if (!cfg || !cfg.enabled) return;
-			var btn = document.getElementById('payGcashBtn');
-			if (!btn) return;
 			payCurrency = cfg.currency || 'PHP';
 			payRates = (cfg.rates && cfg.rates.length)
 				? cfg.rates
 				: (cfg.amount > 0 ? [{ id: 0, label: cfg.description || 'Internet Time', amount: cfg.amount, minutes: cfg.minutes }] : []);
 			if (!payRates.length) return;
-			btn.style.display = '';
-			btn.textContent = 'PAY GCASH';
+			// Show on BOTH the disconnected and the connected panel, so time can be
+			// added online even while the device already has a session.
+			['payGcashBtn', 'payGcashBtnConnected'].forEach(function(id) {
+				var b = document.getElementById(id);
+				if (b) { b.style.display = ''; b.textContent = 'PAY GCASH'; }
+			});
 		})
 		.catch(function() {});
 }
 
 function showPayRates() {
-	var panel = document.getElementById('payRatesPanel');
+	// Pick the rates panel of whichever state is currently visible.
+	var disc = document.getElementById('disconnectedPanel');
+	var conn = document.getElementById('connectedPanel');
+	var panel = null;
+	if (conn && conn.style.display !== 'none') panel = document.getElementById('payRatesPanelConnected');
+	if (!panel && disc && disc.style.display !== 'none') panel = document.getElementById('payRatesPanel');
+	if (!panel) panel = document.getElementById('payRatesPanel') || document.getElementById('payRatesPanelConnected');
 	if (!panel) return;
 	if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
 	if (!payRates.length) { alert('Online payment is not available right now.'); return; }

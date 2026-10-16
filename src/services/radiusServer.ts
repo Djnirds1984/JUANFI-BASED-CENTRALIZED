@@ -443,6 +443,10 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
     console.log(`[RADIUS-auth] User lookup result:`, user ? `Found id=${user.id}, disabled=${user.disabled}` : 'NOT FOUND');
 
     if (user) {
+      // Expired account: accept for a short grace so the device can connect and
+      // reach the portal to buy time (the session then expires). Configurable;
+      // RADIUS_EXPIRED_GRACE_SEC=0 rejects expired accounts.
+      let expiredGrace = 0;
       if (user.expiry_at) {
         // Compare as timestamps, NOT strings. `expiry_at` is stored as
         // `YYYY-MM-DD HH:MM:SS` (space separator) while toISOString() uses `T`;
@@ -451,7 +455,8 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         // applied in RADIUS mode).
         const expiryMs = new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime();
         if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) {
-          return { accept: false, replyAttributes: [], reason: 'expired' };
+          if (config.radiusExpiredGraceSec > 0) expiredGrace = config.radiusExpiredGraceSec;
+          else return { accept: false, replyAttributes: [], reason: 'expired' };
         }
       }
 
@@ -511,6 +516,14 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
 
       if (voucher?.id) {
         db.prepare('UPDATE vouchers SET is_used = 1, used_at = datetime(\'now\') WHERE id = ?').run(voucher.id);
+      }
+
+      // Expired: force a short Session-Timeout so the device connects briefly
+      // (enough to open the portal) and then the session ends.
+      if (expiredGrace > 0) {
+        profileAttrs = profileAttrs.filter(a => a.type !== RADIUS_ATTR.SESSION_TIMEOUT);
+        profileAttrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: expiredGrace });
+        console.log(`[RADIUS] User ${username}: EXPIRED - granting ${expiredGrace}s grace to reach the portal`);
       }
 
       if (!user.first_login_at) {

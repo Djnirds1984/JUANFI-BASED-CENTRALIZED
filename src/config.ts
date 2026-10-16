@@ -48,4 +48,8 @@ export const config = {
   radiusAcctPort: Math.max(1, parseInt(process.env.RADIUS_ACCT_PORT || '1813', 10)),
   // RFC 5176 CoA / Disconnect port (MikroTik default 3799).
   radiusCoaPort: Math.max(1, parseInt(process.env.RADIUS_COA_PORT || '3799', 10)),
+  // When an account is EXPIRED, still accept it for this many seconds so the
+  // device can connect and reach the portal to buy time (the session then ends).
+  // Set RADIUS_EXPIRED_GRACE_SEC=0 to reject expired accounts outright.
+  radiusExpiredGraceSec: Math.max(0, parseInt(process.env.RADIUS_EXPIRED_GRACE_SEC || '60', 10) || 0),
 };

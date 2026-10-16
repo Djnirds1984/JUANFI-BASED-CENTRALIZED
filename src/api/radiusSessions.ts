@@ -160,6 +160,136 @@ router.post('/router/:routerId/:sessionId/extend', async (req: Request, res: Res
   }
 });
 
+// Add `minutes` of time to the account behind a username (stack + CoA). Shared
+// by the admin "add time" and "add voucher" actions.
+async function addTimeToUser(routerId: number, username: string, minutes: number, session: any) {
+  const db = getDb();
+  const mac = String(username).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+  const macMatch = mac.length === 12 ? mac : '';
+
+  const user = db.prepare(
+    `SELECT id, username, expiry_at FROM hotspot_users
+     WHERE router_id = ? AND disabled = 0
+       AND (LOWER(username) = LOWER(?)
+            OR ( ? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC LIMIT 1`
+  ).get(routerId, username, macMatch, macMatch) as any;
+
+  if (!user) return { ok: false as const, error: 'No hotspot user found for this session' };
+
+  const now = Date.now();
+  const current = user.expiry_at ? new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime() : 0;
+  const expiryAt = new Date((current > now ? current : now) + minutes * 60 * 1000)
+    .toISOString().replace('T', ' ').slice(0, 19);
+
+  db.prepare(
+    "UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(expiryAt, user.id);
+
+  const remainingSeconds = Math.max(
+    0,
+    Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+  );
+
+  let coa = 'none';
+  try {
+    const realId = session?.session_id && !String(session.session_id).startsWith('coin_')
+      ? String(session.session_id) : '';
+    const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
+    const nasIp = String(routerRow?.host || '').split(':')[0];
+
+    let framedIp = '';
+    if (mikroTikService.isConnected(routerId)) {
+      const live = await mikroTikService.getActiveConnections(routerId);
+      const conn = (Array.isArray(live) ? live : []).find((c: any) =>
+        String(c.user || '').toLowerCase() === String(username).toLowerCase() ||
+        (macMatch && String(c.mac || c['mac-address'] || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macMatch)
+      );
+      if (conn) framedIp = String(conn.address || '').split('/')[0].split(':')[0];
+    }
+
+    if (realId && session?.nas_ip) {
+      sendCoASessionTimeout(routerId, realId, session.nas_ip, remainingSeconds, username, framedIp || undefined);
+      coa = 'session-id';
+    } else if (nasIp) {
+      sendCoASessionTimeout(routerId, '', nasIp, remainingSeconds, username, framedIp || undefined);
+      coa = 'user-name';
+    }
+  } catch (coaErr: any) {
+    console.error('addTimeToUser CoA error:', coaErr.message);
+  }
+
+  return { ok: true as const, remainingSeconds, coa, user };
+}
+
+// Add a VOUCHER's time to the device behind a session (redeem code -> +minutes).
+router.post('/router/:routerId/:sessionId/apply-voucher', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const sessionId = parseInt(req.params.sessionId);
+    const code = String(req.body?.code || '').trim();
+
+    if (!code) {
+      res.status(400).json({ error: 'Voucher code is required' });
+      return;
+    }
+
+    const db = getDb();
+    const voucher = db.prepare(
+      `SELECT id, code, duration_minutes, radius_profile_id FROM vouchers
+       WHERE router_id = ? AND LOWER(code) = LOWER(?) AND is_used = 0
+         AND (expires_at IS NULL OR expires_at > datetime('now'))
+       ORDER BY id DESC LIMIT 1`
+    ).get(routerId, code) as any;
+
+    if (!voucher) {
+      res.status(404).json({ error: 'Voucher not found, already used, or expired' });
+      return;
+    }
+
+    const minutes = parseInt(voucher.duration_minutes, 10) || 0;
+    if (minutes <= 0) {
+      res.status(400).json({ error: 'Voucher has no duration to add' });
+      return;
+    }
+
+    const session = db.prepare(
+      'SELECT * FROM radius_sessions WHERE id = ? AND router_id = ?'
+    ).get(sessionId, routerId) as any;
+
+    if (!session || !session.username) {
+      res.status(404).json({ error: 'Session not found or has no username' });
+      return;
+    }
+
+    const result = await addTimeToUser(routerId, String(session.username), minutes, session);
+    if (!result.ok) {
+      res.status(404).json({ error: result.error });
+      return;
+    }
+
+    // Apply the voucher's RADIUS profile to the account when it has none.
+    if (voucher.radius_profile_id) {
+      db.prepare(
+        'UPDATE hotspot_users SET radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?'
+      ).run(voucher.radius_profile_id, result.user.id);
+    }
+
+    db.prepare("UPDATE vouchers SET is_used = 1, used_at = datetime('now') WHERE id = ?").run(voucher.id);
+
+    res.json({
+      message: `Added ${minutes} min from voucher ${voucher.code} to ${result.user.username}`,
+      username: result.user.username,
+      minutes,
+      remainingSeconds: result.remainingSeconds,
+      coa: result.coa,
+    });
+  } catch (error: any) {
+    console.error('Apply voucher to session error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/router/:routerId/:sessionId/terminate', (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

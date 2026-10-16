@@ -4834,6 +4834,7 @@ const App = {
                 <td>${this.escapeHtml(s.nas_ip || '-')}</td>
                 <td>
                   <button class="btn btn-sm btn-primary" onclick="App.extendRadiusSession(${s.id}, this)">Add time</button>
+                  <button class="btn btn-sm btn-outline" onclick="App.applyVoucherToSession(${s.id}, this)">Add voucher</button>
                   ${s.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="App.terminateRadiusSession(${s.id})">Disconnect</button>` : ''}
                   <button class="btn btn-sm btn-outline" onclick="App.deleteRadiusSession(${s.id})">Remove</button>
                 </td>
@@ -5196,6 +5197,27 @@ const App = {
         this.toast(err.message, 'error');
       }
     });
+  },
+
+  // Redeem a VOUCHER and add its time to the device behind a session.
+  async applyVoucherToSession(sessionId, btn) {
+    if (!sessionId) return;
+
+    let username = '';
+    const row = btn && btn.closest ? btn.closest('tr') : null;
+    if (row && row.children[0]) username = row.children[0].textContent.trim();
+
+    const code = window.prompt('Voucher code to add to ' + (username || 'this device') + ':', '');
+    if (code === null) return;
+    if (!code.trim()) return;
+
+    try {
+      const r = await api.applyVoucherToSession(this.selectedRouterId, sessionId, code.trim());
+      this.toast(r.message || 'Voucher applied', 'success');
+      this.loadRadiusTab();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   // Admin top-up: add time to the USER behind a session (not a voucher/coin).

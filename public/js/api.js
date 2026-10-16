@@ -611,6 +611,10 @@ class ApiClient {
     return this.post(`/radius-sessions/router/${routerId}/${sessionId}/terminate`);
   }
 
+  async applyVoucherToSession(routerId, sessionId, code) {
+    return this.post(`/radius-sessions/router/${routerId}/${sessionId}/apply-voucher`, { code });
+  }
+
   async extendRadiusSession(routerId, sessionId, minutes) {
     return this.post(`/radius-sessions/router/${routerId}/${sessionId}/extend`, { minutes });
   }

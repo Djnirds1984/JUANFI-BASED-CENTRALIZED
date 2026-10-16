@@ -40,6 +40,8 @@ var sessionSyncTimer = null;
 var sessionExpiresAt = null;
 var isExtendMode = false;
 var tokenBound = false;
+var payRates = [];
+var payCurrency = 'PHP';
 
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
@@ -49,7 +51,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
 	setupEventListeners();
 	loadVendoConfig();
+	loadPaymentConfig();
 	checkSessionState();
+
+	// Returned from PayMongo (GCash).
+	var pay = params.get('pay');
+	if (pay === 'success') {
+		alert('Payment received! Your time will be credited shortly.');
+		setTimeout(function() { syncSessionTime(); }, 2500);
+		setTimeout(function() { syncSessionTime(); }, 8000);
+	} else if (pay === 'cancel') {
+		alert('Payment cancelled.');
+	}
 });
 
 // ---- Event Listeners ----
@@ -68,6 +81,7 @@ function setupEventListeners() {
 	document.getElementById('chargingBtn').addEventListener('click', function() { showModal('chargingModal'); loadChargingStations(); });
 	document.getElementById('chargingCloseBtn').addEventListener('click', function() { hideModal('chargingModal'); });
 	document.getElementById('eloadBtn').addEventListener('click', function() { showModal('eloadModal'); });
+	document.getElementById('payGcashBtn').addEventListener('click', function() { showPayRates(); });
 	document.getElementById('eloadCloseBtn').addEventListener('click', function() { hideModal('eloadModal'); });
 
 	// Connected panel
@@ -732,6 +746,54 @@ function refreshSessionAfterExtend() {
 			}
 		})
 		.catch(function() {});
+}
+
+// ---- ONLINE PAYMENT (PAY GCASH via PayMongo) ----
+function loadPaymentConfig() {
+	fetch('/api/payments/config')
+		.then(function(r) { return r.json(); })
+		.then(function(cfg) {
+			if (!cfg || !cfg.enabled) return;
+			var btn = document.getElementById('payGcashBtn');
+			if (!btn) return;
+			payCurrency = cfg.currency || 'PHP';
+			payRates = (cfg.rates && cfg.rates.length)
+				? cfg.rates
+				: (cfg.amount > 0 ? [{ id: 0, label: cfg.description || 'Internet Time', amount: cfg.amount, minutes: cfg.minutes }] : []);
+			if (!payRates.length) return;
+			btn.style.display = '';
+			btn.textContent = 'PAY GCASH';
+		})
+		.catch(function() {});
+}
+
+function showPayRates() {
+	var panel = document.getElementById('payRatesPanel');
+	if (!panel) return;
+	if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+	if (!payRates.length) { alert('Online payment is not available right now.'); return; }
+	var html = '<div style="font-weight:bold;color:#333;margin-bottom:8px;">Choose an amount to pay</div>';
+	payRates.forEach(function(r) {
+		html += '<button type="button" class="btn portal-btn mb-2" style="display:block;width:100%;" onclick="payOnline(' + r.id + '); return false;">' +
+			payCurrency + ' ' + r.amount + ' → ' + r.minutes + ' min' + (r.label ? ' (' + r.label + ')' : '') + '</button>';
+	});
+	panel.innerHTML = html;
+	panel.style.display = '';
+}
+
+function payOnline(rateId) {
+	if (!mac) { alert('Missing device MAC.'); return; }
+	fetch('/api/payments/checkout', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, routerId: routerId, rateId: rateId }),
+	})
+		.then(function(r) { return r.json(); })
+		.then(function(d) {
+			if (d && d.checkoutUrl) { window.location.href = d.checkoutUrl; }
+			else { alert('Payment error: ' + ((d && d.error) || 'unknown')); }
+		})
+		.catch(function() { alert('Payment request failed. Please try again.'); });
 }
 
 // ---- PROMO RATES ----

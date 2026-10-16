@@ -117,6 +117,7 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
+      payments: 'Online Payment',
       appearance: 'Appearance',
     };
 
@@ -140,12 +141,148 @@ const App = {
         case 'radius': await this.renderRadius(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'payments': await this.renderOnlinePayment(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
     }
+  },
+
+  async renderOnlinePayment() {
+    const content = document.getElementById('page-content');
+    content.innerHTML = '<div class="empty-state"><p>Loading payment settings...</p></div>';
+
+    let s = {};
+    let rates = [];
+    try {
+      [s, rates] = await Promise.all([api.getPaymentSettings(), api.getPaymentRates()]);
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+      return;
+    }
+    this._paymentRates = rates;
+
+    const inp = 'width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)';
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><h3>Online Payment — PayMongo / GCash</h3></div>
+        <form id="payment-form" style="padding:1rem;max-width:680px">
+          <label style="display:block;margin:0.5rem 0">
+            <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}> Enable online payment (adds a <strong>PAY GCASH</strong> button to the portal)
+          </label>
+          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Public key (pk_…)</label><input name="public_key" value="${this.escapeHtml(s.public_key || '')}" style="${inp}"></div>
+          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Secret key (sk_…)</label><input name="secret_key" value="${this.escapeHtml(s.secret_key || '')}" style="${inp}"></div>
+          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Webhook secret (whsk_…)</label><input name="webhook_secret" value="${this.escapeHtml(s.webhook_secret || '')}" style="${inp}"></div>
+          <div style="display:flex;gap:1rem;flex-wrap:wrap">
+            <div style="flex:1;min-width:140px"><label style="display:block;margin-bottom:0.25rem">Price</label><input name="amount" type="number" step="0.01" value="${s.amount || 0}" style="${inp}"></div>
+            <div style="flex:1;min-width:140px"><label style="display:block;margin-bottom:0.25rem">Time granted (minutes)</label><input name="minutes" type="number" value="${s.minutes || 0}" style="${inp}"></div>
+            <div style="flex:1;min-width:100px"><label style="display:block;margin-bottom:0.25rem">Currency</label><input name="currency" value="${this.escapeHtml(s.currency || 'PHP')}" style="${inp}"></div>
+          </div>
+          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Description</label><input name="description" value="${this.escapeHtml(s.description || 'Internet Time')}" style="${inp}"></div>
+          <button class="btn btn-primary" type="submit" style="margin-top:0.5rem">Save</button>
+        </form>
+        <div style="padding:1rem;border-top:1px solid var(--border);color:var(--text-muted);font-size:0.85rem;line-height:1.7">
+          <strong>PayMongo webhook</strong> — add this URL in PayMongo Dashboard → Developers → Webhooks:<br>
+          <code>${location.origin}/api/payments/paymongo/webhook</code><br>
+          Subscribe to events: <code>payment.paid</code>, <code>checkout_session.payment.paid</code>.<br>
+          The device gets <strong>${s.minutes || 0} min</strong> for <strong>${s.currency || 'PHP'} ${s.amount || 0}</strong> after payment is confirmed.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header">
+          <h3>Online Pricing Tiers</h3>
+          <button class="btn btn-primary btn-sm" onclick="App.addPaymentRate()">Add Tier</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Label</th><th>Price (PHP)</th><th>Minutes</th><th>Active</th><th>Actions</th></tr></thead>
+            <tbody id="rates-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const renderRates = () => {
+      const tb = document.getElementById('rates-tbody');
+      if (!tb) return;
+      tb.innerHTML = (rates && rates.length)
+        ? rates.map((r) => `
+            <tr>
+              <td>${this.escapeHtml(r.label || '-')}</td>
+              <td>${this.escapeHtml(String(r.amount))}</td>
+              <td>${r.minutes}</td>
+              <td>${r.is_active ? 'Yes' : 'No'}</td>
+              <td>
+                <button class="btn btn-sm btn-outline" onclick="App.editPaymentRate(${r.id})">Edit</button>
+                <button class="btn btn-sm btn-outline" onclick="App.deletePaymentRate(${r.id})">Delete</button>
+              </td>
+            </tr>`).join('')
+        : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1rem">No tiers yet — add one for the portal PAY GCASH options.</td></tr>';
+    };
+    renderRates();
+
+    document.getElementById('payment-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const payload = {
+        enabled: f.enabled.checked,
+        public_key: f.public_key.value.trim(),
+        secret_key: f.secret_key.value.trim(),
+        webhook_secret: f.webhook_secret.value.trim(),
+        amount: parseFloat(f.amount.value) || 0,
+        minutes: parseInt(f.minutes.value, 10) || 0,
+        currency: f.currency.value.trim() || 'PHP',
+        description: f.description.value.trim(),
+      };
+      try {
+        await api.updatePaymentSettings(payload);
+        this.toast('Payment settings saved', 'success');
+      } catch (err) {
+        this.toast(err.message, 'error');
+      }
+    });
+  },
+
+  async addPaymentRate() {
+    const label = window.prompt('Tier label (e.g. 30 Minutes):', '');
+    if (label === null) return;
+    const amount = window.prompt('Price (PHP):', '10');
+    if (amount === null) return;
+    const minutes = window.prompt('Minutes granted:', '30');
+    if (minutes === null) return;
+    try {
+      await api.createPaymentRate({ label: label.trim(), amount: parseFloat(amount) || 0, minutes: parseInt(minutes, 10) || 0, is_active: true });
+      this.toast('Tier added', 'success');
+      this.renderOnlinePayment();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async editPaymentRate(id) {
+    const r = (this._paymentRates || []).find((x) => x.id === id) || {};
+    const label = window.prompt('Tier label:', r.label || '');
+    if (label === null) return;
+    const amount = window.prompt('Price (PHP):', String(r.amount != null ? r.amount : 0));
+    if (amount === null) return;
+    const minutes = window.prompt('Minutes granted:', String(r.minutes != null ? r.minutes : 0));
+    if (minutes === null) return;
+    const active = window.confirm('Active? (OK = yes, Cancel = no)');
+    try {
+      await api.updatePaymentRate(id, { label: label.trim(), amount: parseFloat(amount) || 0, minutes: parseInt(minutes, 10) || 0, is_active: active });
+      this.toast('Tier updated', 'success');
+      this.renderOnlinePayment();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async deletePaymentRate(id) {
+    if (!confirm('Delete this pricing tier?')) return;
+    try {
+      await api.deletePaymentRate(id);
+      this.toast('Tier deleted', 'success');
+      this.renderOnlinePayment();
+    } catch (err) { this.toast(err.message, 'error'); }
   },
 
   async renderOverview() {

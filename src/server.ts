@@ -22,6 +22,7 @@ import monitoringRoutes from './api/monitoring';
 import portalRoutes from './api/portal';
 import subvendoRoutes from './api/subvendo';
 import nodemcuRoutes from './api/nodemcu';
+import paymentRoutes from './api/payments';
 import interfaceRoutes from './api/interfaces';
 import sessionRoutes from './api/session';
 import radiusProfileRoutes from './api/radiusProfiles';
@@ -39,7 +40,7 @@ const io = new SocketIOServer(server, {
 
 app.use(helmet({ contentSecurityPolicy: false, frameguard: false }));
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ verify: (req: any, _res, buf) => { req.rawBody = buf ? buf.toString('utf8') : ''; } }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined'));
 
@@ -57,6 +58,7 @@ app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/portal', portalRoutes);
 app.use('/api/subvendo', subvendoRoutes);
 app.use('/api/nodemcu', nodemcuRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/interfaces', interfaceRoutes);
 app.use('/api/session', sessionRoutes);
 app.use('/api/radius-profiles', radiusProfileRoutes);

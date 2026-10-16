@@ -254,6 +254,46 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_device_macs_username ON device_macs(username);
     CREATE INDEX IF NOT EXISTS idx_session_bindings_session ON session_bindings(session_id);
     CREATE INDEX IF NOT EXISTS idx_radius_clients_router ON radius_clients(router_id);
+
+    CREATE TABLE IF NOT EXISTS payment_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 0,
+      provider TEXT NOT NULL DEFAULT 'paymongo',
+      public_key TEXT NOT NULL DEFAULT '',
+      secret_key TEXT NOT NULL DEFAULT '',
+      webhook_secret TEXT NOT NULL DEFAULT '',
+      currency TEXT NOT NULL DEFAULT 'PHP',
+      amount REAL NOT NULL DEFAULT 0,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL DEFAULT 'Internet Time',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reference TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'paymongo',
+      router_id INTEGER,
+      mac_address TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      provider_ref TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+
+    CREATE TABLE IF NOT EXISTS payment_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

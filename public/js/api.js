@@ -573,6 +573,13 @@ class ApiClient {
   }
 
   // --- RADIUS Profiles ---
+  async getPaymentSettings() { return this.get('/payments/settings'); }
+  async updatePaymentSettings(data) { return this.put('/payments/settings', data); }
+  async getPaymentRates() { return this.get('/payments/rates'); }
+  async createPaymentRate(data) { return this.post('/payments/rates', data); }
+  async updatePaymentRate(id, data) { return this.put(`/payments/rates/${id}`, data); }
+  async deletePaymentRate(id) { return this.delete(`/payments/rates/${id}`); }
+
   async getRadiusProfiles(routerId) {
     return this.get(`/radius-profiles/router/${routerId}`);
   }

@@ -789,7 +789,8 @@ function showPayRates() {
 	panel.style.display = '';
 }
 
-function verifyPayment(reference) {
+function verifyPayment(reference, attempt) {
+	attempt = attempt || 0;
 	fetch('/api/payments/verify', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -799,18 +800,26 @@ function verifyPayment(reference) {
 		.then(function(d) {
 			if (d && d.ok) {
 				alert('Payment received! ' + (d.minutes || '') + ' minutes credited.');
+				// The device may still be in the captive (unauthenticated) state, so log
+				// it in exactly like the coin flow does - otherwise the paid time never
+				// reaches the router and the phone stays unauthenticated.
+				if (!isConnected) {
+					setTimeout(function() { doLogin(); }, 400);
+				}
 				syncSessionTime();
+				setTimeout(function() { syncSessionTime(); }, 5000);
+				setTimeout(function() { syncSessionTime(); }, 12000);
+			} else if (attempt < 5) {
+				// PayMongo may still be settling; re-verify a few times.
+				setTimeout(function() { verifyPayment(reference, attempt + 1); }, 4000);
 			} else {
-				alert('We are still confirming your payment. Please wait a moment and refresh.');
-				var n = 0;
-				var t = setInterval(function() {
-					n++;
-					syncSessionTime();
-					if (n >= 6) clearInterval(t);
-				}, 5000);
+				alert('Payment is still being confirmed. Please refresh the page in a moment.');
 			}
 		})
-		.catch(function() { alert('We are still confirming your payment. Please refresh in a moment.'); });
+		.catch(function() {
+			if (attempt < 5) setTimeout(function() { verifyPayment(reference, attempt + 1); }, 4000);
+			else alert('Payment is still being confirmed. Please refresh the page in a moment.');
+		});
 }
 
 function payOnline(rateId) {

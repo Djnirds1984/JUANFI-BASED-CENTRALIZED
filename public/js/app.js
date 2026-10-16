@@ -156,8 +156,11 @@ const App = {
 
     let s = {};
     let rates = [];
+    let payments = [];
     try {
-      [s, rates] = await Promise.all([api.getPaymentSettings(), api.getPaymentRates()]);
+      [s, rates, payments] = await Promise.all([
+        api.getPaymentSettings(), api.getPaymentRates(), api.getPayments(100),
+      ]);
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
       return;
@@ -203,6 +206,19 @@ const App = {
           </table>
         </div>
       </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header">
+          <h3>Payments History</h3>
+          <button class="btn btn-outline btn-sm" onclick="App.renderOnlinePayment()">Refresh</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Reference</th><th>MAC</th><th>Amount</th><th>Minutes</th><th>Status</th><th>Paid At</th><th>Created</th></tr></thead>
+            <tbody id="payments-tbody"></tbody>
+          </table>
+        </div>
+      </div>
     `;
 
     const renderRates = () => {
@@ -223,6 +239,25 @@ const App = {
         : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1rem">No tiers yet — add one for the portal PAY GCASH options.</td></tr>';
     };
     renderRates();
+
+    const tbP = document.getElementById('payments-tbody');
+    if (tbP) {
+      tbP.innerHTML = (payments && payments.length)
+        ? payments.map((p) => {
+            const badge = p.status === 'paid' ? 'connected' : (p.status === 'pending' ? '' : 'disconnected');
+            return `
+              <tr>
+                <td><code>${this.escapeHtml(p.reference || '-')}</code></td>
+                <td><code>${this.escapeHtml(p.mac_address || '-')}</code></td>
+                <td>${this.escapeHtml(String(p.amount != null ? p.amount : 0))}</td>
+                <td>${p.minutes || 0}</td>
+                <td><span class="status-badge ${badge}">${this.escapeHtml(p.status || '-')}</span></td>
+                <td>${this.escapeHtml(p.paid_at || '-')}</td>
+                <td>${this.escapeHtml(p.created_at || '-')}</td>
+              </tr>`;
+          }).join('')
+        : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1rem">No online payments yet.</td></tr>';
+    }
 
     document.getElementById('payment-form').addEventListener('submit', async (e) => {
       e.preventDefault();

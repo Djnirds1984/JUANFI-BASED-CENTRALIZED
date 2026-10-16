@@ -575,6 +575,7 @@ class ApiClient {
   // --- RADIUS Profiles ---
   async getPaymentSettings() { return this.get('/payments/settings'); }
   async updatePaymentSettings(data) { return this.put('/payments/settings', data); }
+  async getPayments(limit = 100) { return this.get(`/payments/list?limit=${limit}`); }
   async getPaymentRates() { return this.get('/payments/rates'); }
   async createPaymentRate(data) { return this.post('/payments/rates', data); }
   async updatePaymentRate(id, data) { return this.put(`/payments/rates/${id}`, data); }

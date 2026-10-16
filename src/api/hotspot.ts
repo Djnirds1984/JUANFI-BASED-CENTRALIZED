@@ -226,8 +226,14 @@ router.post('/router/:routerId/purge-local-mac-users', async (req: Request, res:
     }
 
     const users = await mikroTikService.getHotspotUsers(routerId);
-    const isMacName = (name: any) => /^[0-9a-f]{12}$/i.test(String(name || '').replace(/[^0-9a-fA-F]/g, ''));
-    const macUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isMacName(u.name));
+    // Device users are MAC-named or named like a rate/voucher (`240m,10,1,TEST1`).
+    const isDeviceUserName = (name: any) => {
+      const s = String(name || '').trim();
+      if (!s) return false;
+      const isMacLike = /^[0-9a-fA-F]{2}([:-]?[0-9a-fA-F]{2}){5}$/.test(s) || /^[0-9a-fA-F]{12}$/.test(s);
+      return isMacLike || s.includes(',');
+    };
+    const macUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isDeviceUserName(u.name));
 
     let removed = 0;
     for (const u of macUsers) {
@@ -239,7 +245,7 @@ router.post('/router/:routerId/purge-local-mac-users', async (req: Request, res:
       }
     }
 
-    res.json({ message: `Removed ${removed} local MAC user(s) from the router`, removed, total: macUsers.length });
+    res.json({ message: `Removed ${removed} local device user(s) from the router`, removed, total: macUsers.length });
   } catch (error: any) {
     console.error('Purge local MAC users error:', error);
     res.status(500).json({ error: error.message });

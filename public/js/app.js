@@ -4374,7 +4374,7 @@ const App = {
         <div class="card-header">
           <h3>RADIUS Management</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
-            <button class="btn btn-outline" id="radius-purge-local" title="Remove local hotspot users named like a MAC (RADIUS mode keeps accounts in the panel)">Purge local MAC users</button>
+            <button class="btn btn-outline" id="radius-purge-local" title="Remove local hotspot device users (MAC- or rate-named) so they can't shadow RADIUS">Purge local device users</button>
             <button class="btn btn-outline" id="radius-assign-default" title="Assign the default RADIUS profile to every account that has none">Assign default profile</button>
             <select id="radius-local-mode" class="btn btn-outline" title="RADIUS user mode for this router">
               <option value="0">Pure RADIUS</option>
@@ -5044,6 +5044,9 @@ const App = {
                  style="padding:0.35rem 0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.8rem;width:180px">
           <button class="btn btn-sm btn-outline" id="radius-log-user-clear">Clear user</button>
           <label style="font-size:0.8rem;color:var(--text-muted);cursor:pointer">
+            <input type="checkbox" id="radius-log-all" style="vertical-align:middle"> All routers
+          </label>
+          <label style="font-size:0.8rem;color:var(--text-muted);cursor:pointer">
             <input type="checkbox" id="radius-log-autoscroll" checked style="vertical-align:middle"> Auto-scroll
           </label>
           <button class="btn btn-sm btn-outline" id="radius-log-clear">Clear log</button>
@@ -5061,7 +5064,9 @@ const App = {
 
     const refresh = async () => {
       try {
-        const logs = await api.getRadiusLogs(this.selectedRouterId, 300, this._radiusLogUsername || undefined);
+        const allR = document.getElementById('radius-log-all');
+        const rid = (allR && allR.checked) ? undefined : this.selectedRouterId;
+        const logs = await api.getRadiusLogs(rid, 300, this._radiusLogUsername || undefined);
         if (!box || !box.parentNode) return; // tab switched away
         const rows = (logs || []).slice().reverse(); // oldest -> newest (console tail)
         const wasBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
@@ -5090,7 +5095,8 @@ const App = {
         if (autoChk && autoChk.checked && wasBottom) box.scrollTop = box.scrollHeight;
         else box.scrollTop = prevTop;
       } catch (err) {
-        // keep the last view; a transient error shouldn't wipe the log
+        // Surface the failure instead of silently freezing on stale entries.
+        if (note) note.textContent = ' - refresh failed: ' + (err && err.message ? err.message : err);
       }
     };
 

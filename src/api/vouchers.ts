@@ -240,7 +240,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // must NOT create or update local users: MikroTik checks the local user list
     // first, so a local MAC user lets the device bypass RADIUS (and RADIUS
     // accounting) entirely. Live extensions go through the CoA above.
-    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
+    if (mikroTikService.isConnected(routerId)) {
       try {
         const routerUsers = await mikroTikService.getHotspotUsers(routerId);
 
@@ -255,13 +255,19 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
-          await mikroTikService.createHotspotUser(routerId, {
-            username: macNoColon,
-            password: '',
-            profile: 'default',
-            uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
-            comment: 'Coin-insert MAC user (panel portal)',
-          });
+          if (authMode === 'radius') {
+            // No local record for this MAC: RADIUS handles everything (we do NOT
+            // create a local user, so new devices stay RADIUS-only).
+            console.log(`coin-auth: RADIUS mode - no local user for ${macNoColon} (RADIUS auth + CoA only)`);
+          } else {
+            await mikroTikService.createHotspotUser(routerId, {
+              username: macNoColon,
+              password: '',
+              profile: 'default',
+              uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),
+              comment: 'Coin-insert MAC user (panel portal)',
+            });
+          }
         } else {
           // Top-up on an already-logged-in device.
           //
@@ -277,6 +283,12 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           // `reset-counters` zeroes the accumulated uptime so the new limit is
           // shown immediately; if the reset fails we keep the old limit as the
           // base so the uptime is still accounted for.
+          if (authMode === 'radius') {
+            // The router still has a LOCAL user for this MAC (checked before
+            // RADIUS). Reuse/refresh it so the device can log back in after its
+            // time ran out - otherwise the exhausted local record blocks login.
+            console.log(`coin-auth: reusing existing local user "${routerUserName}" for ${macNoColon}`);
+          }
           const uptimeSec = mikrotikUptimeToSeconds(existingOnRouter.uptime);
           // Make the router's user limit reflect the panel's PAID remaining time
           // exactly (expiryAt is already the stacked total, so `msLeft` is the
@@ -312,32 +324,6 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         // Panel DB is authoritative for check-session; log but don't fail the
         // payment. The device can still retry login once the router syncs.
         console.error(`coin-auth: failed to push MAC user ${macNoColon} to router ${routerId}:`, mtErr.message);
-      }
-    } else if (authMode === 'radius') {
-      // RADIUS mode. A leftover LOCAL hotspot user would let MikroTik authenticate
-      // the device locally (bypassing RADIUS) and - once its limit is used up -
-      // block the device AFTER a top-up, showing 0 time in the portal. Remove any
-      // local user for this MAC so RADIUS is the only path.
-      try {
-        if (mikroTikService.isConnected(routerId)) {
-          const routerUsers = await mikroTikService.getHotspotUsers(routerId);
-          const blocking = (Array.isArray(routerUsers) ? routerUsers : []).filter((u: any) =>
-            u['.id'] && String(u.name || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macNoColon
-          );
-          for (const u of blocking) {
-            try {
-              await mikroTikService.removeHotspotUser(routerId, u['.id']);
-              console.log(`coin-auth: removed blocking local user "${u.name}" for ${macNoColon} (RADIUS mode)`);
-            } catch (rmErr: any) {
-              console.error(`coin-auth: could not remove local user "${u.name}":`, rmErr.message);
-            }
-          }
-          if (blocking.length === 0) {
-            console.log(`coin-auth: RADIUS mode - no local user for ${macNoColon} (RADIUS auth + CoA only)`);
-          }
-        }
-      } catch (cleanErr: any) {
-        console.log(`coin-auth: local-user cleanup failed: ${cleanErr.message}`);
       }
     } else {
       console.log(

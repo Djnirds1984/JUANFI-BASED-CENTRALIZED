@@ -703,6 +703,35 @@ class ApiClient {
   async restoreFromTurso() {
     return this.post('/tools/turso/restore');
   }
+
+  // --- PPP / PPPoE ---
+  async getPppActive(routerId) {
+    return this.get(`/ppp/router/${routerId}/active`);
+  }
+
+  async getPppCustomers(routerId) {
+    return this.get(`/ppp/router/${routerId}/customers`);
+  }
+
+  async createPppCustomer(routerId, customer) {
+    return this.post(`/ppp/router/${routerId}/customers`, customer);
+  }
+
+  async updatePppCustomer(routerId, customerId, data) {
+    return this.put(`/ppp/router/${routerId}/customers/${customerId}`, data);
+  }
+
+  async deletePppCustomer(routerId, customerId) {
+    return this.delete(`/ppp/router/${routerId}/customers/${customerId}`);
+  }
+
+  async enablePppCustomer(routerId, customerId) {
+    return this.post(`/ppp/router/${routerId}/customers/${customerId}/enable`);
+  }
+
+  async disablePppCustomer(routerId, customerId) {
+    return this.post(`/ppp/router/${routerId}/customers/${customerId}/disable`);
+  }
 }
 
 window.api = new ApiClient();

@@ -53,6 +53,30 @@ export interface ActiveConnection {
   'tx-rate'?: string;
 }
 
+export interface PppActive {
+  '.id': string;
+  name: string;
+  service: string;
+  caller: string;
+  address: string;
+  uptime: string;
+  'bytes-in': number;
+  'bytes-out': number;
+  'encoding'?: string;
+}
+
+export interface PppSecret {
+  '.id': string;
+  name: string;
+  password: string;
+  profile: string;
+  service: string;
+  'local-address'?: string;
+  'remote-address'?: string;
+  comment?: string;
+  disabled?: string;
+}
+
 class MikroTikService {
   private connections: Map<number, RouterOSAPI> = new Map();
   private routerConfigs: Map<number, RouterConnection> = new Map();
@@ -380,6 +404,141 @@ class MikroTikService {
       await client.write('/ip/hotspot/user/enable', [`.id=${userId}`]);
     } catch (err) {
       console.error(`enableHotspotUser failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getPppActive(routerId: number): Promise<PppActive[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const result = await this.restApiCall(config, 'GET', '/ppp/active');
+      return Array.isArray(result) ? result : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const connections = await client.write('/ppp/active/print') as any[];
+      return connections;
+    } catch (err) {
+      console.error(`getPppActive failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getPppSecrets(routerId: number): Promise<PppSecret[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const result = await this.restApiCall(config, 'GET', '/ppp/secret');
+      return Array.isArray(result) ? result : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const secrets = await client.write('/ppp/secret/print') as any[];
+      return secrets;
+    } catch (err) {
+      console.error(`getPppSecrets failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createPppSecret(
+    routerId: number,
+    data: {
+      name: string;
+      password: string;
+      profile: string;
+      service?: string;
+      localAddress?: string;
+      remoteAddress?: string;
+      comment?: string;
+    }
+  ): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const body: any = {
+        name: data.name,
+        password: data.password,
+        profile: data.profile,
+        service: data.service || 'pppoe',
+      };
+      if (data.localAddress) body['local-address'] = data.localAddress;
+      if (data.remoteAddress) body['remote-address'] = data.remoteAddress;
+      if (data.comment) body.comment = data.comment;
+
+      await this.restApiCall(config, 'POST', '/ppp/secret/add', body);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    const command: string[] = [
+      `=name=${data.name}`,
+      `=password=${data.password}`,
+      `=profile=${data.profile}`,
+      `=service=${data.service || 'pppoe'}`,
+    ];
+    if (data.localAddress) command.push(`=local-address=${data.localAddress}`);
+    if (data.remoteAddress) command.push(`=remote-address=${data.remoteAddress}`);
+    if (data.comment) command.push(`=comment=${data.comment}`);
+
+    try {
+      await client.write('/ppp/secret/add', command);
+    } catch (err) {
+      console.error(`createPppSecret failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async removePppSecret(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ppp/secret/${id}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write('/ppp/secret/remove', [`.id=${id}`]);
+    } catch (err) {
+      console.error(`removePppSecret failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async disablePppSecret(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'POST', `/ppp/secret/${id}/disable`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write('/ppp/secret/disable', [`.id=${id}`]);
+    } catch (err) {
+      console.error(`disablePppSecret failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async enablePppSecret(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'POST', `/ppp/secret/${id}/enable`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write('/ppp/secret/enable', [`.id=${id}`]);
+    } catch (err) {
+      console.error(`enablePppSecret failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }

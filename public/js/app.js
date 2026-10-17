@@ -12,6 +12,7 @@ const App = {
   hotspotTab: 'hosts',
   voucherTab: 'vouchers',
   radiusTab: 'profiles',
+  pppTab: 'active',
 
   init() {
     if (window.AdminThemes) {
@@ -101,6 +102,7 @@ const App = {
       this._overviewInterval = null;
     }
     this.clearHotspotPollers();
+    this.clearPppPollers();
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -119,6 +121,7 @@ const App = {
       subvendo: 'SubVendo',
       payments: 'Online Payment',
       appearance: 'Appearance',
+      ppp: 'PPP',
     };
 
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -144,6 +147,7 @@ const App = {
         case 'payments': await this.renderOnlinePayment(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
+        case 'ppp': await this.renderPpp(); break;
       }
     } catch (err) {
       content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
@@ -6783,6 +6787,294 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     });
 
     document.getElementById('modal-overlay').classList.add('active');
+  },
+
+  async renderPpp() {
+    const content = document.getElementById('page-content');
+    const routers = await api.getRouters();
+    const connectedRouters = routers.filter((r) => r.connected);
+    if (connectedRouters.length === 0) {
+      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3><p>Connect a router first to view PPP connections.</p></div>';
+      return;
+    }
+    if (!this.selectedRouterId || !connectedRouters.find((r) => r.id === this.selectedRouterId)) {
+      this.selectedRouterId = connectedRouters[0].id;
+    }
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>PPP / PPPoE</h3>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+            <select id="ppp-router-select" class="btn btn-outline">
+              ${connectedRouters.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="App.showAddCustomerModal()">Add Customer</button>
+          </div>
+        </div>
+        <div class="tabs">
+          <button class="tab ${this.pppTab === 'active' ? 'active' : ''}" data-tab="active">Active Connections</button>
+          <button class="tab ${this.pppTab === 'customers' ? 'active' : ''}" data-tab="customers">Customers</button>
+        </div>
+        <div id="ppp-tab-content">Loading...</div>
+      </div>
+    `;
+    document.getElementById('ppp-router-select').addEventListener('change', (e) => {
+      this.selectedRouterId = parseInt(e.target.value);
+      this.loadPppTab();
+    });
+    document.querySelectorAll('.tabs .tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.pppTab = tab.dataset.tab;
+        document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadPppTab();
+      });
+    });
+    this.loadPppTab();
+  },
+
+  async loadPppTab() {
+    const container = document.getElementById('ppp-tab-content');
+    if (!container) return;
+    this.clearPppPollers();
+    container.innerHTML = 'Loading...';
+    try {
+      if (this.pppTab === 'customers') await this.loadPppCustomers(container);
+      else await this.loadPppActiveConnections(container);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  clearPppPollers() {
+    if (this._pppActiveInterval) {
+      clearInterval(this._pppActiveInterval);
+      this._pppActiveInterval = null;
+    }
+  },
+
+  async loadPppActiveConnections(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    this.clearPppPollers();
+    try {
+      const connections = await api.getPppActive(this.selectedRouterId);
+      this.renderPppActiveTable(container, connections || []);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  renderPppActiveTable(container, connections) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    if (!connections || connections.length === 0) {
+      container.innerHTML = '<div class="empty-state"><p>No active PPPoE connections.</p></div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>User</th><th>Service</th><th>Caller</th><th>Address</th><th>Uptime</th><th>Bytes In</th><th>Bytes Out</th><th>Status</th></tr></thead>
+          <tbody id="ppp-active-tbody">${this.renderPppActiveRows(connections)}</tbody>
+        </table>
+      </div>
+    `;
+    this._pppActiveInterval = setInterval(async () => {
+      try {
+        const conns = await api.getPppActive(this.selectedRouterId);
+        const tbody = document.getElementById('ppp-active-tbody');
+        if (!tbody) { this.clearPppPollers(); return; }
+        tbody.innerHTML = this.renderPppActiveRows(conns || []);
+      } catch (e) { /* ignore refresh errors */ }
+    }, 10000);
+  },
+
+  renderPppActiveRows(connections) {
+    return connections.map((c) => `
+      <tr>
+        <td>${this.escapeHtml(c.name || '-')}</td>
+        <td>${this.escapeHtml(c.service || '-')}</td>
+        <td>${this.escapeHtml(c.caller || '-')}</td>
+        <td>${this.escapeHtml(c.address || '-')}</td>
+        <td>${this.escapeHtml(c.uptime || '-')}</td>
+        <td>${this.formatBytes(c['bytes-in'] || 0)}</td>
+        <td>${this.formatBytes(c['bytes-out'] || 0)}</td>
+        <td><span class="badge badge-online">Active</span></td>
+      </tr>
+    `).join('');
+  },
+
+  async loadPppCustomers(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    this.clearPppPollers();
+    try {
+      const customers = await api.getPppCustomers(this.selectedRouterId);
+      this.renderPppCustomersTable(container, customers || []);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  renderPppCustomersTable(container, customers) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    if (!customers || customers.length === 0) {
+      container.innerHTML = '<div class="empty-state"><p>No PPP customers found.</p><button class="btn btn-primary btn-sm" onclick="App.showAddCustomerModal()">Add Customer</button></div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Name</th><th>Username</th><th>Profile</th><th>Service</th><th>Uptime Limit</th><th>Quota In/Out</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="ppp-customers-tbody">
+            ${customers.map((c) => {
+              const quota = (c.bytes_in_quota || 0) || (c.bytes_out_quota || 0) ? `${c.bytes_in_quota || 0}/${c.bytes_out_quota || 0}` : '-';
+              return `
+              <tr>
+                <td>${this.escapeHtml(c.name || '-')}</td>
+                <td>${this.escapeHtml(c.username || '-')}</td>
+                <td>${this.escapeHtml(c.profile || '-')}</td>
+                <td>${this.escapeHtml(c.service || '-')}</td>
+                <td>${this.escapeHtml(c.uptime_limit || '-')}</td>
+                <td>${this.escapeHtml(quota)}</td>
+                <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditCustomerModal(${c.id})">Edit</button>
+                  <button class="btn btn-sm ${c.disabled ? 'btn-success' : 'btn-danger'}" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteCustomer(${c.id})">Delete</button>
+                </td>
+              </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async loadPppCustomers(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    this.clearPppPollers();
+    try {
+      const customers = await api.getPppCustomers(this.selectedRouterId);
+      this.renderPppCustomersTable(container, customers || []);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  renderPppCustomersTable(container, customers) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    if (!customers || customers.length === 0) {
+      container.innerHTML = '<div class="empty-state"><p>No PPP customers found.</p><button class="btn btn-primary btn-sm" onclick="App.showAddCustomerModal()">Add Customer</button></div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Name</th><th>Username</th><th>Profile</th><th>Service</th><th>Uptime Limit</th><th>Quota In/Out</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="ppp-customers-tbody">
+            ${customers.map((c) => {
+              const quota = (c.bytes_in_quota || 0) || (c.bytes_out_quota || 0) ? `${c.bytes_in_quota || 0}/${c.bytes_out_quota || 0}` : '-';
+              return `
+              <tr>
+                <td>${this.escapeHtml(c.name || '-')}</td>
+                <td>${this.escapeHtml(c.username || '-')}</td>
+                <td>${this.escapeHtml(c.profile || '-')}</td>
+                <td>${this.escapeHtml(c.service || '-')}</td>
+                <td>${this.escapeHtml(c.uptime_limit || '-')}</td>
+                <td>${this.escapeHtml(quota)}</td>
+                <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
+                <td>
+                  <button class="btn btn-sm btn-outline" onclick="App.showEditCustomerModal(${c.id})">Edit</button>
+                  <button class="btn btn-sm ${c.disabled ? 'btn-success' : 'btn-danger'}" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteCustomer(${c.id})">Delete</button>
+                </td>
+              </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  async showAddCustomerModal(customerId = null) {
+    const isEdit = customerId != null;
+    let customer = { name: '', username: '', password: '', profile: 'default', service: 'pppoe', local_address: '', remote_address: '', uptime_limit: '', bytes_in_quota: '', bytes_out_quota: '', comment: '' };
+    if (isEdit) {
+      const customers = await api.getPppCustomers(this.selectedRouterId);
+      customer = (customers || []).find((c) => c.id === customerId) || customer;
+    }
+    this.openModal(isEdit ? 'Edit PPP Customer' : 'Add PPP Customer', `
+      <form id="ppp-customer-form">
+        <div class="form-group"><label>Name</label><input type="text" name="name" required value="${this.escapeHtml(customer.name)}"></div>
+        <div class="form-group"><label>Username</label><input type="text" name="username" required value="${this.escapeHtml(customer.username)}"></div>
+        <div class="form-group"><label>Password</label><input type="password" name="password" ${isEdit ? '' : 'required'} value="${this.escapeHtml(customer.password)}"></div>
+        <div class="form-group"><label>Profile</label><input type="text" name="profile" value="${this.escapeHtml(customer.profile)}"></div>
+        <div class="form-group"><label>Service</label><input type="text" name="service" value="${this.escapeHtml(customer.service)}"></div>
+        <div class="form-group"><label>Local Address (optional)</label><input type="text" name="localAddress" value="${this.escapeHtml(customer.local_address || '')}"></div>
+        <div class="form-group"><label>Remote Address (optional)</label><input type="text" name="remoteAddress" value="${this.escapeHtml(customer.remote_address || '')}"></div>
+        <div class="form-group"><label>Uptime Limit (e.g. 00:00:00)</label><input type="text" name="uptimeLimit" value="${this.escapeHtml(customer.uptime_limit || '')}"></div>
+        <div class="form-group"><label>Bytes In Quota</label><input type="number" name="bytesInQuota" value="${this.escapeHtml(customer.bytes_in_quota || '')}"></div>
+        <div class="form-group"><label>Bytes Out Quota</label><input type="number" name="bytesOutQuota" value="${this.escapeHtml(customer.bytes_out_quota || '')}"></div>
+        <div class="form-group"><label>Comment (optional)</label><input type="text" name="comment" value="${this.escapeHtml(customer.comment || '')}"></div>
+      </form>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: isEdit ? 'Save Changes' : 'Add Customer', class: 'btn btn-primary', action: () => isEdit ? this.submitEditCustomer(customerId) : this.submitAddCustomer() },
+    ]);
+  },
+
+  async submitAddCustomer() {
+    const form = document.getElementById('ppp-customer-form');
+    try {
+      await api.createPppCustomer(this.selectedRouterId, {
+        name: form.name.value, username: form.username.value, password: form.password.value,
+        profile: form.profile.value || 'default', service: form.service.value || 'pppoe',
+        localAddress: form.localAddress.value || null, remoteAddress: form.remoteAddress.value || null,
+        uptimeLimit: form.uptimeLimit.value || null,
+        bytesInQuota: form.bytesInQuota.value ? parseInt(form.bytesInQuota.value) : null,
+        bytesOutQuota: form.bytesOutQuota.value ? parseInt(form.bytesOutQuota.value) : null,
+        comment: form.comment.value || null,
+      });
+      this.closeModal();
+      this.toast('PPP customer created', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async submitEditCustomer(customerId) {
+    const form = document.getElementById('ppp-customer-form');
+    try {
+      await api.updatePppCustomer(this.selectedRouterId, customerId, {
+        name: form.name.value || null, username: form.username.value || null, password: form.password.value || null,
+        profile: form.profile.value || null, service: form.service.value || null,
+        localAddress: form.localAddress.value || null, remoteAddress: form.remoteAddress.value || null,
+        uptimeLimit: form.uptimeLimit.value || null,
+        bytesInQuota: form.bytesInQuota.value ? parseInt(form.bytesInQuota.value) : null,
+        bytesOutQuota: form.bytesOutQuota.value ? parseInt(form.bytesOutQuota.value) : null,
+        comment: form.comment.value || null,
+      });
+      this.closeModal();
+      this.toast('PPP customer updated', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async deleteCustomer(customerId) {
+    if (!confirm('Delete this PPP customer?')) return;
+    try {
+      await api.deletePppCustomer(this.selectedRouterId, customerId);
+      this.toast('PPP customer deleted', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async toggleCustomer(customerId, disabled) {
+    try {
+      await api[disabled ? 'disablePppCustomer' : 'enablePppCustomer'](this.selectedRouterId, customerId);
+      this.toast(disabled ? 'Customer disabled' : 'Customer enabled', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
   },
 
   _nodemcuRefreshInterval: null,

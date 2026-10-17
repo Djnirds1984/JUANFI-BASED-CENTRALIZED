@@ -58,6 +58,26 @@ export function initializeDatabase(): void {
       FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS ppp_customers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      username TEXT NOT NULL,
+      password TEXT NOT NULL,
+      profile TEXT NOT NULL DEFAULT 'default',
+      service TEXT NOT NULL DEFAULT 'pppoe',
+      local_address TEXT,
+      remote_address TEXT,
+      uptime_limit TEXT DEFAULT '00:00:00',
+      bytes_in_quota INTEGER DEFAULT 0,
+      bytes_out_quota INTEGER DEFAULT 0,
+      comment TEXT,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS vouchers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       router_id INTEGER NOT NULL,

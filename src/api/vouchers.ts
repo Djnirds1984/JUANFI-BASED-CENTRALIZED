@@ -4,6 +4,7 @@ import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { mikrotikTimeToSeconds, initSession, bindSession } from '../services/deviceSessions';
+import { purgeLocalDeviceUsers } from '../services/activeDevices';
 
 const router = Router();
 
@@ -330,6 +331,23 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       // FULL RADIUS: the router authenticates AND accounts via RADIUS, so we
       // never create/update a local user - extension is done with the CoA above.
       console.log(`coin-auth: pure RADIUS - no local user written for ${macNoColon} (RADIUS auth + CoA only)`);
+
+      // AUTO-PURGE (no manual step): on a SUCCESSFUL coin insert in FULL RADIUS
+      // mode (radius + not hybrid), remove any leftover LOCAL device users
+      // (MAC/rate-named) so RADIUS is the only auth path. MikroTik checks the
+      // local user list BEFORE RADIUS, so a stale local user would shadow RADIUS
+      // and block this top-up once its limit runs out. Best-effort - never fail
+      // the payment; skipped when the router is offline (background sync covers it).
+      if (!hybridLocalUsers && mikroTikService.isConnected(routerId)) {
+        try {
+          const purged = await purgeLocalDeviceUsers(routerId);
+          if (purged > 0) {
+            console.log(`coin-auth: auto-purged ${purged} leftover local device user(s) on router ${routerId} (full RADIUS)`);
+          }
+        } catch (purgeErr: any) {
+          console.error(`coin-auth: auto-purge of local device users failed on router ${routerId}:`, purgeErr.message);
+        }
+      }
     } else {
       console.log(
         `coin-auth: router push SKIPPED for ${macNoColon} (router ${routerId} not connected, ` +

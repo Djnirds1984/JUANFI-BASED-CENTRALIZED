@@ -298,13 +298,39 @@ let syncInFlight = false;
  */
 const walledGardenChecked = new Set<number>();
 
+const radiusOnlyChecked = new Set<number>();
+
 /*
  * FULL RADIUS: on a radius-mode router, leftover LOCAL hotspot users (named like
- * a MAC) are checked by MikroTik BEFORE RADIUS, so once their limit runs out
- * they block the device even after a top-up. Remove them once per router so
+ * a MAC or a rate/voucher) are checked by MikroTik BEFORE RADIUS, so once their
+ * limit runs out they block the device even after a top-up. Remove them so
  * RADIUS is the only authentication path.
+ *
+ * `purgeLocalDeviceUsers` does the actual removal and applies NO auth-mode
+ * guard - the caller decides when a purge is appropriate. It is shared by the
+ * background sync (ensureRadiusOnlyLocalUsers, once per router per process) and
+ * the coin-insert flow (every successful coin, full RADIUS only).
  */
-const radiusOnlyChecked = new Set<number>();
+export async function purgeLocalDeviceUsers(routerId: number): Promise<number> {
+  const users = await mikroTikService.getHotspotUsers(routerId);
+  // A device user is either MAC-named OR named like a rate/voucher (e.g.
+  // `240m,10,1,TEST1`). Operator accounts like `admin` are left alone.
+  const isDeviceUserName = (name: any) => {
+    const s = String(name || '').trim();
+    if (!s) return false;
+    const isMacLike = /^[0-9a-fA-F]{2}([:-]?[0-9a-fA-F]{2}){5}$/.test(s) || /^[0-9a-fA-F]{12}$/.test(s);
+    return isMacLike || s.includes(',');
+  };
+  const deviceUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isDeviceUserName(u.name));
+  let removed = 0;
+  for (const u of deviceUsers) {
+    try { await mikroTikService.removeHotspotUser(routerId, u['.id']); removed++; } catch { /* keep going */ }
+  }
+  if (removed > 0) {
+    console.log(`[RADIUS] full-RADIUS: removed ${removed} local device user(s) on router ${routerId} (RADIUS is now the only auth path)`);
+  }
+  return removed;
+}
 
 export async function ensureRadiusOnlyLocalUsers(routerId: number): Promise<void> {
   if (radiusOnlyChecked.has(routerId)) return;
@@ -317,23 +343,7 @@ export async function ensureRadiusOnlyLocalUsers(routerId: number): Promise<void
 
   radiusOnlyChecked.add(routerId);
   try {
-    const users = await mikroTikService.getHotspotUsers(routerId);
-    // A device user is either MAC-named OR named like a rate/voucher (e.g.
-    // `240m,10,1,TEST1`). Operator accounts like `admin` are left alone.
-    const isDeviceUserName = (name: any) => {
-      const s = String(name || '').trim();
-      if (!s) return false;
-      const isMacLike = /^[0-9a-fA-F]{2}([:-]?[0-9a-fA-F]{2}){5}$/.test(s) || /^[0-9a-fA-F]{12}$/.test(s);
-      return isMacLike || s.includes(',');
-    };
-    const macUsers = (Array.isArray(users) ? users : []).filter((u: any) => u['.id'] && isDeviceUserName(u.name));
-    let removed = 0;
-    for (const u of macUsers) {
-      try { await mikroTikService.removeHotspotUser(routerId, u['.id']); removed++; } catch { /* keep going */ }
-    }
-    if (removed > 0) {
-      console.log(`[RADIUS] full-RADIUS: removed ${removed} local device user(s) on router ${routerId} (RADIUS is now the only auth path)`);
-    }
+    await purgeLocalDeviceUsers(routerId);
   } catch (err) {
     radiusOnlyChecked.delete(routerId);
     console.error(`[RADIUS] local-user cleanup failed for router ${routerId}:`, (err as Error).message);

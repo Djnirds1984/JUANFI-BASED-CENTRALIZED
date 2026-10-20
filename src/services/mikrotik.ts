@@ -1133,22 +1133,31 @@ class MikroTikService {
 
       // Step 4: Create DHCP network (gateway + DNS for clients)
       try {
-        const gateway = config.address.replace(/\/\d+/, '').replace(/\.\d+$/, '.1');
+        // config.address is like "10.0.0.1/24" — need network address "10.0.0.0/24"
+        const ipPart = config.address.replace(/\/\d+/, '');
+        const cidr = config.address.match(/\/\d+/)?.[0] || '/24';
+        const octets = ipPart.split('.').map(Number);
+        const maskBits = parseInt(cidr.slice(1), 10);
+        const mask = maskBits >= 32 ? 0xFFFFFFFF : (~0 << (32 - maskBits)) >>> 0;
+        const ipNum = ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+        const networkNum = (ipNum & mask) >>> 0;
+        const networkAddr = `${(networkNum >> 24) & 0xFF}.${(networkNum >> 16) & 0xFF}.${(networkNum >> 8) & 0xFF}.${networkNum & 0xFF}${cidr}`;
+        const gateway = ipPart.replace(/\.\d+$/, '.1');
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/dhcp-server/network/add', {
-            address: config.address,
+            address: networkAddr,
             gateway: gateway,
             'dns-server': config.dnsServers,
           });
         } else {
           const client = this.getClient(routerId);
           await client.write('/ip/dhcp-server/network/add', [
-            `=address=${config.address}`,
+            `=address=${networkAddr}`,
             `=gateway=${gateway}`,
             `=dns-server=${config.dnsServers}`,
           ]);
         }
-        results.dhcpNetwork = config.address;
+        results.dhcpNetwork = networkAddr;
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
         results.dhcpNetwork = `${config.address} (already exists)`;

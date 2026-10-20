@@ -1104,7 +1104,57 @@ class MikroTikService {
         results.pool = `${poolName} (already exists)`;
       }
 
-      // Step 3: Use existing hotspot profile or create new one
+      // Step 3: Create DHCP server on the interface
+      const dhcpName = `dhcp-${config.interface}`;
+      try {
+        if (isRestApi) {
+          await this.restApiCall(routerConfig!, 'POST', '/ip/dhcp-server/add', {
+            name: dhcpName,
+            interface: config.interface,
+            'address-pool': poolName,
+            'lease-time': '10m',
+            'authoritative': 'yes',
+          });
+        } else {
+          const client = this.getClient(routerId);
+          await client.write('/ip/dhcp-server/add', [
+            `=name=${dhcpName}`,
+            `=interface=${config.interface}`,
+            `=address-pool=${poolName}`,
+            `=lease-time=10m`,
+            `=authoritative=yes`,
+          ]);
+        }
+        results.dhcp = dhcpName;
+      } catch (err: any) {
+        if (!skipIfExists(err)) throw err;
+        results.dhcp = `${dhcpName} (already exists)`;
+      }
+
+      // Step 4: Create DHCP network (gateway + DNS for clients)
+      try {
+        const gateway = config.address.replace(/\/\d+/, '').replace(/\.\d+$/, '.1');
+        if (isRestApi) {
+          await this.restApiCall(routerConfig!, 'POST', '/ip/dhcp-server/network/add', {
+            address: config.address,
+            gateway: gateway,
+            'dns-server': config.dnsServers,
+          });
+        } else {
+          const client = this.getClient(routerId);
+          await client.write('/ip/dhcp-server/network/add', [
+            `=address=${config.address}`,
+            `=gateway=${gateway}`,
+            `=dns-server=${config.dnsServers}`,
+          ]);
+        }
+        results.dhcpNetwork = config.address;
+      } catch (err: any) {
+        if (!skipIfExists(err)) throw err;
+        results.dhcpNetwork = `${config.address} (already exists)`;
+      }
+
+      // Step 5: Use existing hotspot profile or create new one
       let profileName = `hsprof-${config.interface}`;
       try {
         // Try to fetch existing profiles
@@ -1145,7 +1195,7 @@ class MikroTikService {
         results.profile = `${profileName} (already exists)`;
       }
 
-      // Step 4: Create hotspot server
+      // Step 6: Create hotspot server
       const serverName = `hotspot-${config.interface}`;
       try {
         if (isRestApi) {
@@ -1176,7 +1226,7 @@ class MikroTikService {
         results.server = `${serverName} (already exists)`;
       }
 
-      // Step 6: Create user profile
+      // Step 7: Create user profile
       const userProfileName = `hsuser-${config.interface}`;
       try {
         if (isRestApi) {
@@ -1198,7 +1248,7 @@ class MikroTikService {
         results.userProfile = `${userProfileName} (already exists)`;
       }
 
-      // Step 7: Create admin user
+      // Step 8: Create admin user
       try {
         if (isRestApi) {
           // Verify profile exists by fetching it

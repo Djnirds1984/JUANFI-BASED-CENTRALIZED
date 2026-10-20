@@ -111,7 +111,7 @@ Copy-Item mikrotik-controller-amd64.tar -Destination \\<router-ip>\share\
 /container/envs/add name=mikrotik-controller-envs key=DB_PATH value=/data/mikrotik.db
 /container/envs/add name=mikrotik-controller-envs key=NODE_ENV value=production
 /container/envs/add name=mikrotik-controller-envs key=ADMIN_USERNAME value=admin
-/container/envs/add name=mikrotik-controller-envs key=ADMIN_PASSWORD value=your-secure-password
+/container/envs/add name=mikrotik-controller-envs key=ADMIN_PASSWORD value=admin123
 ```
 
 ### Step 6: Start Container

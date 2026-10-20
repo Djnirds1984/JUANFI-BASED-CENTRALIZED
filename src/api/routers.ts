@@ -93,7 +93,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode, radius_shared_secret } = req.body;
+    const { name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode, radius_shared_secret, panel_url } = req.body;
 
     if (!name || !host || !username || !password) {
       res.status(400).json({ error: 'Name, host, username, and password are required' });
@@ -105,9 +105,9 @@ router.post('/', async (req: Request, res: Response) => {
     const pMode = portal_mode === 'stub' ? 'stub' : 'mikrotik';
     const result = db
       .prepare(
-        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO routers (name, host, port, username, password, description, use_rest_api, auth_mode, portal_mode, panel_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0, mode, pMode);
+      .run(name, host, port || 8728, username, password, description || null, use_rest_api ? 1 : 0, mode, pMode, panel_url || '');
 
     const routerId = result.lastInsertRowid as number;
 
@@ -150,6 +150,7 @@ router.post('/', async (req: Request, res: Response) => {
       use_rest_api: use_rest_api ? 1 : 0,
       auth_mode: mode,
       portal_mode: pMode,
+      panel_url: panel_url || '',
       connected,
     });
   } catch (error) {
@@ -160,7 +161,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', async (req: Request, res: Response) => {
   try {
-    const { name, host, port, username, password, description, is_active, use_rest_api, auth_mode, portal_mode, radius_shared_secret, radius_local_users } = req.body;
+    const { name, host, port, username, password, description, is_active, use_rest_api, auth_mode, portal_mode, radius_shared_secret, radius_local_users, panel_url } = req.body;
     const db = getDb();
 
     const existing = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id) as any;
@@ -172,9 +173,10 @@ router.put('/:id', async (req: Request, res: Response) => {
     const newMode = auth_mode !== undefined ? (auth_mode === 'radius' ? 'radius' : 'api') : existing.auth_mode;
     const newPortalMode = portal_mode !== undefined ? (portal_mode === 'stub' ? 'stub' : 'mikrotik') : existing.portal_mode;
     const newLocalUsers = radius_local_users !== undefined ? (Number(radius_local_users) ? 1 : 0) : (existing.radius_local_users ?? 0);
+    const newPanelUrl = panel_url !== undefined ? (panel_url || '') : existing.panel_url;
 
     db.prepare(
-      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, portal_mode = ?, radius_local_users = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE routers SET name = ?, host = ?, port = ?, username = ?, password = ?, description = ?, is_active = ?, use_rest_api = ?, auth_mode = ?, portal_mode = ?, radius_local_users = ?, panel_url = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       name || existing.name,
       host || existing.host,
@@ -187,6 +189,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       newMode,
       newPortalMode,
       newLocalUsers,
+      newPanelUrl,
       req.params.id
     );
 

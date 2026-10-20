@@ -5533,6 +5533,24 @@ const App = {
             &#127912; Panel Portal
           </button>
         </div>
+        ${activeTab === 'stub' && routers.length > 0 ? (() => {
+          const selectedRouter = routers.find(r => r.id === this.selectedRouterId);
+          const panelUrl = selectedRouter?.panel_url || '';
+          return `
+            <div style="padding:1rem;background:var(--bg-secondary,#f5f5f5);border-bottom:1px solid var(--border-color,#e0e0e0)">
+              <div style="display:flex;gap:0.5rem;align-items:center;max-width:600px">
+                <label style="font-weight:600;white-space:nowrap">Panel Redirect URL:</label>
+                <input type="text" id="stub-panel-url-input" value="${this.escapeHtml(panelUrl)}"
+                  placeholder="http://10.0.0.252:3000 (leave empty for auto-detect)"
+                  style="flex:1;padding:0.5rem;border:1px solid var(--border-color,#ccc);border-radius:4px;font-size:0.875rem">
+                <button class="btn btn-sm btn-primary" onclick="App.saveStubPanelUrl()">Save</button>
+              </div>
+              <small style="color:var(--text-secondary);font-size:0.75rem;display:block;margin-top:0.25rem">
+                The URL where stubs should redirect to (this panel's address). Update when moving SBC to a different network.
+              </small>
+            </div>
+          `;
+        })() : ''}
         <div class="portal-main-layout">
           <div class="portal-file-list" id="portal-file-list">
             ${Object.entries(categories).map(([cat, files]) => {
@@ -5622,6 +5640,46 @@ const App = {
     this.portalActiveTab = tab;
     this.portalCurrentFile = null;
     this.renderPortal();
+  },
+
+  async saveStubPanelUrl() {
+    const input = document.getElementById('stub-panel-url-input');
+    if (!input) return;
+
+    const panelUrl = input.value.trim();
+    const routerId = this.selectedRouterId;
+
+    if (!routerId) {
+      this.toast('No router selected', 'error');
+      return;
+    }
+
+    try {
+      // Get current router data to preserve other fields
+      const routers = await api.getRouters();
+      const router = routers.find(r => r.id === routerId);
+      if (!router) {
+        this.toast('Router not found', 'error');
+        return;
+      }
+
+      await api.updateRouter(routerId, {
+        name: router.name,
+        host: router.host,
+        port: router.port,
+        username: router.username,
+        password: router.password,
+        description: router.description || '',
+        use_rest_api: router.use_rest_api,
+        auth_mode: router.auth_mode,
+        portal_mode: router.portal_mode,
+        panel_url: panelUrl,
+      });
+
+      this.toast('Panel redirect URL saved — push stubs to apply', 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   _portalFolder() {

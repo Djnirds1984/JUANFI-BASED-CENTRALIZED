@@ -263,9 +263,16 @@ function getFolder(req: Request): string {
 }
 
 function replaceStubPlaceholders(content: string, routerId: number): string {
+  // Per-router panel_url override takes precedence over the global config.
+  // This lets each router point to a different panel IP/URL (useful when the
+  // SBC moves between networks).
+  const db = getDb();
+  const routerRow = db.prepare('SELECT panel_url FROM routers WHERE id = ?').get(routerId) as any;
+  const routerPanelUrl = routerRow?.panel_url?.trim() || '';
+
   // Full base URL including scheme + optional port, so the portal can be served
   // through nginx (PANEL_PUBLIC_URL) instead of the raw node port.
-  const base = config.panelPublicUrl;
+  const base = routerPanelUrl || config.panelPublicUrl;
   const hostOnly = base.replace(/^https?:\/\//, '');
   return content
     .replace(/ROUTER_ID_PLACEHOLDER/g, String(routerId))

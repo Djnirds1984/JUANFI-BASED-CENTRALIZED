@@ -103,6 +103,7 @@ const App = {
     }
     this.clearHotspotPollers();
     this.clearPppPollers();
+    this.clearRadiusPollers();
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -1354,7 +1355,8 @@ const App = {
       user: conn.user || '',
       address: conn.address || '',
       'mac-address': conn.mac || conn['mac-address'] || '',
-      'host-name': conn.hostname || conn['host-name'] || '-',
+      // Operator override first, then the router-reported name (mirrors the backend).
+      'host-name': conn['custom-hostname'] || conn.hostname || conn['host-name'] || '-',
       server: conn.server || '',
       uptime: conn.uptime || '',
       'is-active': conn['is-active'] === true,
@@ -1619,12 +1621,19 @@ const App = {
   async editActiveDevice(deviceId, btn) {
     if (!deviceId) return;
 
-    // Read the current name from the row (Hostname is the 3rd column) so we
-    // never have to inject it into HTML.
+    // Read the current name from the row so we never have to inject it into
+    // HTML. The RADIUS table tags the hostname with data-field="hostname"
+    // (data-hostname carries the real value); the hotspot table keeps the
+    // name in the 3rd column.
     let current = '';
     const row = btn && btn.closest ? btn.closest('tr') : null;
-    if (row && row.children[2]) {
-      current = row.children[2].textContent.trim();
+    if (row) {
+      const nameEl = row.querySelector('[data-field="hostname"]');
+      if (nameEl) {
+        current = nameEl.dataset.hostname !== undefined ? nameEl.dataset.hostname : nameEl.textContent.trim();
+      } else if (row.children[2]) {
+        current = row.children[2].textContent.trim();
+      }
       if (current === '-') current = '';
     }
 
@@ -5042,9 +5051,27 @@ const App = {
     `;
   },
 
+  // Inline SVG icon set for the RADIUS Active Devices dashboard.
+  radiusIcons: {
+    wifi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>',
+    wifiOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>',
+    monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    arrowDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>',
+    arrowUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    userPlus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+    power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  },
+
   async loadRadiusActiveSessions(container) {
     if (!container) container = document.getElementById('radius-tab-content');
     this.clearRadiusPollers();
+    this._radiusDevices = [];
+    this._radiusDeviceSearch = '';
+    this._radiusDeviceFilter = 'all';
 
     try {
       const [devices, stats] = await Promise.all([
@@ -5052,111 +5079,335 @@ const App = {
         api.getRadiusSessionStats(this.selectedRouterId),
       ]);
 
-      const mappedDevices = this.mapActiveDevices(devices);
+      this._radiusDevices = this.mapActiveDevices(devices);
+      const icons = this.radiusIcons;
 
-      const fmtBytes = (bytes) => {
-        if (!bytes || bytes === 0) return '0 B';
-        if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
-        if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
-        if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-        return `${bytes} B`;
-      };
-
-      const statsHtml = `
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem">
-          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-            <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">${stats.activeSessions}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Active Sessions</div>
+      container.innerHTML = `
+        ${this.renderRadiusKpiCards(this._radiusDevices, stats)}
+        <div class="radius-toolbar">
+          <div class="radius-search">
+            ${icons.search}
+            <input type="text" id="radius-device-search" class="form-control" placeholder="Search MAC, IP, hostname or user&hellip;" autocomplete="off">
           </div>
-          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-            <div style="font-size:1.5rem;font-weight:700">${stats.todaySessions}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Today's Sessions</div>
+          <div class="radius-filters" id="radius-device-filters">
+            <button class="radius-filter-chip active" data-filter="all">All <span class="radius-filter-count" data-radius-count="all">0</span></button>
+            <button class="radius-filter-chip" data-filter="online"><span class="radius-filter-dot"></span>Online <span class="radius-filter-count" data-radius-count="online">0</span></button>
+            <button class="radius-filter-chip" data-filter="offline">Offline <span class="radius-filter-count" data-radius-count="offline">0</span></button>
           </div>
-          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-            <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesIn)}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Download Today</div>
+          <div class="radius-toolbar-actions">
+            <span class="radius-live"><span class="radius-live-dot"></span>Live &middot; 1s</span>
+            <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">${icons.userPlus} Add User</button>
           </div>
-          <div class="stat-card" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center">
-            <div style="font-size:1.5rem;font-weight:700">${fmtBytes(stats.todayBytesOut)}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Upload Today</div>
+        </div>
+        <div class="radius-table-card">
+          <div class="table-wrapper">
+            <table class="radius-devices-table">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th>IP Address</th>
+                  <th>User</th>
+                  <th>Status</th>
+                  <th>Uptime</th>
+                  <th>Time Left</th>
+                  <th>Throughput</th>
+                  <th>Data Usage</th>
+                  <th>Last Seen</th>
+                  <th class="th-actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="radius-active-devices-tbody">
+                ${this.renderRadiusDeviceRows(this.filterRadiusDevices(this._radiusDevices))}
+              </tbody>
+            </table>
           </div>
         </div>
       `;
 
-      const headerHtml = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-          <h4 style="font-size:0.95rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Active Devices (${mappedDevices.length})</h4>
-          <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
-        </div>
-      `;
+      this.updateRadiusFilterCounts(this._radiusDevices);
 
-      container.innerHTML = statsHtml + headerHtml + `
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>MAC Address</th>
-                <th>IP Address</th>
-                <th>Hostname</th>
-                <th>User</th>
-                <th>Server</th>
-                <th>Status</th>
-                <th>Uptime</th>
-                <th>Session Time Left</th>
-                <th>RX Rate</th>
-                <th>TX Rate</th>
-                <th>Bytes In</th>
-                <th>Bytes Out</th>
-                <th>Last Seen</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="radius-active-devices-tbody">
-              ${this.renderActiveDeviceRows(mappedDevices)}
-            </tbody>
-          </table>
-        </div>
-      `;
+      // Row actions are delegated through the tbody so quotes inside
+      // usernames or MACs can never break out of an inline handler.
+      const tbody = document.getElementById('radius-active-devices-tbody');
+      if (tbody) {
+        tbody.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-action]');
+          if (!btn) return;
+          if (btn.dataset.action === 'edit') {
+            this.editActiveDevice(parseInt(btn.dataset.deviceId, 10) || 0, btn);
+          } else if (btn.dataset.action === 'disconnect') {
+            this.disconnectActiveUser(btn.dataset.activeId, btn.dataset.label || 'device');
+          } else if (btn.dataset.action === 'remove') {
+            this.removeStoredActiveDevice(parseInt(btn.dataset.deviceId, 10) || 0, btn.dataset.label || 'device');
+          }
+        });
+      }
 
+      const searchInput = document.getElementById('radius-device-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          this._radiusDeviceSearch = e.target.value.trim().toLowerCase();
+          this.rerenderRadiusDeviceRows();
+        });
+      }
+
+      const filters = document.getElementById('radius-device-filters');
+      if (filters) {
+        filters.addEventListener('click', (e) => {
+          const chip = e.target.closest('.radius-filter-chip');
+          if (!chip) return;
+          this._radiusDeviceFilter = chip.dataset.filter || 'all';
+          filters.querySelectorAll('.radius-filter-chip').forEach((c) => c.classList.toggle('active', c === chip));
+          this.rerenderRadiusDeviceRows();
+        });
+      }
+
+      // Live rows: uptime, countdowns, rates and counters tick every second.
       this._radiusActiveInterval = setInterval(async () => {
         try {
           const freshDevices = this.mapActiveDevices(await api.getActiveDevices(this.selectedRouterId));
+          this._radiusDevices = freshDevices;
           this.refreshRadiusActiveDeviceRows(freshDevices);
+          this.updateRadiusFilterCounts(freshDevices);
+          this.updateRadiusKpiValues(freshDevices, null);
         } catch (err) {
           console.error('Failed to refresh radius active devices:', err);
         }
       }, 1000);
+
+      // Daily aggregates move slowly - a relaxed poll keeps them fresh.
+      this._radiusStatsInterval = setInterval(async () => {
+        try {
+          const freshStats = await api.getRadiusSessionStats(this.selectedRouterId);
+          this.updateRadiusKpiValues(this._radiusDevices, freshStats);
+        } catch (err) {
+          console.error('Failed to refresh radius session stats:', err);
+        }
+      }, 15000);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
+  },
+
+  renderRadiusKpiCards(devices, stats) {
+    const list = devices || [];
+    const online = list.filter((d) => d['is-active'] === true).length;
+    const icons = this.radiusIcons;
+
+    const kpis = [
+      {
+        key: 'online', label: 'Online Now', icon: icons.wifi, accent: 'kpi-success', live: true,
+        value: online,
+        sub: `of ${list.length} known device${list.length === 1 ? '' : 's'}`,
+      },
+      {
+        key: 'devices', label: 'Known Devices', icon: icons.monitor, accent: 'kpi-primary',
+        value: list.length,
+        sub: `${list.length - online} offline`,
+      },
+      {
+        key: 'sessions', label: 'Sessions Today', icon: icons.clock, accent: 'kpi-violet',
+        value: (stats && stats.todaySessions) || 0,
+        sub: 'logins since midnight',
+      },
+      {
+        key: 'down', label: 'Download Today', icon: icons.arrowDown, accent: 'kpi-success',
+        value: this.formatBytes((stats && stats.todayBytesIn) || 0),
+        sub: 'inbound traffic',
+      },
+      {
+        key: 'up', label: 'Upload Today', icon: icons.arrowUp, accent: 'kpi-violet',
+        value: this.formatBytes((stats && stats.todayBytesOut) || 0),
+        sub: 'outbound traffic',
+      },
+    ];
+
+    return `<div class="stats-grid">${kpis.map((k) => `
+      <div class="stat-card radius-kpi" data-radius-kpi="${k.key}">
+        <span class="radius-kpi-icon ${k.accent}${k.live ? ' radius-kpi-live' : ''}">${k.icon}</span>
+        <div class="radius-kpi-body">
+          <span class="stat-label">${k.label}</span>
+          <div class="stat-value">${k.value}</div>
+          <div class="stat-sub">${k.sub}</div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  },
+
+  setRadiusKpi(key, value, sub) {
+    const card = document.querySelector(`[data-radius-kpi="${key}"]`);
+    if (!card) return;
+    const valueEl = card.querySelector('.stat-value');
+    if (valueEl) valueEl.textContent = value;
+    if (sub !== undefined) {
+      const subEl = card.querySelector('.stat-sub');
+      if (subEl) subEl.textContent = sub;
+    }
+  },
+
+  updateRadiusKpiValues(devices, stats) {
+    const list = devices || [];
+    const online = list.filter((d) => d['is-active'] === true).length;
+    this.setRadiusKpi('online', online, `of ${list.length} known device${list.length === 1 ? '' : 's'}`);
+    this.setRadiusKpi('devices', list.length, `${list.length - online} offline`);
+    if (stats) {
+      this.setRadiusKpi('sessions', stats.todaySessions || 0, 'logins since midnight');
+      this.setRadiusKpi('down', this.formatBytes(stats.todayBytesIn || 0), 'inbound traffic');
+      this.setRadiusKpi('up', this.formatBytes(stats.todayBytesOut || 0), 'outbound traffic');
+    }
+  },
+
+  renderRadiusDeviceRows(devices) {
+    const list = devices || [];
+    if (list.length === 0) {
+      return `
+        <tr class="radius-no-devices">
+          <td colspan="10">
+            <div class="radius-empty-state">
+              <span class="radius-empty-icon">${this.radiusIcons.wifiOff}</span>
+              <h4>${this._radiusDeviceSearch ? 'No matching devices' : 'No devices yet'}</h4>
+              <p>${this._radiusDeviceSearch
+                ? 'No devices match your search. Try a different MAC, IP, hostname or username.'
+                : 'Devices will appear here as soon as they connect to this router.'}</p>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    // escapeHtml leaves quotes alone - make values safe for double-quoted
+    // data-* attributes before they end up in markup.
+    const escAttr = (v) => this.escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const icons = this.radiusIcons;
+
+    return list.map((d) => {
+      const isActive = d['is-active'] === true;
+      const mac = d['mac-address'] || '';
+      const hostname = (d['host-name'] && d['host-name'] !== '-') ? d['host-name'] : '';
+      const displayName = hostname || mac || 'Unknown device';
+      const initials = this.radiusDeviceInitials(hostname || mac || d.user || '?');
+      const hue = this.radiusDeviceHue(mac || d.address || displayName);
+      const deviceId = parseInt(d.id, 10) || 0;
+
+      const totalSeconds = this.parseTimeToSeconds(d['session-time-left'] || '');
+      const rxRate = d['rx-rate'] || '0 bps';
+      const txRate = d['tx-rate'] || '0 bps';
+      const bytesIn = parseInt(d['bytes-in'] || '0', 10) || 0;
+      const bytesOut = parseInt(d['bytes-out'] || '0', 10) || 0;
+      const dataTotal = bytesIn + bytesOut;
+      const inPct = dataTotal ? ((bytesIn / dataTotal) * 100).toFixed(1) : 0;
+      const outPct = dataTotal ? ((bytesOut / dataTotal) * 100).toFixed(1) : 0;
+
+      let countdownClass = '';
+      if (isActive && totalSeconds !== Infinity && totalSeconds > 0) {
+        if (totalSeconds <= 60) countdownClass = 'countdown-critical';
+        else if (totalSeconds <= 300) countdownClass = 'countdown-warning';
+      }
+
+      const sessionCell = isActive
+        ? `
+          <div class="session-countdown ${countdownClass}">
+            <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
+            <div class="countdown-bar">
+              <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
+            </div>
+          </div>`
+        : '<span class="radius-muted">Ended</span>';
+
+      const trafficCell = isActive
+        ? `
+          <div class="traffic-cell">
+            <div class="traffic-row">
+              <span class="traffic-dir traffic-dir-rx">&darr;</span>
+              <span class="traffic-value" data-rate="rx">${this.escapeHtml(rxRate)}</span>
+              <span class="traffic-bar"><span class="traffic-bar-fill rx" data-rate-bar="rx" style="width: ${this.calculateRateBarWidth(rxRate)}%"></span></span>
+            </div>
+            <div class="traffic-row">
+              <span class="traffic-dir traffic-dir-tx">&uarr;</span>
+              <span class="traffic-value" data-rate="tx">${this.escapeHtml(txRate)}</span>
+              <span class="traffic-bar"><span class="traffic-bar-fill tx" data-rate-bar="tx" style="width: ${this.calculateRateBarWidth(txRate)}%"></span></span>
+            </div>
+          </div>`
+        : '<span class="radius-muted">&mdash;</span>';
+
+      const dataCell = `
+        <div class="data-cell">
+          <div class="data-values">
+            <span class="data-value"><span class="data-dir data-dir-rx">&darr;</span><span data-field="bytes-in">${this.formatBytes(bytesIn)}</span></span>
+            <span class="data-value"><span class="data-dir data-dir-tx">&uarr;</span><span data-field="bytes-out">${this.formatBytes(bytesOut)}</span></span>
+          </div>
+          <div class="data-bar">
+            <span class="data-bar-in" style="width: ${inPct}%"></span>
+            <span class="data-bar-out" style="width: ${outPct}%"></span>
+          </div>
+        </div>`;
+
+      const statusCell = isActive
+        ? '<span class="device-status device-status-active">Online</span>'
+        : '<span class="device-status device-status-offline">Offline</span>';
+
+      const editBtn = `<button class="icon-btn" data-action="edit" data-device-id="${deviceId}" title="Edit hostname">${icons.edit}</button>`;
+      const actions = isActive
+        ? `${editBtn}${d['.id'] ? ` <button class="icon-btn icon-btn-danger" data-action="disconnect" data-active-id="${escAttr(d['.id'])}" data-label="${escAttr(d.user || d.address || 'device')}" title="Disconnect device">${icons.power}</button>` : ''}`
+        : `${editBtn} <button class="icon-btn icon-btn-danger" data-action="remove" data-device-id="${deviceId}" data-label="${escAttr(mac || d.address || 'device')}" title="Remove from list">${icons.trash}</button>`;
+
+      return `
+        <tr data-active-id="${escAttr(d.id)}" data-active="${isActive ? '1' : '0'}"${isActive ? '' : ' class="radius-row-offline"'}>
+          <td>
+            <div class="device-cell">
+              <span class="device-avatar" style="background: hsl(${hue}, 62%, 45%)">${this.escapeHtml(initials)}</span>
+              <div class="device-names">
+                <span class="device-name" data-field="hostname" data-hostname="${escAttr(hostname)}">${this.escapeHtml(displayName)}</span>
+                <span class="device-mac">${mac ? this.escapeHtml(mac) : 'MAC unavailable'}</span>
+              </div>
+            </div>
+          </td>
+          <td class="radius-mono">${this.escapeHtml(d.address || '-')}</td>
+          <td>
+            <div class="device-user">
+              <span class="device-user-name">${d.user ? this.escapeHtml(d.user) : '&mdash;'}</span>
+              <span class="device-user-sub">${this.escapeHtml(d.server || d['login-by'] || '')}</span>
+            </div>
+          </td>
+          <td>${statusCell}</td>
+          <td class="radius-mono" data-field="uptime">${this.escapeHtml(d.uptime || '-')}</td>
+          <td>${sessionCell}</td>
+          <td>${trafficCell}</td>
+          <td>${dataCell}</td>
+          <td class="radius-muted" data-field="last-seen" title="${escAttr(d['last-seen'] || '')}">${this.formatTimeAgo(d['last-seen'])}</td>
+          <td class="radius-actions">${actions}</td>
+        </tr>`;
+    }).join('');
   },
 
   refreshRadiusActiveDeviceRows(devices) {
     const tbody = document.getElementById('radius-active-devices-tbody');
     if (!tbody) return;
 
+    const visible = this.filterRadiusDevices(devices);
     const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
     const rowKey = (d) => `${d.id}:${d['is-active'] ? 1 : 0}`;
     const domKey = (r) => `${r.dataset.activeId}:${r.dataset.active}`;
 
-    const freshKeys = devices.map(rowKey).join('|');
-    const liveKeys = rows.map(domKey).join('|');
-
-    if (freshKeys !== liveKeys) {
-      tbody.innerHTML = this.renderActiveDeviceRows(devices);
+    if (visible.map(rowKey).join('|') !== rows.map(domKey).join('|')) {
+      tbody.innerHTML = this.renderRadiusDeviceRows(visible);
       return;
     }
 
     rows.forEach((row, index) => {
-      const device = devices[index];
+      const device = visible[index];
       if (!device) return;
 
       const uptime = row.querySelector('[data-field="uptime"]');
       if (uptime) uptime.textContent = device.uptime || '-';
 
       const lastSeen = row.querySelector('[data-field="last-seen"]');
-      if (lastSeen) lastSeen.textContent = device['last-seen'] || '-';
+      if (lastSeen) {
+        lastSeen.textContent = this.formatTimeAgo(device['last-seen']);
+        if (device['last-seen']) lastSeen.title = device['last-seen'];
+      }
 
+      // Ended sessions keep their stored values - only live ones animate.
       if (device['is-active'] !== true) return;
 
       const totalSeconds = this.parseTimeToSeconds(device['session-time-left'] || '');
@@ -5190,18 +5441,98 @@ const App = {
       const txFill = row.querySelector('[data-rate-bar="tx"]');
       if (txFill) txFill.style.width = `${this.calculateRateBarWidth(txRate)}%`;
 
-      const bytesIn = row.querySelector('[data-field="bytes-in"]');
-      if (bytesIn) bytesIn.textContent = this.formatBytes(parseInt(device['bytes-in'] || '0', 10) || 0);
+      const bytesIn = parseInt(device['bytes-in'] || '0', 10) || 0;
+      const bytesOut = parseInt(device['bytes-out'] || '0', 10) || 0;
+      const dataTotal = bytesIn + bytesOut;
 
-      const bytesOut = row.querySelector('[data-field="bytes-out"]');
-      if (bytesOut) bytesOut.textContent = this.formatBytes(parseInt(device['bytes-out'] || '0', 10) || 0);
+      const bytesInEl = row.querySelector('[data-field="bytes-in"]');
+      if (bytesInEl) bytesInEl.textContent = this.formatBytes(bytesIn);
+      const bytesOutEl = row.querySelector('[data-field="bytes-out"]');
+      if (bytesOutEl) bytesOutEl.textContent = this.formatBytes(bytesOut);
+
+      const dataIn = row.querySelector('.data-bar-in');
+      if (dataIn) dataIn.style.width = `${dataTotal ? ((bytesIn / dataTotal) * 100).toFixed(1) : 0}%`;
+      const dataOut = row.querySelector('.data-bar-out');
+      if (dataOut) dataOut.style.width = `${dataTotal ? ((bytesOut / dataTotal) * 100).toFixed(1) : 0}%`;
     });
+  },
+
+  filterRadiusDevices(devices) {
+    let list = devices || [];
+
+    if (this._radiusDeviceFilter === 'online') {
+      list = list.filter((d) => d['is-active'] === true);
+    } else if (this._radiusDeviceFilter === 'offline') {
+      list = list.filter((d) => d['is-active'] !== true);
+    }
+
+    const q = (this._radiusDeviceSearch || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter((d) =>
+        [d['mac-address'], d.address, d['host-name'], d.user, d.server]
+          .some((v) => String(v || '').toLowerCase().includes(q))
+      );
+    }
+
+    return list;
+  },
+
+  rerenderRadiusDeviceRows() {
+    const tbody = document.getElementById('radius-active-devices-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = this.renderRadiusDeviceRows(this.filterRadiusDevices(this._radiusDevices || []));
+  },
+
+  updateRadiusFilterCounts(devices) {
+    const list = devices || [];
+    const online = list.filter((d) => d['is-active'] === true).length;
+    const counts = { all: list.length, online, offline: list.length - online };
+
+    document.querySelectorAll('[data-radius-count]').forEach((el) => {
+      if (counts[el.dataset.radiusCount] !== undefined) el.textContent = counts[el.dataset.radiusCount];
+    });
+  },
+
+  // Deterministic per-device identity helpers for the avatars.
+  radiusDeviceInitials(seed) {
+    const chars = String(seed || '').replace(/[^a-z0-9]/gi, '');
+    return (chars.slice(0, 2) || '?').toUpperCase();
+  },
+
+  radiusDeviceHue(seed) {
+    const str = String(seed || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) % 360;
+    }
+    return hash;
+  },
+
+  formatTimeAgo(stamp) {
+    if (!stamp) return '-';
+    const ts = new Date(String(stamp).replace(' ', 'T')).getTime();
+    if (isNaN(ts)) return String(stamp);
+
+    const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (secs < 10) return 'just now';
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(ts).toLocaleDateString();
   },
 
   clearRadiusPollers() {
     if (this._radiusActiveInterval) {
       clearInterval(this._radiusActiveInterval);
       this._radiusActiveInterval = null;
+    }
+    if (this._radiusStatsInterval) {
+      clearInterval(this._radiusStatsInterval);
+      this._radiusStatsInterval = null;
     }
     if (this._radiusLogsInterval) {
       clearInterval(this._radiusLogsInterval);

@@ -29,7 +29,7 @@ This guide covers deploying the MikroTik Controller app as a container on a Mikr
 
 ```powershell
 # Run in PowerShell from project root
-.\build-routeros.ps1
+
 ```
 
 This will:

@@ -1351,6 +1351,9 @@ const App = {
   mapActiveDevices(devices) {
     return (devices || []).map((conn) => ({
       id: conn.id || '',
+      'access-mode': conn['access-mode'] || 'normal',
+      'paid-seconds-left': conn['paid-seconds-left'] ?? null,
+      'custom-hostname': conn['custom-hostname'] || '',
       '.id': conn['.id'] || '',
       user: conn.user || '',
       address: conn.address || '',
@@ -5072,12 +5075,17 @@ const App = {
     this._radiusDevices = [];
     this._radiusDeviceSearch = '';
     this._radiusDeviceFilter = 'all';
+    const routerId = this.selectedRouterId;
+    const viewId = this._radiusDeviceViewId;
+    const isCurrent = () => this._radiusDeviceViewId === viewId && this.selectedRouterId === routerId &&
+      this.currentPage === 'radius' && this.radiusTab === 'active';
 
     try {
       const [devices, stats] = await Promise.all([
-        api.getActiveDevices(this.selectedRouterId),
-        api.getRadiusSessionStats(this.selectedRouterId),
+        api.getActiveDevices(routerId),
+        api.getRadiusSessionStats(routerId),
       ]);
+      if (!isCurrent()) return;
 
       this._radiusDevices = this.mapActiveDevices(devices);
       const icons = this.radiusIcons;
@@ -5093,10 +5101,13 @@ const App = {
             <button class="radius-filter-chip active" data-filter="all">All <span class="radius-filter-count" data-radius-count="all">0</span></button>
             <button class="radius-filter-chip" data-filter="online"><span class="radius-filter-dot"></span>Online <span class="radius-filter-count" data-radius-count="online">0</span></button>
             <button class="radius-filter-chip" data-filter="offline">Offline <span class="radius-filter-count" data-radius-count="offline">0</span></button>
+            <button class="radius-filter-chip" data-filter="blocked">Blocked <span class="radius-filter-count" data-radius-count="blocked">0</span></button>
+            <button class="radius-filter-chip" data-filter="bypassed">Bypassed <span class="radius-filter-count" data-radius-count="bypassed">0</span></button>
           </div>
           <div class="radius-toolbar-actions">
             <span class="radius-live"><span class="radius-live-dot"></span>Live &middot; 1s</span>
-            <button class="btn btn-primary btn-sm" onclick="App.showAddRadiusUserModal()">${icons.userPlus} Add User</button>
+            <button class="btn btn-primary btn-sm" onclick="App.showRadiusDeviceModal()">${icons.userPlus} Add Device</button>
+            <button class="btn btn-outline btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
           </div>
         </div>
         <div class="radius-table-card">
@@ -5133,13 +5144,9 @@ const App = {
         tbody.addEventListener('click', (e) => {
           const btn = e.target.closest('button[data-action]');
           if (!btn) return;
-          if (btn.dataset.action === 'edit') {
-            this.editActiveDevice(parseInt(btn.dataset.deviceId, 10) || 0, btn);
-          } else if (btn.dataset.action === 'disconnect') {
-            this.disconnectActiveUser(btn.dataset.activeId, btn.dataset.label || 'device');
-          } else if (btn.dataset.action === 'remove') {
-            this.removeStoredActiveDevice(parseInt(btn.dataset.deviceId, 10) || 0, btn.dataset.label || 'device');
-          }
+          const row = btn.closest('tr[data-active-id]');
+          const device = this._radiusDevices.find((d) => String(d.id) === row?.dataset.activeId);
+          if (device) this.handleRadiusDeviceAction(btn.dataset.action, device);
         });
       }
 
@@ -5163,23 +5170,30 @@ const App = {
       }
 
       // Live rows: uptime, countdowns, rates and counters tick every second.
+      let polling = false;
       this._radiusActiveInterval = setInterval(async () => {
+        if (polling || !isCurrent() || this._radiusMutationBusy) return;
+        polling = true;
+        const mutationVersion = this._radiusMutationVersion;
         try {
-          const freshDevices = this.mapActiveDevices(await api.getActiveDevices(this.selectedRouterId));
+          const freshDevices = this.mapActiveDevices(await api.getActiveDevices(routerId));
+          if (!isCurrent() || mutationVersion !== this._radiusMutationVersion) return;
           this._radiusDevices = freshDevices;
           this.refreshRadiusActiveDeviceRows(freshDevices);
           this.updateRadiusFilterCounts(freshDevices);
           this.updateRadiusKpiValues(freshDevices, null);
         } catch (err) {
           console.error('Failed to refresh radius active devices:', err);
+        } finally {
+          polling = false;
         }
       }, 1000);
 
       // Daily aggregates move slowly - a relaxed poll keeps them fresh.
       this._radiusStatsInterval = setInterval(async () => {
         try {
-          const freshStats = await api.getRadiusSessionStats(this.selectedRouterId);
-          this.updateRadiusKpiValues(this._radiusDevices, freshStats);
+          const freshStats = await api.getRadiusSessionStats(routerId);
+          if (isCurrent()) this.updateRadiusKpiValues(this._radiusDevices, freshStats);
         } catch (err) {
           console.error('Failed to refresh radius session stats:', err);
         }
@@ -5187,6 +5201,135 @@ const App = {
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
+  },
+
+  showRadiusDeviceModal(device = null) {
+    const routerId = this.selectedRouterId;
+    this.openModal(device ? 'Edit Device Hostname' : 'Add RADIUS Device', `
+      <form id="radius-device-form">
+        ${device ? '' : `<div class="form-group">
+          <label for="radius-device-mac">MAC address</label>
+          <input id="radius-device-mac" name="macAddress" required maxlength="17" placeholder="AA:BB:CC:DD:EE:FF">
+        </div>
+        <div class="form-group">
+          <label for="radius-device-ip">IP address (optional)</label>
+          <input id="radius-device-ip" name="ipAddress" placeholder="192.168.88.10">
+        </div>`}
+        <div class="form-group">
+          <label for="radius-device-hostname">Hostname override</label>
+          <input id="radius-device-hostname" name="hostname" maxlength="253">
+          <small class="radius-muted">Leave blank to use the router-reported hostname.</small>
+        </div>
+        ${device ? '' : '<p class="radius-muted">Creates an offline device record in normal access mode. Use Add Time or Bypass after saving to grant access.</p>'}
+      </form>`, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: device ? 'Save Hostname' : 'Add Device', class: 'btn btn-primary', action: () => save() },
+    ]);
+    const form = document.getElementById('radius-device-form');
+    form.elements.hostname.value = device?.['custom-hostname'] || '';
+    const save = async () => {
+      if (this._radiusMutationBusy || !form.reportValidity()) return;
+      const data = { hostname: form.elements.hostname.value.trim() };
+      if (!device) {
+        data.macAddress = form.elements.macAddress.value.trim();
+        data.ipAddress = form.elements.ipAddress.value.trim();
+      }
+      await this.runRadiusDeviceMutation(routerId, () => device
+        ? api.updateActiveDevice(routerId, device.id, data)
+        : api.createActiveDevice(routerId, data), true);
+    };
+    form.addEventListener('submit', (e) => { e.preventDefault(); save(); });
+  },
+
+  showRadiusDeviceTimeModal(device) {
+    const routerId = this.selectedRouterId;
+    this.openModal('Add Device Time', `
+      <form id="radius-device-time-form">
+        <p id="radius-time-device"></p>
+        <div class="form-group">
+          <label for="radius-device-minutes">Minutes to add</label>
+          <input id="radius-device-minutes" name="minutes" type="number" min="1" max="525600" step="1" value="60" required>
+        </div>
+        <p class="radius-muted">Stacks on the linked account's unexpired time, or starts now if expired. Time also runs while offline. A MAC account is created for new devices. Block/bypass settings are unchanged.</p>
+      </form>`, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Add Time', class: 'btn btn-primary', action: () => save() },
+    ]);
+    document.getElementById('radius-time-device').textContent = device['host-name'] !== '-'
+      ? device['host-name'] : device['mac-address'];
+    const form = document.getElementById('radius-device-time-form');
+    const save = async () => {
+      if (this._radiusMutationBusy || !form.reportValidity()) return;
+      await this.runRadiusDeviceMutation(routerId,
+        () => api.addActiveDeviceTime(routerId, device.id, Number(form.elements.minutes.value)), true);
+    };
+    form.addEventListener('submit', (e) => { e.preventDefault(); save(); });
+  },
+
+  async runRadiusDeviceMutation(routerId, action, closeModal = false) {
+    if (this._radiusMutationBusy) return;
+    this._radiusMutationBusy = true;
+    this._radiusMutationVersion = (this._radiusMutationVersion || 0) + 1;
+    const viewId = this._radiusDeviceViewId;
+    try {
+      const result = await action();
+      if (closeModal) this.closeModal();
+      this.toast(result.message || 'Device updated', 'success');
+      if (result.warning) this.toast(result.warning, 'warning');
+      if (this.currentPage === 'radius' && this.radiusTab === 'active' && this.selectedRouterId === routerId) {
+        const devices = this.mapActiveDevices(await api.getActiveDevices(routerId));
+        if (this._radiusDeviceViewId !== viewId || this.selectedRouterId !== routerId) return;
+        this._radiusDevices = devices;
+        this.rerenderRadiusDeviceRows();
+        this.updateRadiusFilterCounts(devices);
+        this.updateRadiusKpiValues(devices, null);
+      }
+    } catch (err) {
+      this.toast(err.message, 'error');
+    } finally {
+      this._radiusMutationBusy = false;
+    }
+  },
+
+  async handleRadiusDeviceAction(action, device) {
+    if (this._radiusMutationBusy) return;
+    if (action === 'edit') return this.showRadiusDeviceModal(device);
+    if (action === 'time') return this.showRadiusDeviceTimeModal(device);
+    const routerId = this.selectedRouterId;
+    const label = device['host-name'] !== '-' ? device['host-name'] : device['mac-address'];
+    if (action === 'disconnect') {
+      if (confirm(`Disconnect "${label}"?`)) {
+        await this.runRadiusDeviceMutation(routerId, () => api.removeActiveConnection(routerId, device['.id']));
+      }
+    } else if (action === 'remove') {
+      if (confirm(`Delete "${label}" and its managed block/bypass rule? Its current session will be disconnected. Paid accounts/history are retained, and reconnecting devices can appear again. Use Block to prevent access.`)) {
+        await this.runRadiusDeviceMutation(routerId, () => api.deleteActiveDevice(routerId, device.id));
+      }
+    } else if (['blocked', 'bypassed', 'normal'].includes(action)) {
+      const explanation = action === 'blocked' ? 'Block internet access on this router'
+        : action === 'bypassed' ? 'Allow internet without login or paid time on this router'
+        : 'Restore normal login and paid-time requirements on this router';
+      if (confirm(`${explanation} for "${label}"? The current session will be disconnected.`)) {
+        await this.runRadiusDeviceMutation(routerId, () => api.setActiveDeviceAccess(routerId, device.id, action));
+      }
+    }
+  },
+
+  radiusDeviceTimeCell(device) {
+    if (device['access-mode'] === 'bypassed') return '<span class="radius-access-bypassed">Unlimited (bypass)</span>';
+    const paid = device['paid-seconds-left'];
+    const seconds = device['is-active'] ? this.parseTimeToSeconds(device['session-time-left']) : paid;
+    if (seconds === null || seconds === undefined) return '<span class="radius-muted">No paid time</span>';
+    const level = seconds > 0 && seconds <= 60 ? ' countdown-critical'
+      : seconds > 0 && seconds <= 300 ? ' countdown-warning' : '';
+    return `<div class="session-countdown${level}">
+      <div class="countdown-value">${this.formatCountdown(seconds)}</div>
+      <div class="countdown-bar"><div class="countdown-bar-fill" style="width:${seconds === Infinity ? 100 : Math.min(seconds / 36, 100)}%"></div></div>
+    </div>${paid !== null && paid !== undefined ? `<small class="radius-muted">Paid: ${this.formatCountdown(paid)}</small>` : ''}`;
+  },
+
+  radiusDeviceRowKey(d) {
+    return JSON.stringify([d.id, d['is-active'], d['access-mode'], d['host-name'], d['mac-address'], d.address, d.user, d.server, d['login-by'], d['.id']]);
   },
 
   renderRadiusKpiCards(devices, stats) {
@@ -5287,9 +5430,7 @@ const App = {
       const displayName = hostname || mac || 'Unknown device';
       const initials = this.radiusDeviceInitials(hostname || mac || d.user || '?');
       const hue = this.radiusDeviceHue(mac || d.address || displayName);
-      const deviceId = parseInt(d.id, 10) || 0;
-
-      const totalSeconds = this.parseTimeToSeconds(d['session-time-left'] || '');
+      const accessMode = d['access-mode'] || 'normal';
       const rxRate = d['rx-rate'] || '0 bps';
       const txRate = d['tx-rate'] || '0 bps';
       const bytesIn = parseInt(d['bytes-in'] || '0', 10) || 0;
@@ -5298,21 +5439,7 @@ const App = {
       const inPct = dataTotal ? ((bytesIn / dataTotal) * 100).toFixed(1) : 0;
       const outPct = dataTotal ? ((bytesOut / dataTotal) * 100).toFixed(1) : 0;
 
-      let countdownClass = '';
-      if (isActive && totalSeconds !== Infinity && totalSeconds > 0) {
-        if (totalSeconds <= 60) countdownClass = 'countdown-critical';
-        else if (totalSeconds <= 300) countdownClass = 'countdown-warning';
-      }
-
-      const sessionCell = isActive
-        ? `
-          <div class="session-countdown ${countdownClass}">
-            <div class="countdown-value">${this.formatCountdown(totalSeconds)}</div>
-            <div class="countdown-bar">
-              <div class="countdown-bar-fill" style="width: ${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%"></div>
-            </div>
-          </div>`
-        : '<span class="radius-muted">Ended</span>';
+      const sessionCell = this.radiusDeviceTimeCell(d);
 
       const trafficCell = isActive
         ? `
@@ -5342,17 +5469,23 @@ const App = {
           </div>
         </div>`;
 
-      const statusCell = isActive
+      const statusCell = (isActive
         ? '<span class="device-status device-status-active">Online</span>'
-        : '<span class="device-status device-status-offline">Offline</span>';
+        : '<span class="device-status device-status-offline">Offline</span>') +
+        (accessMode === 'blocked' ? '<span class="device-status radius-access-blocked">Blocked</span>'
+          : accessMode === 'bypassed' ? '<span class="device-status radius-access-bypassed">Bypassed</span>' : '');
 
-      const editBtn = `<button class="icon-btn" data-action="edit" data-device-id="${deviceId}" title="Edit hostname">${icons.edit}</button>`;
-      const actions = isActive
-        ? `${editBtn}${d['.id'] ? ` <button class="icon-btn icon-btn-danger" data-action="disconnect" data-active-id="${escAttr(d['.id'])}" data-label="${escAttr(d.user || d.address || 'device')}" title="Disconnect device">${icons.power}</button>` : ''}`
-        : `${editBtn} <button class="icon-btn icon-btn-danger" data-action="remove" data-device-id="${deviceId}" data-label="${escAttr(mac || d.address || 'device')}" title="Remove from list">${icons.trash}</button>`;
+      const actions = `<div class="radius-device-controls">
+        <button class="icon-btn" data-action="edit" title="Edit hostname" aria-label="Edit hostname">${icons.edit}</button>
+        <button class="btn btn-sm btn-outline" data-action="time">Add Time</button>
+        <button class="btn btn-sm btn-outline" data-action="${accessMode === 'blocked' ? 'normal' : 'blocked'}">${accessMode === 'blocked' ? 'Unblock' : 'Block'}</button>
+        <button class="btn btn-sm btn-outline" data-action="${accessMode === 'bypassed' ? 'normal' : 'bypassed'}">${accessMode === 'bypassed' ? 'Normal' : 'Bypass'}</button>
+        ${isActive && d['.id'] ? `<button class="icon-btn icon-btn-danger" data-action="disconnect" title="Disconnect device" aria-label="Disconnect device">${icons.power}</button>` : ''}
+        <button class="icon-btn icon-btn-danger" data-action="remove" title="Delete device" aria-label="Delete device">${icons.trash}</button>
+      </div>`;
 
       return `
-        <tr data-active-id="${escAttr(d.id)}" data-active="${isActive ? '1' : '0'}"${isActive ? '' : ' class="radius-row-offline"'}>
+        <tr data-active-id="${escAttr(d.id)}" data-row-key="${escAttr(this.radiusDeviceRowKey(d))}" data-active="${isActive ? '1' : '0'}"${isActive ? '' : ' class="radius-row-offline"'}>
           <td>
             <div class="device-cell">
               <span class="device-avatar" style="background: hsl(${hue}, 62%, 45%)">${this.escapeHtml(initials)}</span>
@@ -5371,7 +5504,7 @@ const App = {
           </td>
           <td>${statusCell}</td>
           <td class="radius-mono" data-field="uptime">${this.escapeHtml(d.uptime || '-')}</td>
-          <td>${sessionCell}</td>
+          <td data-field="device-time">${sessionCell}</td>
           <td>${trafficCell}</td>
           <td>${dataCell}</td>
           <td class="radius-muted" data-field="last-seen" title="${escAttr(d['last-seen'] || '')}">${this.formatTimeAgo(d['last-seen'])}</td>
@@ -5386,8 +5519,8 @@ const App = {
 
     const visible = this.filterRadiusDevices(devices);
     const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
-    const rowKey = (d) => `${d.id}:${d['is-active'] ? 1 : 0}`;
-    const domKey = (r) => `${r.dataset.activeId}:${r.dataset.active}`;
+    const rowKey = (d) => this.radiusDeviceRowKey(d);
+    const domKey = (r) => r.dataset.rowKey;
 
     if (visible.map(rowKey).join('|') !== rows.map(domKey).join('|')) {
       tbody.innerHTML = this.renderRadiusDeviceRows(visible);
@@ -5406,27 +5539,11 @@ const App = {
         lastSeen.textContent = this.formatTimeAgo(device['last-seen']);
         if (device['last-seen']) lastSeen.title = device['last-seen'];
       }
+      const timeCell = row.querySelector('[data-field="device-time"]');
+      if (timeCell) timeCell.innerHTML = this.radiusDeviceTimeCell(device);
 
       // Ended sessions keep their stored values - only live ones animate.
       if (device['is-active'] !== true) return;
-
-      const totalSeconds = this.parseTimeToSeconds(device['session-time-left'] || '');
-
-      const countdown = row.querySelector('.session-countdown');
-      if (countdown) {
-        let countdownClass = 'session-countdown';
-        if (totalSeconds !== Infinity && totalSeconds > 0) {
-          if (totalSeconds <= 60) countdownClass += ' countdown-critical';
-          else if (totalSeconds <= 300) countdownClass += ' countdown-warning';
-        }
-        countdown.className = countdownClass;
-
-        const value = countdown.querySelector('.countdown-value');
-        if (value) value.textContent = this.formatCountdown(totalSeconds);
-
-        const fill = countdown.querySelector('.countdown-bar-fill');
-        if (fill) fill.style.width = `${totalSeconds === Infinity ? 100 : Math.min((totalSeconds / 3600) * 100, 100)}%`;
-      }
 
       const rxRate = device['rx-rate'] || '0 bps';
       const txRate = device['tx-rate'] || '0 bps';
@@ -5464,6 +5581,8 @@ const App = {
       list = list.filter((d) => d['is-active'] === true);
     } else if (this._radiusDeviceFilter === 'offline') {
       list = list.filter((d) => d['is-active'] !== true);
+    } else if (['blocked', 'bypassed'].includes(this._radiusDeviceFilter)) {
+      list = list.filter((d) => d['access-mode'] === this._radiusDeviceFilter);
     }
 
     const q = (this._radiusDeviceSearch || '').trim().toLowerCase();
@@ -5486,7 +5605,9 @@ const App = {
   updateRadiusFilterCounts(devices) {
     const list = devices || [];
     const online = list.filter((d) => d['is-active'] === true).length;
-    const counts = { all: list.length, online, offline: list.length - online };
+    const counts = { all: list.length, online, offline: list.length - online,
+      blocked: list.filter((d) => d['access-mode'] === 'blocked').length,
+      bypassed: list.filter((d) => d['access-mode'] === 'bypassed').length };
 
     document.querySelectorAll('[data-radius-count]').forEach((el) => {
       if (counts[el.dataset.radiusCount] !== undefined) el.textContent = counts[el.dataset.radiusCount];
@@ -5526,6 +5647,7 @@ const App = {
   },
 
   clearRadiusPollers() {
+    this._radiusDeviceViewId = (this._radiusDeviceViewId || 0) + 1;
     if (this._radiusActiveInterval) {
       clearInterval(this._radiusActiveInterval);
       this._radiusActiveInterval = null;

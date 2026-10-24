@@ -1,6 +1,8 @@
 import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
-import { syncSessionsWithDevices } from './deviceSessions';
+import { syncSessionsWithDevices, mikrotikTimeToSeconds } from './deviceSessions';
+import { isRadiusRunning, sendCoASessionTimeout } from './radiusServer';
+import { isIP } from 'net';
 import { config } from '../config';
 import crypto from 'crypto';
 
@@ -140,7 +142,7 @@ export function syncActiveDevices(routerId: number, live: any[] | null): void {
     const byMac = new Map<string, any>();
     const byIp = new Map<string, any>();
     for (const row of known) {
-      const mac = String(row.mac_address || '').toLowerCase();
+      const mac = deviceMacKey(row.mac_address);
       const ip = String(row.ip_address || '').toLowerCase();
       if (mac && !byMac.has(mac)) byMac.set(mac, row);
       if (ip && !byIp.has(ip)) byIp.set(ip, row);
@@ -151,11 +153,15 @@ export function syncActiveDevices(routerId: number, live: any[] | null): void {
     for (const conn of live) {
       const mac = String(conn.mac || conn['mac-address'] || '').trim();
       const ip = cleanIp(conn.address);
-      const macKey = mac.toLowerCase();
+      const macKey = deviceMacKey(mac);
       const ipKey = ip.toLowerCase();
 
       let row: any = macKey ? byMac.get(macKey) : undefined;
-      if (!row && ipKey) row = byIp.get(ipKey);
+      if (!row && ipKey) {
+        const candidate = byIp.get(ipKey);
+        // DHCP address reuse must never transfer a hostname or access policy.
+        if (candidate && (!macKey || !deviceMacKey(candidate.mac_address))) row = candidate;
+      }
 
       const hostname = String(conn.hostname || conn['host-name'] || '');
       const sessionLeft = String(conn['session-time-left'] || '');
@@ -224,7 +230,11 @@ export function listActiveDevices(routerId: number): any[] {
 
   return rows.map((row) => {
     const isActive = row.status === 'active';
+    const account = findDeviceAccount(row);
+    const expiry = account?.expiry_at ? Date.parse(String(account.expiry_at).replace(' ', 'T') + 'Z') : NaN;
     return {
+      'access-mode': row.access_mode || 'normal',
+      'paid-seconds-left': Number.isFinite(expiry) ? Math.max(0, Math.floor((expiry - Date.now()) / 1000)) : null,
       id: row.id,
       '.id': row.mikrotik_active_id || '',
       'mac-address': row.mac_address || '',
@@ -266,15 +276,226 @@ export function updateActiveDevice(
     .get(deviceId, routerId) as any;
   if (!row) return null;
 
-  const custom = String(patch.hostname ?? '').trim();
+  const custom = validateHostname(patch.hostname);
+  requireDevice(routerId, deviceId);
   db.prepare('UPDATE active_devices SET custom_hostname = ? WHERE id = ?').run(custom, deviceId);
   return { id: deviceId, 'custom-hostname': custom };
 }
 
-export function deleteActiveDevice(routerId: number, deviceId: number): boolean {
+export class DeviceError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+// Accept only complete MAC addresses; never turn arbitrary usernames into MACs.
+export function deviceMacKey(value: any): string {
+  const mac = String(value || '').trim();
+  return /^(?:[\da-f]{12}|[\da-f]{2}(?::[\da-f]{2}){5}|[\da-f]{2}(?:-[\da-f]{2}){5})$/i.test(mac)
+    ? mac.replace(/[:-]/g, '').toLowerCase() : '';
+}
+
+function requireDevice(routerId: number, deviceId: number): any {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !Number.isSafeInteger(deviceId) || deviceId <= 0) {
+    throw new DeviceError(400, 'Invalid router or device id');
+  }
+  const device = getDb().prepare('SELECT * FROM active_devices WHERE id = ? AND router_id = ?').get(deviceId, routerId);
+  if (!device) throw new DeviceError(404, 'Device not found');
+  return device;
+}
+
+function validateHostname(value: any): string {
+  if (typeof value !== 'string' || value.trim().length > 253 || /[\x00-\x1f\x7f]/.test(value)) {
+    throw new DeviceError(400, 'Hostname must be a string of at most 253 characters without control characters');
+  }
+  return value.trim();
+}
+
+function findDeviceAccount(device: any): any {
   const db = getDb();
-  const info = db.prepare('DELETE FROM active_devices WHERE id = ? AND router_id = ?').run(deviceId, routerId);
-  return info.changes > 0;
+  const mac = deviceMacKey(device.mac_address);
+  const alias = mac ? db.prepare(
+    "SELECT username FROM device_macs WHERE LOWER(REPLACE(REPLACE(mac_address, ':', ''), '-', '')) = ? LIMIT 1"
+  ).get(mac) as any : null;
+  const username = device.user || alias?.username || (mac ? mac.match(/.{2}/g)!.join(':') : '');
+  if (!username) return null;
+  const find = (name: string) => {
+    const userMac = deviceMacKey(name);
+    return db.prepare(`SELECT * FROM hotspot_users
+      WHERE LOWER(username) = LOWER(?)
+         OR (? <> '' AND LOWER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
+      ORDER BY CASE WHEN router_id = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`
+    ).get(name, userMac, userMac, device.router_id) as any;
+  };
+  return find(username) || (alias?.username ? find(alias.username) : null);
+}
+
+export function createActiveDevice(routerId: number, data: any): any {
+  const db = getDb();
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) throw new DeviceError(400, 'Invalid router id');
+  if (!db.prepare('SELECT id FROM routers WHERE id = ?').get(routerId)) throw new DeviceError(404, 'Router not found');
+  const key = deviceMacKey(data?.macAddress);
+  if (!key) throw new DeviceError(400, 'A valid MAC address is required');
+  const hostname = validateHostname(data?.hostname ?? '');
+  const ip = typeof data?.ipAddress === 'string' ? data.ipAddress.trim() : '';
+  if (ip && isIP(ip) !== 4) throw new DeviceError(400, 'Invalid IPv4 address');
+  const duplicate = db.prepare(`SELECT id FROM active_devices WHERE router_id = ?
+    AND LOWER(REPLACE(REPLACE(mac_address, ':', ''), '-', '')) = ?`).get(routerId, key);
+  if (duplicate) throw new DeviceError(409, 'This MAC address is already recorded on this router');
+  const mac = key.match(/.{2}/g)!.join(':');
+  const result = db.prepare(`INSERT INTO active_devices
+    (router_id, mac_address, ip_address, custom_hostname, status)
+    VALUES (?, ?, ?, ?, 'offline')`).run(routerId, mac, ip, hostname);
+  return { id: Number(result.lastInsertRowid), 'mac-address': mac, 'custom-hostname': hostname };
+}
+
+const deviceMutations = new Set<string>();
+async function withDeviceMutation<T>(routerId: number, deviceId: number, action: () => Promise<T>): Promise<T> {
+  const key = `${routerId}:${deviceId}`;
+  if (deviceMutations.has(key)) throw new DeviceError(409, 'Another device action is in progress');
+  deviceMutations.add(key);
+  try { return await action(); } finally { deviceMutations.delete(key); }
+}
+
+async function disconnectDevice(device: any): Promise<void> {
+  const key = deviceMacKey(device.mac_address);
+  const live = await mikroTikService.getActiveConnections(device.router_id);
+  for (const conn of live) {
+    if (key && deviceMacKey(conn.mac) === key && conn['.id']) {
+      await mikroTikService.removeActiveConnection(device.router_id, conn['.id']);
+    }
+  }
+  // Bypassed devices have host entries but no authenticated active session.
+  const hosts = await mikroTikService.getHotspotHosts(device.router_id);
+  for (const host of hosts) {
+    if (key && deviceMacKey(host['mac-address']) === key && host['.id']) {
+      await mikroTikService.removeHotspotHost(device.router_id, host['.id']);
+    }
+  }
+}
+
+async function applyDeviceAccess(device: any, mode: string): Promise<void> {
+  const routerId = device.router_id;
+  if (!mikroTikService.isConnected(routerId)) throw new DeviceError(409, 'Connect the router before changing device access');
+  const key = deviceMacKey(device.mac_address);
+  if (!key) throw new DeviceError(400, 'Device has no valid MAC address');
+  const comment = `JuanFi managed device ${device.id}`;
+  const bindings = await mikroTikService.getIpBindings(routerId);
+  const owned = bindings.filter((b: any) => b.comment === comment);
+  const conflict = bindings.find((b: any) => b.comment !== comment &&
+    b.disabled !== true && b.disabled !== 'true' &&
+    (deviceMacKey(b['mac-address']) === key ||
+      (!b['mac-address'] && device.ip_address && cleanIp(b.address) === device.ip_address)));
+  if (conflict) throw new DeviceError(409, 'An existing hotspot IP binding controls this device. Resolve it in IP Bindings first.');
+  if (mode === 'normal') {
+    for (const binding of owned) await mikroTikService.deleteIpBinding(routerId, binding['.id']);
+  } else {
+    const data = { 'mac-address': key.match(/.{2}/g)!.join(':'), type: mode, server: 'all', disabled: 'false', comment };
+    if (owned.length) {
+      await mikroTikService.updateIpBinding(routerId, owned[0]['.id'], data);
+      for (const binding of owned.slice(1)) await mikroTikService.deleteIpBinding(routerId, binding['.id']);
+    } else {
+      await mikroTikService.createIpBinding(routerId, data);
+    }
+  }
+  getDb().prepare('UPDATE active_devices SET access_mode = ? WHERE id = ? AND router_id = ?')
+    .run(mode, device.id, routerId);
+}
+
+export async function setActiveDeviceAccess(routerId: number, deviceId: number, mode: any): Promise<any> {
+  if (!['normal', 'blocked', 'bypassed'].includes(mode)) throw new DeviceError(400, 'Invalid access mode');
+  return withDeviceMutation(routerId, deviceId, async () => {
+    const device = requireDevice(routerId, deviceId);
+    await applyDeviceAccess(device, mode);
+    let warning: string | undefined;
+    try { await disconnectDevice(device); } catch {
+      warning = 'Access rule saved, but the current session could not be disconnected. Reconnect the device to apply it.';
+    }
+    return { message: `Device access set to ${mode}`, accessMode: mode, warning };
+  });
+}
+
+export async function deleteActiveDevice(routerId: number, deviceId: number): Promise<boolean> {
+  return withDeviceMutation(routerId, deviceId, async () => {
+    const device = requireDevice(routerId, deviceId);
+    if (device.access_mode !== 'normal') await applyDeviceAccess(device, 'normal');
+    if (mikroTikService.isConnected(routerId)) await disconnectDevice(device);
+    else if (device.status === 'active') throw new DeviceError(409, 'Connect the router before deleting an active device');
+    return getDb().prepare('DELETE FROM active_devices WHERE id = ? AND router_id = ?').run(deviceId, routerId).changes > 0;
+  });
+}
+
+export async function addActiveDeviceTime(routerId: number, deviceId: number, minutes: any): Promise<any> {
+  if (typeof minutes !== 'number' || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 525600) {
+    throw new DeviceError(400, 'Minutes must be a whole number from 1 to 525600');
+  }
+  return withDeviceMutation(routerId, deviceId, async () => {
+    const db = getDb();
+    const device = requireDevice(routerId, deviceId);
+    const router = db.prepare('SELECT auth_mode, host FROM routers WHERE id = ?').get(routerId) as any;
+    if (router?.auth_mode !== 'radius') throw new DeviceError(409, 'Time top-ups require RADIUS authentication');
+    const mac = deviceMacKey(device.mac_address);
+    let live: Awaited<ReturnType<typeof mikroTikService.getActiveConnections>> = [];
+    if (mikroTikService.isConnected(routerId)) {
+      try { live = await mikroTikService.getActiveConnections(routerId); } catch { /* The credit can still be saved offline. */ }
+    }
+    const connection = live.find((conn) => mac && deviceMacKey(conn.mac) === mac);
+    // Resolve the account after network I/O so concurrent credits to a shared
+    // account are stacked using the latest expiry inside the transaction.
+    const accountDevice = { ...device, user: connection?.user || device.user };
+    let user = findDeviceAccount(accountDevice);
+    if (user?.disabled) throw new DeviceError(409, 'Enable the linked RADIUS account before adding time');
+    if (!user && (!mac || (accountDevice.user && deviceMacKey(accountDevice.user) !== mac))) {
+      throw new DeviceError(404, 'The linked RADIUS account was not found');
+    }
+    const result = db.transaction(() => {
+      if (!user) {
+        const username = mac.match(/.{2}/g)!.join(':');
+        const info = db.prepare(`INSERT INTO hotspot_users (router_id, username, password, source)
+          VALUES (?, ?, '', 'radius')`).run(routerId, username);
+        user = db.prepare('SELECT * FROM hotspot_users WHERE id = ?').get(info.lastInsertRowid) as any;
+      }
+      let current = user.expiry_at ? Date.parse(String(user.expiry_at).replace(' ', 'T') + 'Z') : 0;
+      if (!user.expiry_at) {
+        const existingSeconds = connection ? mikrotikTimeToSeconds(connection['session-time-left'])
+          : Math.max(0, mikrotikTimeToSeconds(user.uptime_limit) - Number(user.total_session_time || 0));
+        if (Number.isFinite(existingSeconds)) current = Date.now() + existingSeconds * 1000;
+      }
+      const expiry = Math.max(Date.now(), Number.isFinite(current) ? current : 0) + minutes * 60000;
+      const expiryAt = new Date(expiry).toISOString().replace('T', ' ').slice(0, 19);
+      const remainingSeconds = Math.max(1, Math.floor((expiry - Date.now()) / 1000));
+      db.prepare("UPDATE hotspot_users SET expiry_at = ?, updated_at = datetime('now') WHERE id = ?").run(expiryAt, user.id);
+      db.prepare('UPDATE active_devices SET user = ? WHERE id = ? AND router_id = ?').run(user.username, deviceId, routerId);
+      if (mac) {
+        db.prepare(`INSERT INTO device_macs (mac_address, username, router_id) VALUES (?, ?, ?)
+          ON CONFLICT(mac_address) DO UPDATE SET username = excluded.username,
+          router_id = excluded.router_id, updated_at = datetime('now')`)
+          .run(mac.match(/.{2}/g)!.join(':'), user.username, routerId);
+      }
+      db.prepare(`UPDATE device_sessions SET remaining_seconds = ?, total_seconds = MAX(total_seconds, ?),
+        status = CASE WHEN is_online = 1 THEN 'active' ELSE 'paused' END
+        WHERE router_id = ? AND LOWER(username) = LOWER(?)`)
+        .run(remainingSeconds, remainingSeconds, routerId, user.username);
+      return { expiryAt, remainingSeconds };
+    })();
+    // CoA is best-effort; do not report an unacknowledged UDP request as applied.
+    let coa = 'not-sent';
+    const warnings: string[] = [];
+    try {
+      const client = db.prepare('SELECT id FROM radius_clients WHERE router_id = ? AND is_active = 1').get(routerId);
+      if (isRadiusRunning() && client && mikroTikService.isConnected(routerId)) {
+        for (const conn of live) {
+          if (!mac || deviceMacKey(conn.mac) !== mac) continue;
+          sendCoASessionTimeout(routerId, '', router.host, result.remainingSeconds, conn.user || user.username, cleanIp(conn.address));
+          coa = 'requested';
+        }
+      }
+    } catch {
+      warnings.push('The live session update could not be requested.');
+    }
+    if (coa === 'not-sent') warnings.push('Time is saved for the next login; reconnect the device to use it.');
+    else warnings.push('Live timeout update requested; reconnect if the router does not apply it.');
+    if (device.access_mode !== 'normal') warnings.push(`The device remains ${device.access_mode}; adding time does not change access.`);
+    return { message: `Added ${minutes} minutes to ${user.username}`, ...result, coa, warning: warnings.join(' ') };
+  });
 }
 
 

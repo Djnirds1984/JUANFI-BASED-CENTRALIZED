@@ -2438,6 +2438,31 @@ tr.radius-row-offline:hover td {
   background: rgba(220, 38, 38, 0.08);
 }
 
+.radius-device-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  width: 225px;
+}
+
+.radius-device-controls .icon-btn {
+  margin-left: 0;
+}
+
+.radius-access-blocked {
+  color: var(--danger);
+}
+
+.radius-access-bypassed {
+  color: var(--primary);
+}
+
+.radius-devices-table .device-status + .device-status {
+  display: block;
+  margin-top: 0.375rem;
+}
+
 /* Empty / no-results state */
 .radius-empty-state {
   display: flex;

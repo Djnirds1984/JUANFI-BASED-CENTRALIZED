@@ -423,6 +423,15 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
   try {
     console.log(`[RADIUS-auth] Attempting auth: routerId=${routerId}, username=${username}`);
     const db = getDb();
+    // Device blocks are router-scoped and checked before accounts, vouchers,
+    // centralized fallback, or expired-account grace can grant access.
+    const deviceMac = normalizeMacAttr(callingMac || username);
+    if (deviceMac) {
+      const blocked = db.prepare(`SELECT id FROM active_devices WHERE router_id = ? AND access_mode = 'blocked'
+        AND LOWER(REPLACE(REPLACE(mac_address, ':', ''), '-', '')) = ? LIMIT 1`)
+        .get(routerId, deviceMac.replace(/:/g, ''));
+      if (blocked) return { accept: false, replyAttributes: [], reason: 'device-blocked' };
+    }
     const cols = 'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users';
     let user = findHotspotUser(routerId, username, cols);
 
@@ -530,7 +539,7 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
         db.prepare('UPDATE hotspot_users SET first_login_at = ? WHERE id = ?').run(now, user.id);
 
-        if (user.radius_profile_id) {
+        if (user.radius_profile_id && !user.expiry_at) {
           const profile = db.prepare('SELECT validity_period, validity_fixed_expiry FROM radius_profiles WHERE id = ?')
             .get(user.radius_profile_id) as any;
           if (profile?.validity_fixed_expiry) {

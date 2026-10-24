@@ -945,6 +945,15 @@ class MikroTikService {
     }
   }
 
+  async removeHotspotHost(routerId: number, hostId: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ip/hotspot/host/${hostId}`);
+      return;
+    }
+    await this.getClient(routerId).write(['/ip/hotspot/host/remove', `=.id=${hostId}`]);
+  }
+
   async getDhcpLeases(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 

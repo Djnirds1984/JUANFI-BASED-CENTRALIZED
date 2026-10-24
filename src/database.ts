@@ -352,6 +352,10 @@ export function initializeDatabase(): void {
     db.exec("ALTER TABLE active_devices ADD COLUMN custom_hostname TEXT NOT NULL DEFAULT ''");
   }
 
+  if (!deviceCols.some((c: any) => c.name === 'access_mode')) {
+    db.exec("ALTER TABLE active_devices ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'normal'");
+  }
+
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];
   if (!sessCols.some((c: any) => c.name === 'mac_address')) {
     db.exec("ALTER TABLE radius_sessions ADD COLUMN mac_address TEXT NOT NULL DEFAULT ''");

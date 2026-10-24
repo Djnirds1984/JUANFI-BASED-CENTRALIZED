@@ -127,6 +127,18 @@ class ApiClient {
     return this.put(`/hotspot/router/${routerId}/devices/${deviceId}`, data);
   }
 
+  async createActiveDevice(routerId, data) {
+    return this.post(`/hotspot/router/${routerId}/devices`, data);
+  }
+
+  async setActiveDeviceAccess(routerId, deviceId, mode) {
+    return this.put(`/hotspot/router/${routerId}/devices/${deviceId}/access`, { mode });
+  }
+
+  async addActiveDeviceTime(routerId, deviceId, minutes) {
+    return this.post(`/hotspot/router/${routerId}/devices/${deviceId}/extend`, { minutes });
+  }
+
   async deleteActiveDevice(routerId, deviceId) {
     return this.delete(`/hotspot/router/${routerId}/devices/${deviceId}`);
   }

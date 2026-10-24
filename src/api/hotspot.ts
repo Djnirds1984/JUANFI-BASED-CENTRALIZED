@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
-import { syncActiveDevices, listActiveDevices, deleteActiveDevice, updateActiveDevice } from '../services/activeDevices';
+import { syncActiveDevices, listActiveDevices, deleteActiveDevice, updateActiveDevice,
+  createActiveDevice, setActiveDeviceAccess, addActiveDeviceTime, DeviceError } from '../services/activeDevices';
 import { syncSessionsWithDevices, listSessions, deleteSession } from '../services/deviceSessions';
 import { authMiddleware } from '../middleware/auth';
 
@@ -311,6 +312,31 @@ router.get('/router/:routerId/devices', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/router/:routerId/devices', (req: Request, res: Response) => {
+  try {
+    const device = createActiveDevice(Number(req.params.routerId), req.body);
+    res.status(201).json({ message: 'Device created', device });
+  } catch (error: any) {
+    res.status(error instanceof DeviceError ? error.status : 500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/devices/:deviceId/access', async (req: Request, res: Response) => {
+  try {
+    res.json(await setActiveDeviceAccess(Number(req.params.routerId), Number(req.params.deviceId), req.body?.mode));
+  } catch (error: any) {
+    res.status(error instanceof DeviceError ? error.status : 500).json({ error: error.message });
+  }
+});
+
+router.post('/router/:routerId/devices/:deviceId/extend', async (req: Request, res: Response) => {
+  try {
+    res.json(await addActiveDeviceTime(Number(req.params.routerId), Number(req.params.deviceId), req.body?.minutes));
+  } catch (error: any) {
+    res.status(error instanceof DeviceError ? error.status : 500).json({ error: error.message });
+  }
+});
+
 // Edit a stored device (currently the hostname override).
 router.put('/router/:routerId/devices/:deviceId', (req: Request, res: Response) => {
   try {
@@ -335,29 +361,29 @@ router.put('/router/:routerId/devices/:deviceId', (req: Request, res: Response) 
     res.json({ message: 'Device updated', device: updated });
   } catch (error: any) {
     console.error('Update active device error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error instanceof DeviceError ? error.status : 500).json({ error: error.message });
   }
 });
 
-router.delete('/router/:routerId/devices/:deviceId', (req: Request, res: Response) => {
+router.delete('/router/:routerId/devices/:deviceId', async (req: Request, res: Response) => {
   try {
-    const routerId = parseInt(req.params.routerId);
-    const deviceId = parseInt(req.params.deviceId);
+    const routerId = Number(req.params.routerId);
+    const deviceId = Number(req.params.deviceId);
 
     if (!Number.isFinite(deviceId)) {
       res.status(400).json({ error: 'Invalid device id' });
       return;
     }
 
-    const removed = deleteActiveDevice(routerId, deviceId);
+    const removed = await deleteActiveDevice(routerId, deviceId);
     if (!removed) {
       res.status(404).json({ error: 'Device not found' });
       return;
     }
 
-    res.json({ message: 'Device removed from active devices' });
+    res.json({ message: 'Device record and managed access rules removed. Reconnecting devices may be discovered again.' });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(error instanceof DeviceError ? error.status : 500).json({ error: error.message });
   }
 });
 

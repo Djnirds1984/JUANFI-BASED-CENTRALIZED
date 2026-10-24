@@ -653,6 +653,7 @@ function handleAccessRequest(packet: RadiusPacket, rinfo: dgram.RemoteInfo): voi
   const logType = result.accept ? 'accept' : 'reject';
   const msg = result.accept
     ? `Access-Accept (${result.replyAttributes.length} reply attributes${result.profileId ? `, profile #${result.profileId}` : ''})`
+    : result.reason === 'device-blocked' ? 'Access-Reject (device blocked by administrator)'
     : 'Access-Reject (user not found, disabled, or expired)';
   console.log(`[RADIUS] Auth ${result.accept ? 'ACCEPT' : 'REJECT'}: user=${username} router=${client.router_id} from=${rinfo.address}`);
   logRadiusEvent(logType, msg, client.router_id, username, rinfo.address, responseCode);

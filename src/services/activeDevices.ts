@@ -335,6 +335,7 @@ export function createActiveDevice(routerId: number, data: any): any {
   const key = deviceMacKey(data?.macAddress);
   if (!key) throw new DeviceError(400, 'A valid MAC address is required');
   const hostname = validateHostname(data?.hostname ?? '');
+  if (data?.ipAddress != null && typeof data.ipAddress !== 'string') throw new DeviceError(400, 'Invalid IPv4 address');
   const ip = typeof data?.ipAddress === 'string' ? data.ipAddress.trim() : '';
   if (ip && isIP(ip) !== 4) throw new DeviceError(400, 'Invalid IPv4 address');
   const duplicate = db.prepare(`SELECT id FROM active_devices WHERE router_id = ?
@@ -372,6 +373,26 @@ async function disconnectDevice(device: any): Promise<void> {
   }
 }
 
+function bindingMatchesDevice(binding: any, device: any): boolean {
+  const bindingMac = deviceMacKey(binding['mac-address']);
+  if (bindingMac && bindingMac !== '000000000000') return bindingMac === deviceMacKey(device.mac_address);
+  const address = String(binding.address || '').trim();
+  if (!address || address === '0.0.0.0' || !device.ip_address) return true;
+  const number = (ip: string): number => ip.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
+  if (isIP(device.ip_address) !== 4) return true;
+  const ip = number(device.ip_address);
+  if (isIP(address) === 4) return ip === number(address);
+  const [network, prefix] = address.split('/');
+  if (isIP(network) === 4 && /^\d+$/.test(prefix || '') && Number(prefix) <= 32) {
+    const size = 2 ** (32 - Number(prefix));
+    return Math.floor(ip / size) === Math.floor(number(network) / size);
+  }
+  const [start, end] = address.split('-');
+  if (isIP(start) === 4 && isIP(end || '') === 4) return ip >= number(start) && ip <= number(end);
+  // An unrecognized router selector cannot safely be assumed non-matching.
+  return true;
+}
+
 async function applyDeviceAccess(device: any, mode: string): Promise<void> {
   const routerId = device.router_id;
   if (!mikroTikService.isConnected(routerId)) throw new DeviceError(409, 'Connect the router before changing device access');
@@ -381,10 +402,8 @@ async function applyDeviceAccess(device: any, mode: string): Promise<void> {
   const bindings = await mikroTikService.getIpBindings(routerId);
   const owned = bindings.filter((b: any) => b.comment === comment);
   const conflict = bindings.find((b: any) => b.comment !== comment &&
-    b.disabled !== true && b.disabled !== 'true' &&
-    (deviceMacKey(b['mac-address']) === key ||
-      (!b['mac-address'] && device.ip_address && cleanIp(b.address) === device.ip_address)));
-  if (conflict) throw new DeviceError(409, 'An existing hotspot IP binding controls this device. Resolve it in IP Bindings first.');
+    ![true, 'true', 'yes', 1, '1'].includes(b.disabled) && bindingMatchesDevice(b, device));
+  if (conflict) throw new DeviceError(409, 'An existing hotspot IP binding may control this device. Resolve it in IP Bindings first.');
   if (mode === 'normal') {
     for (const binding of owned) await mikroTikService.deleteIpBinding(routerId, binding['.id']);
   } else {

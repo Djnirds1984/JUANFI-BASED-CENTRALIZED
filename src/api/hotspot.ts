@@ -340,10 +340,10 @@ router.post('/router/:routerId/devices/:deviceId/extend', async (req: Request, r
 // Edit a stored device (currently the hostname override).
 router.put('/router/:routerId/devices/:deviceId', (req: Request, res: Response) => {
   try {
-    const routerId = parseInt(req.params.routerId);
-    const deviceId = parseInt(req.params.deviceId);
+    const routerId = Number(req.params.routerId);
+    const deviceId = Number(req.params.deviceId);
 
-    if (!Number.isFinite(deviceId)) {
+    if (!Number.isSafeInteger(routerId) || routerId <= 0 || !Number.isSafeInteger(deviceId) || deviceId <= 0) {
       res.status(400).json({ error: 'Invalid device id' });
       return;
     }

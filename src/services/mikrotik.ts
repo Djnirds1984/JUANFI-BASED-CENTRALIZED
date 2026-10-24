@@ -1405,7 +1405,7 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'POST', '/ip/hotspot/ip-binding', data);
+      return await this.restApiCall(config, 'PUT', '/ip/hotspot/ip-binding', data);
     }
 
     const client = this.getClient(routerId);
@@ -1444,12 +1444,12 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'PUT', `/ip/hotspot/ip-binding/${id}`, data);
+      return await this.restApiCall(config, 'PATCH', `/ip/hotspot/ip-binding/${id}`, data);
     }
 
     const client = this.getClient(routerId);
     try {
-      const command = [`/ip/hotspot/ip-binding/set`, `.id=${id}`];
+      const command = ['/ip/hotspot/ip-binding/set', `=.id=${id}`];
       for (const [key, value] of Object.entries(data)) {
         if (value !== undefined && value !== null && value !== '') {
           command.push(`=${key}=${value}`);

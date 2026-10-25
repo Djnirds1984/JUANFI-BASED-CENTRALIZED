@@ -1,5 +1,6 @@
 const PortalThemes = {
-  applyTheme(html, theme) {
+  applyTheme(html, theme, folder = 'hotspot') {
+    if (folder === 'panel-page') return this.applyPanelTheme(html, theme);
     if (theme.id === 'default') {
       return this.applyDefault(html);
     }
@@ -42,6 +43,25 @@ const PortalThemes = {
       return out.replace(juanFiLink, styleTag);
     }
     return out.replace(/<\/head>/i, styleTag + '</head>');
+  },
+
+  applyPanelTheme(html, theme) {
+    // The panel has its own inline base styles, not assets/css/JuanFi.css.
+    // Keep them intact so Default can remove only our theme override.
+    const headEnd = html.search(/<\/head\s*>/i);
+    if (headEnd === -1) return html;
+    const markers = ['neonPulse', 'sunriseShift', 'snowfall', 'adopisoftTheme'];
+    const head = html.slice(0, headEnd).replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, (block) => {
+      const tagged = /^<style\b[^>]*\bdata-panel-theme\s*=/i.test(block);
+      return tagged || markers.some(marker => block.includes(marker)) ? '' : block;
+    });
+    const tail = html.slice(headEnd);
+    if (theme.id === 'default' || !theme.css) return head + tail;
+    // Match the centralized page's body specificity and card class without
+    // changing its layout, scripts, login forms, or Bootstrap container.
+    const css = theme.css.replace(/\bbody(?=\s*(?:\{|::))/g, 'body#loginBody')
+      .replace(/\.container(?![\w-])/g, '.main-card');
+    return head + `<style data-panel-theme="true">\n${css}\n</style>` + tail;
   },
 
   applyDefault(html) {

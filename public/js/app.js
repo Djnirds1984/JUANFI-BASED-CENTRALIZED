@@ -6030,7 +6030,7 @@ const App = {
               <div class="portal-file-info" id="portal-file-info"></div>
               <div class="portal-actions">
                 <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
-                <button class="btn btn-sm btn-outline" id="portal-themes-btn" onclick="App.openPortalThemes()">&#127912; Themes</button>
+                ${activeTab !== 'stub' ? '<button class="btn btn-sm btn-outline" id="portal-themes-btn" onclick="App.openPortalThemes()">&#127912; Themes</button>' : ''}
                 <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
                 <button class="btn btn-sm btn-outline" id="portal-upload-btn" onclick="App.uploadPortalFile()">Upload to Router</button>
                 <button class="btn btn-sm btn-outline" id="portal-reset-btn" onclick="App.resetPortalFile()">Reset to Default</button>
@@ -6050,12 +6050,13 @@ const App = {
       </div>
     `;
 
-    if (routers.length > 0) {
+    const routerSelect = document.getElementById('portal-router-select');
+    if (routerSelect && routers.length > 0) {
       if (!this.selectedRouterId || !routers.find((r) => r.id === this.selectedRouterId)) {
         this.selectedRouterId = routers[0].id;
-        document.getElementById('portal-router-select').value = this.selectedRouterId;
+        routerSelect.value = this.selectedRouterId;
       }
-      document.getElementById('portal-router-select').addEventListener('change', (e) => {
+      routerSelect.addEventListener('change', (e) => {
         this.selectedRouterId = parseInt(e.target.value);
         const uploadBtn = document.getElementById('portal-upload-btn');
         if (uploadBtn) uploadBtn.style.display = '';
@@ -6159,7 +6160,7 @@ const App = {
 
     const isEditable = !document.querySelector(`.portal-file-item[data-path="${filePath}"]`)?.classList.contains('binary');
     const isHtml = filePath.endsWith('.html');
-    const hasRouter = !!this.selectedRouterId;
+    const hasRouter = !!this.selectedRouterId && this._portalFolder() !== 'panel-page';
 
     editor.disabled = !isEditable;
     saveBtn.style.display = isEditable ? '' : 'none';
@@ -6205,14 +6206,15 @@ const App = {
     const preview = document.getElementById('portal-preview');
     if (!preview || !this.portalCurrentFile) return;
     try {
-      const res = await api.getPortalFile(this.portalCurrentFile, this._portalFolder());
+      const folder = this._portalFolder();
+      const res = await api.getPortalFile(this.portalCurrentFile, folder);
       let html = res.content;
       if (this._portalPreviewTheme) {
-        html = PortalThemes.applyTheme(html, PortalThemes.getTheme(this._portalPreviewTheme));
+        html = PortalThemes.applyTheme(html, PortalThemes.getTheme(this._portalPreviewTheme), folder);
       }
       html = html.replace(/\$\((link-[\w-]+)\)/g, '#');
       html = html.replace(/\$\((chap-challenge|chap-id|mac|ip|error|username|server-address|link-orig|link-status)\)/g, '');
-      const assetsBase = this.portalActiveTab === 'stub' ? '/stub-assets/' : '/hotspot-assets/';
+      const assetsBase = folder === 'panel-page' ? '/' : folder === 'stub' ? '/stub-assets/' : '/hotspot-assets/';
       if (html.includes('<head>')) {
         html = html.replace('<head>', `<head><base href="${assetsBase}">`);
       } else if (html.includes('<html')) {
@@ -6273,6 +6275,11 @@ const App = {
   },
 
   openPortalThemes() {
+    const folder = this._portalFolder();
+    if (folder === 'stub') {
+      this.toast('Stub pages only redirect visitors. Change the theme in Panel Portal.', 'info');
+      return;
+    }
     let modal = document.getElementById('portal-themes-modal');
     if (!modal) {
       modal = document.createElement('div');
@@ -6288,14 +6295,16 @@ const App = {
           <button class="ptm-close" onclick="App.closePortalThemes()">&times;</button>
         </div>
         <div class="ptm-body">
-          <p class="ptm-hint">Preview how each theme looks, then apply. The default theme restores the original JuanFi UI. Applying a theme writes new content to login.html, status.html, and logout.html — use "Push All to Router" to upload them to your MikroTik.</p>
+          <p class="ptm-hint">${folder === 'panel-page'
+            ? 'Preview a theme, then apply it to portal.html. Changes are served directly by the panel; no router upload is needed. Default removes the theme and restores the panel page styling.'
+            : 'Preview how each theme looks, then apply. Default restores the original JuanFi UI. Applying a theme updates login.html, status.html, and logout.html — use "Push All to Router" to upload them to your MikroTik.'}</p>
           <div class="ptm-grid">
             ${themes.map((t) => `
               <div class="ptm-card" data-theme="${t.id}">
                 <div class="ptm-banner" style="background: ${t.banner}"></div>
                 <div class="ptm-card-body">
-                  <div class="ptm-name">${this.escapeHtml(t.name)}</div>
-                  <div class="ptm-desc">${this.escapeHtml(t.description)}</div>
+                  <div class="ptm-name">${this.escapeHtml(folder === 'panel-page' && t.id === 'default' ? 'Default (Panel)' : t.name)}</div>
+                  <div class="ptm-desc">${this.escapeHtml(folder === 'panel-page' && t.id === 'default' ? 'Original panel portal styling' : t.description)}</div>
                   <div class="ptm-swatches">
                     ${t.swatches.map((c) => `<span class="ptm-swatch" style="background:${c}" title="${c}"></span>`).join('')}
                   </div>
@@ -6336,25 +6345,38 @@ const App = {
   },
 
   async applyPortalTheme(themeId) {
+    if (this._portalThemeApplying) return;
+    const folder = this._portalFolder();
+    if (folder === 'stub') {
+      this.toast('Stub pages only redirect visitors. Change the theme in Panel Portal.', 'info');
+      return;
+    }
     const theme = PortalThemes.getTheme(themeId);
-    const label = theme.name;
-    if (!confirm(`Apply "${label}" theme? This will overwrite login.html, status.html, and logout.html with the themed versions. You can revert by applying the Default (JuanFi) theme.`)) return;
+    const label = folder === 'panel-page' && theme.id === 'default' ? 'Default (Panel)' : theme.name;
+    const files = folder === 'panel-page' ? ['portal.html'] : ['login.html', 'status.html', 'logout.html'];
+    const delivery = folder === 'panel-page' ? 'Changes are served by the panel; no router upload is needed.'
+      : 'Use Push All to Router afterward.';
+    if (!confirm(`Apply "${label}" theme to ${files.join(', ')}? Unsaved editor changes will be discarded. You can revert the styling with Default. ${delivery}`)) return;
 
+    this._portalThemeApplying = true;
     try {
-      const folder = this._portalFolder();
-      const loginHtml = await api.getPortalFile('login.html', folder);
-      const statusHtml = await api.getPortalFile('status.html', folder);
-      const logoutHtml = await api.getPortalFile('logout.html', folder);
-      await api.savePortalFile('login.html', PortalThemes.applyTheme(loginHtml.content, theme), folder);
-      await api.savePortalFile('status.html', PortalThemes.applyTheme(statusHtml.content, theme), folder);
-      await api.savePortalFile('logout.html', PortalThemes.applyTheme(logoutHtml.content, theme), folder);
-      this.portalDirty = false;
-      this._portalPreviewTheme = null;
-      this.closePortalThemes();
-      await this.renderPortal();
+      // Finish reading and transforming all targets before saving any file.
+      const pages = await Promise.all(files.map(async (file) => {
+        const page = await api.getPortalFile(file, folder);
+        return { file, content: PortalThemes.applyTheme(page.content, theme, folder) };
+      }));
+      for (const page of pages) await api.savePortalFile(page.file, page.content, folder);
+      if (this._portalFolder() === folder) {
+        this.portalDirty = false;
+        this._portalPreviewTheme = null;
+        this.closePortalThemes();
+        await this.renderPortal();
+      }
       this.toast(`"${label}" theme applied`, 'success');
     } catch (err) {
       this.toast(err.message, 'error');
+    } finally {
+      this._portalThemeApplying = false;
     }
   },
 

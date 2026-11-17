@@ -58,6 +58,15 @@ export function verifyToken(token: string): TokenPayload | null {
   }
 }
 
+export async function verifyPassword(userId: number, password: string): Promise<boolean> {
+  const db = getDb();
+  const user = db.prepare('SELECT password_hash FROM admin_users WHERE id = ?').get(userId) as
+    | { password_hash: string }
+    | undefined;
+  if (!user) return false;
+  return bcrypt.compare(password, user.password_hash);
+}
+
 export async function changePassword(userId: number, newPassword: string): Promise<void> {
   const hash = await bcrypt.hash(newPassword, 10);
   const db = getDb();

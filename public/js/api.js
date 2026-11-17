@@ -67,8 +67,8 @@ class ApiClient {
     return this.get('/auth/me');
   }
 
-  async changePassword(newPassword) {
-    return this.post('/auth/change-password', { newPassword });
+  async changePassword(currentPassword, newPassword) {
+    return this.post('/auth/change-password', { currentPassword, newPassword });
   }
 
   async getRouters() {

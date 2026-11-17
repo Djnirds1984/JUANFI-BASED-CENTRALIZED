@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { authenticate, changePassword } from '../services/auth';
+import { authenticate, changePassword, verifyPassword } from '../services/auth';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
@@ -30,14 +30,30 @@ router.post('/login', async (req: Request, res: Response) => {
 
 router.post('/change-password', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body || {};
 
-    if (!newPassword || newPassword.length < 6) {
-      res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: 'Current and new password are required' });
       return;
     }
 
-    await changePassword(req.user!.userId, newPassword);
+    if (String(newPassword).length < 8) {
+      res.status(400).json({ error: 'New password must be at least 8 characters' });
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      res.status(400).json({ error: 'New password must differ from the current password' });
+      return;
+    }
+
+    const valid = await verifyPassword(req.user!.userId, String(currentPassword));
+    if (!valid) {
+      res.status(400).json({ error: 'Current password is incorrect' });
+      return;
+    }
+
+    await changePassword(req.user!.userId, String(newPassword));
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     console.error('Change password error:', error);

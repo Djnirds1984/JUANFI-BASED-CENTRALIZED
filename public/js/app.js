@@ -7163,14 +7163,25 @@ Then join your network:
     const content = document.getElementById('page-content');
     content.innerHTML = '<div class="empty-state"><p>Loading settings...</p></div>';
     const settings = await this.loadSystemSettings(true);
-    const tab = this._settingsTab === 'company' ? 'company' : 'general';
+    const tab = ['company', 'credentials'].includes(this._settingsTab) ? this._settingsTab : 'general';
+
+    let username = '';
+    if (tab === 'credentials') {
+      try {
+        const me = await api.getMe();
+        username = me.username || '';
+      } catch (e) {
+        // The form still works; only the "signed in as" hint is missing.
+      }
+    }
 
     content.innerHTML = `
       <div class="settings-tabs">
         <button class="settings-tab ${tab === 'general' ? 'active' : ''}" onclick="App.switchSettingsTab('general')">General</button>
         <button class="settings-tab ${tab === 'company' ? 'active' : ''}" onclick="App.switchSettingsTab('company')">Company</button>
+        <button class="settings-tab ${tab === 'credentials' ? 'active' : ''}" onclick="App.switchSettingsTab('credentials')">Admin Credential</button>
       </div>
-      ${tab === 'company' ? this.companySettingsHtml(settings) : this.generalSettingsHtml(settings)}
+      ${tab === 'company' ? this.companySettingsHtml(settings) : tab === 'credentials' ? this.credentialsSettingsHtml(username) : this.generalSettingsHtml(settings)}
     `;
 
     if (tab === 'company') {
@@ -7180,7 +7191,7 @@ Then join your network:
   },
 
   switchSettingsTab(tab) {
-    this._settingsTab = tab === 'company' ? 'company' : 'general';
+    this._settingsTab = ['company', 'credentials'].includes(tab) ? tab : 'general';
     this.renderSystemSettings();
   },
 
@@ -7258,6 +7269,38 @@ Then join your network:
             </div>
           </div>
         </div>
+      </div>
+    `;
+  },
+
+  credentialsSettingsHtml(username) {
+    return `
+      <div class="card" style="max-width:680px">
+        <div class="card-header">
+          <h3>${uiIcon('shield')} Admin Credential</h3>
+        </div>
+        <form id="credential-form" onsubmit="App.saveAdminPassword(event)">
+          <div class="cred-account">
+            ${uiIcon('user')}
+            <span>Signed in as <strong>${this.escapeHtml(username || 'admin')}</strong></span>
+          </div>
+          <div class="form-group">
+            <label>Current password</label>
+            <input id="cred-current" type="password" class="form-control" autocomplete="current-password" required>
+          </div>
+          <div class="form-group">
+            <label>New password</label>
+            <input id="cred-new" type="password" class="form-control" autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="form-group">
+            <label>Confirm new password</label>
+            <input id="cred-confirm" type="password" class="form-control" autocomplete="new-password" minlength="8" required>
+          </div>
+          <small style="display:block;color:var(--text-muted)">At least 8 characters. Use a password you don't reuse on other services.</small>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit">${uiIcon('key')} Update password</button>
+          </div>
+        </form>
       </div>
     `;
   },
@@ -7376,6 +7419,43 @@ Then join your network:
       await this.renderSystemSettings();
     } catch (err) {
       this.toast(err.message, 'error');
+      if (button) button.disabled = false;
+    }
+  },
+
+  async saveAdminPassword(event) {
+    if (event) event.preventDefault();
+    const current = document.getElementById('cred-current');
+    const next = document.getElementById('cred-new');
+    const confirm = document.getElementById('cred-confirm');
+    if (!current || !next || !confirm) return;
+
+    const currentValue = current.value;
+    const newValue = next.value;
+    if (newValue.length < 8) {
+      this.toast('New password must be at least 8 characters', 'error');
+      return;
+    }
+    if (newValue !== confirm.value) {
+      this.toast('New passwords do not match', 'error');
+      return;
+    }
+    if (newValue === currentValue) {
+      this.toast('New password must differ from the current password', 'error');
+      return;
+    }
+
+    const button = event?.target?.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    try {
+      await api.changePassword(currentValue, newValue);
+      this.toast('Password updated', 'success');
+      current.value = '';
+      next.value = '';
+      confirm.value = '';
+    } catch (err) {
+      this.toast(err.message, 'error');
+    } finally {
       if (button) button.disabled = false;
     }
   },

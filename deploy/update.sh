@@ -5,6 +5,15 @@ APP_NAME="mikrotik-controller"
 APP_DIR="/opt/$APP_NAME"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# On SBCs the repo is usually cloned straight into APP_DIR, so SCRIPT_DIR and
+# APP_DIR are the same tree: the build output is already deployed and copying
+# dist/public/hotspot onto themselves would delete or break it.
+if [ "$SCRIPT_DIR" = "$(cd "$APP_DIR" 2>/dev/null && pwd)" ]; then
+    SAME_DIR=true
+else
+    SAME_DIR=false
+fi
+
 echo "=========================================="
 echo "  MikroTik Controller - Update"
 echo "=========================================="
@@ -31,18 +40,22 @@ npm install --production=false
 npm run build
 
 echo "[4/5] Deploying..."
-rm -rf "$APP_DIR/dist"
-rm -rf "$APP_DIR/public"
-cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
-cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
-cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
+if [ "$SAME_DIR" = false ]; then
+    rm -rf "$APP_DIR/dist"
+    rm -rf "$APP_DIR/public"
+    cp -r "$SCRIPT_DIR/dist" "$APP_DIR/"
+    cp -r "$SCRIPT_DIR/public" "$APP_DIR/"
+    cp "$SCRIPT_DIR/package.json" "$APP_DIR/"
+else
+    echo "  Running from the install directory, build output already in place..."
+fi
 # Portal files (login/status/logout pages + assets/js). These are edited in the
 # repo, so they must be redeployed on update too.
 #
 # NOTE: dashboard portal Save writes directly to $APP_DIR/hotspot on disk, so we
 # back up the existing folder and copy repo files OVER it (without deleting) to
 # avoid wiping any edits that were made through the UI but not committed.
-if [ -d "$SCRIPT_DIR/hotspot" ]; then
+if [ "$SAME_DIR" = false ] && [ -d "$SCRIPT_DIR/hotspot" ]; then
     if [ -d "$APP_DIR/hotspot" ]; then
         cp -r "$APP_DIR/hotspot" "$APP_DIR/hotspot.bak-$(date +%Y%m%d-%H%M%S)"
     fi
@@ -64,6 +77,11 @@ if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
 fi
 
 echo "[5/5] Restarting service..."
+if [ ! -f "$APP_DIR/dist/server.js" ]; then
+    echo "ERROR: $APP_DIR/dist/server.js is missing; refusing to start a service that will crash-loop."
+    echo "  Build it manually: cd $APP_DIR && npm install --production=false && npm run build"
+    exit 1
+fi
 chown -R mikrotik-controller:mikrotik-controller "$APP_DIR"
 # Ensure default ACLs on hotspot dir so files copied as root are still writable by service user
 if command -v setfacl &>/dev/null; then

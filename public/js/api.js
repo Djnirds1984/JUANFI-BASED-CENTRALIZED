@@ -593,6 +593,10 @@ class ApiClient {
   async updatePaymentRate(id, data) { return this.put(`/payments/rates/${id}`, data); }
   async deletePaymentRate(id) { return this.delete(`/payments/rates/${id}`); }
 
+  // --- System settings ---
+  async getSystemSettings() { return this.get('/settings'); }
+  async updateSystemSettings(data) { return this.put('/settings', data); }
+
   async getRadiusProfiles(routerId) {
     return this.get(`/radius-profiles/router/${routerId}`);
   }

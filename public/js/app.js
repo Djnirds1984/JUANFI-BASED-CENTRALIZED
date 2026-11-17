@@ -17,6 +17,55 @@ const App = {
   voucherTab: 'vouchers',
   radiusTab: 'profiles',
   pppTab: 'active',
+  systemCurrency: 'PHP',
+  _systemSettings: null,
+  _systemSettingsPromise: null,
+  currencies: [
+    { code: 'PHP', name: 'Philippine Peso', symbol: '₱' },
+    { code: 'USD', name: 'US Dollar', symbol: '$' },
+    { code: 'EUR', name: 'Euro', symbol: '€' },
+    { code: 'GBP', name: 'British Pound', symbol: '£' },
+    { code: 'JPY', name: 'Japanese Yen', symbol: '¥' },
+    { code: 'KRW', name: 'South Korean Won', symbol: '₩' },
+    { code: 'CNY', name: 'Chinese Yuan', symbol: '¥' },
+    { code: 'TWD', name: 'New Taiwan Dollar', symbol: 'NT$' },
+    { code: 'HKD', name: 'Hong Kong Dollar', symbol: 'HK$' },
+    { code: 'SGD', name: 'Singapore Dollar', symbol: 'S$' },
+    { code: 'MYR', name: 'Malaysian Ringgit', symbol: 'RM' },
+    { code: 'IDR', name: 'Indonesian Rupiah', symbol: 'Rp' },
+    { code: 'THB', name: 'Thai Baht', symbol: '฿' },
+    { code: 'VND', name: 'Vietnamese Dong', symbol: '₫' },
+    { code: 'INR', name: 'Indian Rupee', symbol: '₹' },
+    { code: 'AUD', name: 'Australian Dollar', symbol: 'A$' },
+    { code: 'NZD', name: 'New Zealand Dollar', symbol: 'NZ$' },
+    { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$' },
+    { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF' },
+    { code: 'AED', name: 'UAE Dirham', symbol: 'د.إ' },
+    { code: 'SAR', name: 'Saudi Riyal', symbol: '﷼' },
+    { code: 'QAR', name: 'Qatari Riyal', symbol: '﷼' },
+    { code: 'KWD', name: 'Kuwaiti Dinar', symbol: 'د.ك' },
+    { code: 'BRL', name: 'Brazilian Real', symbol: 'R$' },
+    { code: 'MXN', name: 'Mexican Peso', symbol: 'MX$' },
+    { code: 'ZAR', name: 'South African Rand', symbol: 'R' },
+    { code: 'NGN', name: 'Nigerian Naira', symbol: '₦' },
+    { code: 'EGP', name: 'Egyptian Pound', symbol: 'E£' },
+    { code: 'BDT', name: 'Bangladeshi Taka', symbol: '৳' },
+    { code: 'PKR', name: 'Pakistani Rupee', symbol: '₨' },
+    { code: 'LKR', name: 'Sri Lankan Rupee', symbol: '₨' },
+    { code: 'NPR', name: 'Nepalese Rupee', symbol: '₨' },
+    { code: 'MMK', name: 'Myanmar Kyat', symbol: 'K' },
+    { code: 'KHR', name: 'Cambodian Riel', symbol: '៛' },
+    { code: 'BND', name: 'Brunei Dollar', symbol: 'B$' },
+    { code: 'MOP', name: 'Macanese Pataca', symbol: 'MOP$' },
+    { code: 'TRY', name: 'Turkish Lira', symbol: '₺' },
+    { code: 'RUB', name: 'Russian Ruble', symbol: '₽' },
+    { code: 'ILS', name: 'Israeli New Shekel', symbol: '₪' },
+    { code: 'SEK', name: 'Swedish Krona', symbol: 'kr' },
+    { code: 'NOK', name: 'Norwegian Krone', symbol: 'kr' },
+    { code: 'DKK', name: 'Danish Krone', symbol: 'kr' },
+    { code: 'PLN', name: 'Polish Zloty', symbol: 'zł' },
+    { code: 'CZK', name: 'Czech Koruna', symbol: 'Kč' },
+  ],
 
   init() {
     if (window.AdminThemes) {
@@ -69,6 +118,7 @@ const App = {
   showDashboard() {
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('dashboard-screen').classList.add('active');
+    this.loadSystemSettings();
     this.navigate('overview');
   },
 
@@ -89,6 +139,9 @@ const App = {
 
   logout() {
     api.setToken(null);
+    this._systemSettings = null;
+    this._systemSettingsPromise = null;
+    this.systemCurrency = 'PHP';
     this.showLogin();
   },
 
@@ -126,6 +179,7 @@ const App = {
       subvendo: 'SubVendo',
       payments: 'Online Payment',
       appearance: 'Appearance',
+      settings: 'System Settings',
       ppp: 'PPP',
     };
 
@@ -152,6 +206,7 @@ const App = {
         case 'payments': await this.renderOnlinePayment(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
+        case 'settings': await this.renderSystemSettings(); break;
         case 'ppp': await this.renderPpp(); break;
       }
     } catch (err) {
@@ -4681,6 +4736,7 @@ const App = {
   },
 
   async loadRadiusProfiles(container) {
+    await this.loadSystemSettings();
     const profiles = await api.getRadiusProfiles(this.selectedRouterId);
 
     const fmtBps = (bps) => {
@@ -4758,7 +4814,7 @@ const App = {
                 <td>${fmtTime(p.session_timeout)}</td>
                 <td>${fmtBytes(p.quota_rx)} / ${fmtBytes(p.quota_tx)}${p.quota_total ? '<br>Total: ' + fmtBytes(p.quota_total) : ''}</td>
                 <td>${fmtValidity(p)}</td>
-                <td>${p.price ? '$' + p.price.toFixed(2) : '-'}</td>
+                <td>${p.price ? this.formatMoney(p.price) : '-'}</td>
                 <td>${p.user_count || 0}</td>
                 <td>
                   <button class="btn btn-sm btn-outline" onclick="App.showEditRadiusProfileModal(${p.id})">Edit</button>
@@ -4895,7 +4951,7 @@ const App = {
             <input type="number" name="shared_users" value="${p.shared_users || 1}" min="1">
           </div>
           <div class="form-group">
-            <label>Price</label>
+            <label>Price (${this.systemCurrency})</label>
             <input type="number" name="price" value="${p.price || 0}" min="0" step="0.01">
           </div>
           <div class="form-group">
@@ -6893,6 +6949,88 @@ Then join your network:
       }
     });
     this.toast(`"${theme.name}" theme applied`, 'success');
+  },
+
+  async loadSystemSettings(force = false) {
+    if (!force && this._systemSettings) return this._systemSettings;
+    if (!force && this._systemSettingsPromise) return this._systemSettingsPromise;
+    this._systemSettingsPromise = api.getSystemSettings()
+      .then((settings) => {
+        this._systemSettings = settings || {};
+        this.systemCurrency = this._systemSettings.currency || 'PHP';
+        return this._systemSettings;
+      })
+      .catch(() => {
+        this._systemSettings = { currency: 'PHP' };
+        this.systemCurrency = 'PHP';
+        return this._systemSettings;
+      })
+      .finally(() => { this._systemSettingsPromise = null; });
+    return this._systemSettingsPromise;
+  },
+
+  formatAmount(code, amount) {
+    const value = Number(amount) || 0;
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: code || 'PHP' }).format(value);
+    } catch (e) {
+      return `${code || 'PHP'} ${value.toFixed(2)}`;
+    }
+  },
+
+  formatMoney(amount) {
+    return this.formatAmount(this.systemCurrency, amount);
+  },
+
+  async renderSystemSettings() {
+    const content = document.getElementById('page-content');
+    content.innerHTML = '<div class="empty-state"><p>Loading settings...</p></div>';
+    const settings = await this.loadSystemSettings(true);
+    const active = settings.currency || 'PHP';
+
+    content.innerHTML = `
+      <div class="card" style="max-width:680px">
+        <div class="card-header">
+          <h3>Panel Settings</h3>
+        </div>
+        <div style="padding:1.25rem 1.5rem 1.5rem">
+          <div class="form-group">
+            <label>Currency</label>
+            <select id="system-currency" onchange="App.updateCurrencyPreview()">
+              ${this.currencies.map((c) => `<option value="${c.code}" ${c.code === active ? 'selected' : ''}>${c.code} — ${this.escapeHtml(c.name)} (${c.symbol})</option>`).join('')}
+            </select>
+            <small style="display:block;margin-top:0.4rem;color:var(--text-muted)">Used for price displays across the panel, such as RADIUS profile prices.</small>
+          </div>
+          <div style="margin:1rem 0 1.25rem;padding:1rem 1.25rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
+            <div style="font-size:0.6875rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted)">Preview</div>
+            <div id="currency-preview" style="font-size:1.5rem;font-weight:650;margin-top:0.15rem">${this.formatAmount(active, 1234.5)}</div>
+            <div style="font-size:0.8125rem;color:var(--text-muted)">Sample: 1-day voucher price</div>
+          </div>
+          <button class="btn btn-primary" onclick="App.saveSystemSettings()">${uiIcon('save')} Save Settings</button>
+        </div>
+      </div>
+    `;
+  },
+
+  updateCurrencyPreview() {
+    const select = document.getElementById('system-currency');
+    const preview = document.getElementById('currency-preview');
+    if (select && preview) {
+      preview.textContent = this.formatAmount(select.value, 1234.5);
+    }
+  },
+
+  async saveSystemSettings() {
+    const select = document.getElementById('system-currency');
+    if (!select) return;
+    try {
+      const settings = await api.updateSystemSettings({ currency: select.value });
+      this._systemSettings = settings;
+      this.systemCurrency = settings.currency || 'PHP';
+      this.toast(`Currency set to ${this.systemCurrency}`, 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
 

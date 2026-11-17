@@ -316,6 +316,12 @@ export function initializeDatabase(): void {
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS system_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      currency TEXT NOT NULL DEFAULT 'PHP',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

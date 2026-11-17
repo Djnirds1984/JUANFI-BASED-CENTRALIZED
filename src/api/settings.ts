@@ -108,7 +108,7 @@ router.put('/', (req: Request, res: Response) => {
 
 router.post(
   '/logo',
-  raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '2mb' }),
+  raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '5mb' }),
   (req: Request, res: Response) => {
     try {
       const buf = req.body as Buffer;

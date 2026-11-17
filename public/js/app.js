@@ -7250,7 +7250,7 @@ Then join your network:
                 <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('company-logo-input').click()">${uiIcon('image')} Choose image</button>
                 <button class="btn btn-outline btn-sm" type="button" id="company-logo-remove" onclick="App.queueCompanyLogoRemoval()" ${logo ? '' : 'disabled'}>${uiIcon('trash')} Remove</button>
               </div>
-              <small style="display:block;margin-top:0.5rem;color:var(--text-muted)">PNG, JPG or WebP, up to 2 MB. A square image works best.</small>
+              <small style="display:block;margin-top:0.5rem;color:var(--text-muted)">PNG, JPG or WebP, up to 5 MB. Large images are resized to 512px automatically.</small>
             </div>
 
             <div class="pay-form-actions">
@@ -7268,19 +7268,26 @@ Then join your network:
     if (input && preview) preview.textContent = input.value.trim() || 'MikroTik';
   },
 
-  handleCompanyLogoPick() {
+  async handleCompanyLogoPick() {
     const input = document.getElementById('company-logo-input');
-    const file = input && input.files && input.files[0];
-    if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      this.toast('Logo must be 2 MB or smaller', 'error');
+    const picked = input && input.files && input.files[0];
+    if (!picked) return;
+    if (picked.size > 5 * 1024 * 1024) {
+      this.toast('Logo must be 5 MB or smaller', 'error');
       input.value = '';
       return;
     }
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+    if (!/^image\/(png|jpeg|webp)$/.test(picked.type)) {
       this.toast('Logo must be a PNG, JPG or WebP image', 'error');
       input.value = '';
       return;
+    }
+
+    let file = picked;
+    try {
+      file = await this.compressLogo(picked);
+    } catch (e) {
+      // Fall back to the original file if the browser cannot decode it.
     }
 
     this._pendingLogoFile = file;
@@ -7294,6 +7301,36 @@ Then join your network:
     const remove = document.getElementById('company-logo-remove');
     if (remove) remove.disabled = false;
     this.toast('Logo ready — save to apply', 'info');
+  },
+
+  compressLogo(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const max = 512;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(file); return; }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        const keepsAlpha = file.type !== 'image/jpeg';
+        const type = keepsAlpha ? 'image/png' : 'image/jpeg';
+        canvas.toBlob((blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], keepsAlpha ? 'logo.png' : 'logo.jpg', { type }));
+        }, type, 0.92);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not read image'));
+      };
+      img.src = url;
+    });
   },
 
   queueCompanyLogoRemoval() {

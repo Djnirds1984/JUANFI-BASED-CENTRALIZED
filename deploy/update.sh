@@ -87,6 +87,20 @@ if [ ! -f "$APP_DIR/dist/server.js" ]; then
     echo "  Build it manually: cd $APP_DIR && npm install --production=false && npm run build"
     exit 1
 fi
+# nginx defaults to a 1 MB request body, which rejects logo uploads before they
+# reach the app. conf.d is included from the http block on Debian/Ubuntu.
+if command -v nginx &>/dev/null && [ -d /etc/nginx/conf.d ]; then
+    if ! grep -rqs "client_max_body_size 5m" /etc/nginx/conf.d /etc/nginx/sites-available 2>/dev/null; then
+        printf 'client_max_body_size 5m;\n' > /etc/nginx/conf.d/mikrotik-controller-upload.conf
+        if nginx -t &>/dev/null; then
+            systemctl reload nginx || true
+            echo "  Raised nginx client_max_body_size to 5m"
+        else
+            rm -f /etc/nginx/conf.d/mikrotik-controller-upload.conf
+            echo "  WARNING: nginx config test failed; upload limit left unchanged"
+        fi
+    fi
+fi
 chown -R mikrotik-controller:mikrotik-controller "$APP_DIR"
 # Ensure default ACLs on hotspot dir so files copied as root are still writable by service user
 if command -v setfacl &>/dev/null; then

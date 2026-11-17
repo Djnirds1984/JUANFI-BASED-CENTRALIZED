@@ -31,7 +31,7 @@ apt-get update -qq
 
 # Install dependencies
 echo "[2/9] Installing dependencies..."
-apt-get install -y -qq curl build-essential git sqlite3 acl > /dev/null 2>&1
+apt-get install -y -qq curl build-essential git sqlite3 acl python3 > /dev/null 2>&1
 
 # Check Node.js installation
 echo "[3/9] Checking Node.js installation..."
@@ -149,7 +149,15 @@ fi
 # Install production dependencies
 echo "  Installing production dependencies..."
 cd "$APP_DIR"
-npm install --production --ignore-scripts 2>/dev/null || npm install --production 2>/dev/null || true
+npm install --production 2>/dev/null || npm install --production --ignore-scripts 2>/dev/null || true
+
+# --ignore-scripts and some ARM prebuild failures leave better-sqlite3 without its
+# native binding, which crashes the service on boot with "Could not locate the
+# bindings file". Compile from source instead of letting it crash-loop.
+if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+    echo "  better-sqlite3 binding missing, compiling from source (takes a few minutes on ARM)..."
+    npm rebuild better-sqlite3 --build-from-source
+fi
 
 # Create .env file if not exists
 if [ ! -f "$APP_DIR/.env" ]; then
@@ -197,6 +205,11 @@ echo "[7/9] Starting service..."
 if [ ! -f "$APP_DIR/dist/server.js" ]; then
     echo "ERROR: $APP_DIR/dist/server.js is missing; refusing to start a service that will crash-loop."
     echo "  Build it manually: cd $APP_DIR && npm install --production=false && npm run build"
+    exit 1
+fi
+if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+    echo "ERROR: better-sqlite3 has no usable native binding; refusing to start the service."
+    echo "  Retry manually: cd $APP_DIR && npm rebuild better-sqlite3 --build-from-source"
     exit 1
 fi
 systemctl start "$APP_NAME"

@@ -51,6 +51,18 @@ fi
 cd "$APP_DIR"
 npm install --production
 
+# A pruned or failed native build leaves better-sqlite3 without its binding, so the
+# restarted service would die immediately with "Could not locate the bindings file".
+if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+    echo "  better-sqlite3 binding missing, compiling from source (takes a few minutes on ARM)..."
+    npm rebuild better-sqlite3 --build-from-source
+    node -e "require('$APP_DIR/node_modules/better-sqlite3')" || {
+        echo "ERROR: better-sqlite3 still has no usable native binding."
+        echo "  Retry manually: cd $APP_DIR && npm rebuild better-sqlite3 --build-from-source"
+        exit 1
+    }
+fi
+
 echo "[5/5] Restarting service..."
 chown -R mikrotik-controller:mikrotik-controller "$APP_DIR"
 # Ensure default ACLs on hotspot dir so files copied as root are still writable by service user

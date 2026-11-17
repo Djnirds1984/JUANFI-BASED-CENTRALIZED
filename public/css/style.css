@@ -76,10 +76,6 @@ h1, h2, h3, h4 {
   margin-right: 0.45rem;
 }
 
-.btn .icon:last-child {
-  margin-right: 0;
-}
-
 .screen {
   display: none;
 }
@@ -3197,4 +3193,113 @@ input[type="checkbox"] {
 /* Allow the main column to shrink inside the flex shell so wide tables scroll internally */
 .content {
   min-width: 0;
+}
+
+/* ============================================
+   System settings tabs + company branding
+   ============================================ */
+.settings-tabs {
+  display: flex;
+  gap: 0.375rem;
+  padding: 0.375rem;
+  background: color-mix(in srgb, var(--bg) 55%, var(--bg-card));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: max-content;
+  max-width: 100%;
+  margin-bottom: 1.25rem;
+}
+
+.settings-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-tab:hover {
+  color: var(--text);
+}
+
+.settings-tab.active {
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.company-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 1.75rem;
+  align-items: start;
+}
+
+.company-preview-label {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.company-preview-shell {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 0.75rem;
+}
+
+.company-preview-header {
+  padding: 0.9rem 1rem;
+  background: linear-gradient(180deg, var(--sidebar-bg) 0%, color-mix(in srgb, var(--sidebar-bg) 85%, #000) 100%);
+  border: 1px solid color-mix(in srgb, var(--sidebar-bg) 70%, #000);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.company-preview-header .sidebar-brand-text {
+  min-width: 0;
+}
+
+.company-form .form-group:last-of-type {
+  margin-bottom: 0;
+}
+
+.logo-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.brand-mark.has-logo,
+.login-brand.has-logo {
+  background: #fff;
+  padding: 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.brand-mark.has-logo img,
+.login-brand.has-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .company-body {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
 }

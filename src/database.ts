@@ -320,6 +320,8 @@ export function initializeDatabase(): void {
     CREATE TABLE IF NOT EXISTS system_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       currency TEXT NOT NULL DEFAULT 'PHP',
+      company_name TEXT NOT NULL DEFAULT 'MikroTik',
+      logo_path TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
@@ -351,6 +353,14 @@ export function initializeDatabase(): void {
   }
   if (payCols.length && !payCols.some((c: any) => c.name === 'button_label')) {
     db.exec("ALTER TABLE payment_settings ADD COLUMN button_label TEXT NOT NULL DEFAULT 'PAY GCASH'");
+  }
+
+  const sysCols = db.prepare("PRAGMA table_info('system_settings')").all() as any[];
+  if (!sysCols.some((c: any) => c.name === 'company_name')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN company_name TEXT NOT NULL DEFAULT 'MikroTik'");
+  }
+  if (!sysCols.some((c: any) => c.name === 'logo_path')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN logo_path TEXT NOT NULL DEFAULT ''");
   }
 
   const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];

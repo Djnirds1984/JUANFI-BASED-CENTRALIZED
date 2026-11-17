@@ -18,6 +18,9 @@ const App = {
   radiusTab: 'profiles',
   pppTab: 'active',
   systemCurrency: 'PHP',
+  _settingsTab: 'general',
+  _pendingLogoFile: null,
+  _pendingLogoRemoved: false,
   _systemSettings: null,
   _systemSettingsPromise: null,
   currencies: [
@@ -71,6 +74,7 @@ const App = {
     if (window.AdminThemes) {
       AdminThemes.applyStored();
     }
+    this.loadBranding();
     if (api.getToken()) {
       this.showDashboard();
     } else {
@@ -7090,6 +7094,40 @@ Then join your network:
     this.toast(`"${theme.name}" theme applied`, 'success');
   },
 
+  async loadBranding() {
+    try {
+      const branding = await api.getBranding();
+      this.applyBranding(branding || {});
+    } catch (e) {
+      // Branding is cosmetic; keep the defaults when the endpoint is unreachable.
+    }
+  },
+
+  applyBranding(branding = {}) {
+    const name = String(branding.company_name || 'MikroTik').trim() || 'MikroTik';
+    const logo = branding.logo_path || '';
+    const fallbackIcon = uiIcon('zap');
+
+    document.title = `${name} Controller`;
+
+    const sidebarName = document.getElementById('sidebar-brand-name');
+    if (sidebarName) sidebarName.textContent = name;
+    const loginName = document.getElementById('login-brand-name');
+    if (loginName) loginName.textContent = `${name} Controller`;
+
+    const marks = [document.querySelector('.sidebar-header .brand-mark'), document.querySelector('.login-brand')];
+    marks.forEach((mark) => {
+      if (!mark) return;
+      if (logo) {
+        mark.classList.add('has-logo');
+        mark.innerHTML = `<img src="${logo}" alt="${this.escapeHtml(name)} logo">`;
+      } else {
+        mark.classList.remove('has-logo');
+        mark.innerHTML = fallbackIcon;
+      }
+    });
+  },
+
   async loadSystemSettings(force = false) {
     if (!force && this._systemSettings) return this._systemSettings;
     if (!force && this._systemSettingsPromise) return this._systemSettingsPromise;
@@ -7125,17 +7163,38 @@ Then join your network:
     const content = document.getElementById('page-content');
     content.innerHTML = '<div class="empty-state"><p>Loading settings...</p></div>';
     const settings = await this.loadSystemSettings(true);
-    const active = settings.currency || 'PHP';
+    const tab = this._settingsTab === 'company' ? 'company' : 'general';
 
     content.innerHTML = `
+      <div class="settings-tabs">
+        <button class="settings-tab ${tab === 'general' ? 'active' : ''}" onclick="App.switchSettingsTab('general')">General</button>
+        <button class="settings-tab ${tab === 'company' ? 'active' : ''}" onclick="App.switchSettingsTab('company')">Company</button>
+      </div>
+      ${tab === 'company' ? this.companySettingsHtml(settings) : this.generalSettingsHtml(settings)}
+    `;
+
+    if (tab === 'company') {
+      this._pendingLogoFile = null;
+      this._pendingLogoRemoved = false;
+    }
+  },
+
+  switchSettingsTab(tab) {
+    this._settingsTab = tab === 'company' ? 'company' : 'general';
+    this.renderSystemSettings();
+  },
+
+  generalSettingsHtml(settings) {
+    const active = settings.currency || 'PHP';
+    return `
       <div class="card" style="max-width:680px">
         <div class="card-header">
-          <h3>Panel Settings</h3>
+          <h3>${uiIcon('settings')} Panel Settings</h3>
         </div>
-        <div style="padding:1.25rem 1.5rem 1.5rem">
+        <div style="padding:0.25rem 0 0">
           <div class="form-group">
             <label>Currency</label>
-            <select id="system-currency" onchange="App.updateCurrencyPreview()">
+            <select id="system-currency" class="form-control" onchange="App.updateCurrencyPreview()">
               ${this.currencies.map((c) => `<option value="${c.code}" ${c.code === active ? 'selected' : ''}>${c.code} — ${this.escapeHtml(c.name)} (${c.symbol})</option>`).join('')}
             </select>
             <small style="display:block;margin-top:0.4rem;color:var(--text-muted)">Used for price displays across the panel, such as RADIUS profile prices.</small>
@@ -7149,6 +7208,139 @@ Then join your network:
         </div>
       </div>
     `;
+  },
+
+  companySettingsHtml(settings) {
+    const name = settings.company_name || 'MikroTik';
+    const logo = settings.logo_path || '';
+    const previewMark = logo
+      ? `<span class="brand-mark has-logo" id="company-logo-preview"><img src="${logo}" alt=""></span>`
+      : `<span class="brand-mark" id="company-logo-preview">${uiIcon('zap')}</span>`;
+
+    return `
+      <div class="card" style="max-width:760px">
+        <div class="card-header">
+          <h3>${uiIcon('store')} Company Settings</h3>
+        </div>
+        <div class="company-body">
+          <div class="company-preview">
+            <span class="company-preview-label">Sidebar preview</span>
+            <div class="company-preview-shell">
+              <div class="sidebar-header company-preview-header">
+                ${previewMark}
+                <span class="sidebar-brand-text">
+                  <h2 id="company-name-preview">${this.escapeHtml(name)}</h2>
+                  <span class="version">Controller</span>
+                </span>
+              </div>
+            </div>
+            <p class="pay-hint" style="margin:0.75rem 0 0">The name and logo are also used on the login screen and in the browser tab.</p>
+          </div>
+
+          <div class="company-form">
+            <div class="form-group">
+              <label>Panel name</label>
+              <input id="company-name" class="form-control" maxlength="40" value="${this.escapeHtml(name)}" placeholder="MikroTik" oninput="App.updateCompanyPreview()">
+            </div>
+
+            <div class="form-group">
+              <label>Logo</label>
+              <div class="logo-actions">
+                <input type="file" id="company-logo-input" accept="image/png,image/jpeg,image/webp" hidden onchange="App.handleCompanyLogoPick()">
+                <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('company-logo-input').click()">${uiIcon('image')} Choose image</button>
+                <button class="btn btn-outline btn-sm" type="button" id="company-logo-remove" onclick="App.queueCompanyLogoRemoval()" ${logo ? '' : 'disabled'}>${uiIcon('trash')} Remove</button>
+              </div>
+              <small style="display:block;margin-top:0.5rem;color:var(--text-muted)">PNG, JPG or WebP, up to 2 MB. A square image works best.</small>
+            </div>
+
+            <div class="pay-form-actions">
+              <button class="btn btn-primary" type="button" onclick="App.saveCompanySettings()">${uiIcon('save')} Save company settings</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  updateCompanyPreview() {
+    const input = document.getElementById('company-name');
+    const preview = document.getElementById('company-name-preview');
+    if (input && preview) preview.textContent = input.value.trim() || 'MikroTik';
+  },
+
+  handleCompanyLogoPick() {
+    const input = document.getElementById('company-logo-input');
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      this.toast('Logo must be 2 MB or smaller', 'error');
+      input.value = '';
+      return;
+    }
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+      this.toast('Logo must be a PNG, JPG or WebP image', 'error');
+      input.value = '';
+      return;
+    }
+
+    this._pendingLogoFile = file;
+    this._pendingLogoRemoved = false;
+
+    const mark = document.getElementById('company-logo-preview');
+    if (mark) {
+      mark.classList.add('has-logo');
+      mark.innerHTML = `<img src="${URL.createObjectURL(file)}" alt="">`;
+    }
+    const remove = document.getElementById('company-logo-remove');
+    if (remove) remove.disabled = false;
+    this.toast('Logo ready — save to apply', 'info');
+  },
+
+  queueCompanyLogoRemoval() {
+    this._pendingLogoFile = null;
+    this._pendingLogoRemoved = true;
+    const input = document.getElementById('company-logo-input');
+    if (input) input.value = '';
+
+    const mark = document.getElementById('company-logo-preview');
+    if (mark) {
+      mark.classList.remove('has-logo');
+      mark.innerHTML = uiIcon('zap');
+    }
+    const remove = document.getElementById('company-logo-remove');
+    if (remove) remove.disabled = true;
+    this.toast('Logo will be removed when you save', 'info');
+  },
+
+  async saveCompanySettings() {
+    const input = document.getElementById('company-name');
+    const name = (input?.value || '').trim();
+    if (!name) {
+      this.toast('Panel name cannot be empty', 'error');
+      return;
+    }
+
+    const button = document.querySelector('.company-form .btn-primary');
+    if (button) button.disabled = true;
+
+    try {
+      if (this._pendingLogoRemoved) {
+        await api.deleteCompanyLogo();
+      } else if (this._pendingLogoFile) {
+        await api.uploadCompanyLogo(this._pendingLogoFile);
+      }
+      const settings = await api.updateSystemSettings({ company_name: name });
+
+      this._pendingLogoFile = null;
+      this._pendingLogoRemoved = false;
+      this._systemSettings = settings;
+      this.applyBranding(settings);
+      this.toast('Company settings saved', 'success');
+      await this.renderSystemSettings();
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (button) button.disabled = false;
+    }
   },
 
   updateCurrencyPreview() {

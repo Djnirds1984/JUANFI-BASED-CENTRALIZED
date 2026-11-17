@@ -596,6 +596,32 @@ class ApiClient {
   // --- System settings ---
   async getSystemSettings() { return this.get('/settings'); }
   async updateSystemSettings(data) { return this.put('/settings', data); }
+  async getBranding() { return this.request('GET', '/settings/branding'); }
+
+  async uploadCompanyLogo(file) {
+    const headers = { 'Content-Type': file.type || 'application/octet-stream' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${this.baseUrl}/settings/logo`, {
+      method: 'POST',
+      headers,
+      body: file,
+    });
+
+    if (response.status === 401) {
+      this.setToken(null);
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Logo upload failed');
+    }
+    return data;
+  }
+
+  async deleteCompanyLogo() { return this.request('DELETE', '/settings/logo'); }
 
   async getRadiusProfiles(routerId) {
     return this.get(`/radius-profiles/router/${routerId}`);

@@ -230,8 +230,8 @@ const App = {
       return;
     }
     this._paymentRates = rates;
+    this._paymentCurrency = s.currency || 'PHP';
 
-    const inp = 'width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)';
     const PAY_METHODS = [
       { id: 'qrph', label: 'QR Ph' },
       { id: 'gcash', label: 'GCash' },
@@ -242,57 +242,148 @@ const App = {
       { id: 'dob', label: 'DOB' },
     ];
     const activeMethods = String(s.methods || 'qrph').split(',').map((x) => x.trim());
+    const payCurrency = s.currency || 'PHP';
+    const fmtPay = (v) => this.formatAmount(payCurrency, v);
+    const webhookUrl = `${location.origin}/api/payments/paymongo/webhook`;
+
     content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><h3>Online Payment — PayMongo / GCash</h3></div>
-        <form id="payment-form" style="padding:1rem;max-width:680px">
-          <label style="display:block;margin:0.5rem 0">
-            <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}> Enable online payment (adds a <strong>PAY GCASH</strong> button to the portal)
-          </label>
-          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Public key (pk_…)</label><input name="public_key" value="${this.escapeHtml(s.public_key || '')}" style="${inp}"></div>
-          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Secret key (sk_…)</label><input name="secret_key" value="${this.escapeHtml(s.secret_key || '')}" style="${inp}"></div>
-          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Webhook secret (whsk_…)</label><input name="webhook_secret" value="${this.escapeHtml(s.webhook_secret || '')}" style="${inp}"></div>
-          <div style="display:flex;gap:1rem;flex-wrap:wrap">
-            <div style="flex:1;min-width:140px"><label style="display:block;margin-bottom:0.25rem">Price</label><input name="amount" type="number" step="0.01" value="${s.amount || 0}" style="${inp}"></div>
-            <div style="flex:1;min-width:140px"><label style="display:block;margin-bottom:0.25rem">Time granted (minutes)</label><input name="minutes" type="number" value="${s.minutes || 0}" style="${inp}"></div>
-            <div style="flex:1;min-width:100px"><label style="display:block;margin-bottom:0.25rem">Currency</label><input name="currency" value="${this.escapeHtml(s.currency || 'PHP')}" style="${inp}"></div>
-          </div>
-          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Description</label><input name="description" value="${this.escapeHtml(s.description || 'Internet Time')}" style="${inp}"></div>
-          <div style="margin:0.75rem 0">
-            <label style="display:block;margin-bottom:0.25rem">Payment methods — tick what your PayMongo account offers</label>
-            <div style="display:flex;flex-wrap:wrap;gap:1rem">
-              ${PAY_METHODS.map((m) => `<label style="font-size:0.85rem;cursor:pointer"><input type="checkbox" name="pm_${m.id}" ${activeMethods.indexOf(m.id) >= 0 ? 'checked' : ''}> ${m.label}</label>`).join('')}
+      <div class="payments-layout">
+        <div class="payments-main">
+          <div class="card">
+            <div class="card-header">
+              <h3>${uiIcon('card')} Online Payment — PayMongo</h3>
+              <span class="status-badge ${s.enabled ? 'connected' : 'disconnected'}">${s.enabled ? 'Enabled' : 'Disabled'}</span>
             </div>
-            <small style="color:var(--text-muted)">e.g. if only QR Ph is enabled on your account, tick only <strong>QR Ph</strong>.</small>
+            <form id="payment-form">
+              <label class="pay-toggle">
+                <span class="pay-toggle-text">
+                  <span class="pay-toggle-title">Enable online payment</span>
+                  <span class="pay-toggle-sub">Adds a ${this.escapeHtml(s.button_label || 'PAY GCASH')} button to the captive portal</span>
+                </span>
+                <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}>
+              </label>
+
+              <div class="pay-section">
+                <div class="pay-section-head">
+                  <h4>${uiIcon('key')} Gateway credentials</h4>
+                  <span class="pay-section-hint">From PayMongo → Developers → API keys</span>
+                </div>
+                <div class="pay-grid-2">
+                  <div class="form-group">
+                    <label>Public key</label>
+                    <input name="public_key" class="form-control pay-key" value="${this.escapeHtml(s.public_key || '')}" placeholder="pk_live_…">
+                  </div>
+                  <div class="form-group">
+                    <label>Secret key</label>
+                    <input name="secret_key" class="form-control pay-key" value="${this.escapeHtml(s.secret_key || '')}" placeholder="sk_live_…">
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                  <label>Webhook secret</label>
+                  <input name="webhook_secret" class="form-control pay-key" value="${this.escapeHtml(s.webhook_secret || '')}" placeholder="whsk_…">
+                </div>
+              </div>
+
+              <div class="pay-section">
+                <div class="pay-section-head">
+                  <h4>${uiIcon('clock')} Default checkout</h4>
+                  <span class="pay-section-hint">Used when the portal does not pick a pricing tier</span>
+                </div>
+                <div class="pay-grid-3">
+                  <div class="form-group">
+                    <label>Price</label>
+                    <input name="amount" type="number" step="0.01" class="form-control" value="${s.amount || 0}">
+                  </div>
+                  <div class="form-group">
+                    <label>Time granted (minutes)</label>
+                    <input name="minutes" type="number" class="form-control" value="${s.minutes || 0}">
+                  </div>
+                  <div class="form-group">
+                    <label>Currency</label>
+                    <input name="currency" class="form-control" value="${this.escapeHtml(payCurrency)}" placeholder="PHP">
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                  <label>Description</label>
+                  <input name="description" class="form-control" value="${this.escapeHtml(s.description || 'Internet Time')}">
+                </div>
+              </div>
+
+              <div class="pay-section">
+                <div class="pay-section-head">
+                  <h4>${uiIcon('globe')} Payment methods</h4>
+                  <span class="pay-section-hint">Only tick what your PayMongo account offers</span>
+                </div>
+                <div class="pay-methods">
+                  ${PAY_METHODS.map((m) => `
+                    <label class="pay-method">
+                      <input type="checkbox" name="pm_${m.id}" ${activeMethods.indexOf(m.id) >= 0 ? 'checked' : ''}> ${m.label}
+                    </label>`).join('')}
+                </div>
+              </div>
+
+              <div class="pay-section">
+                <div class="pay-section-head">
+                  <h4>${uiIcon('monitor')} Portal button</h4>
+                </div>
+                <div class="form-group" style="margin-bottom:0;max-width:320px">
+                  <label>Button label</label>
+                  <input name="button_label" class="form-control" value="${this.escapeHtml(s.button_label || 'PAY GCASH')}">
+                </div>
+              </div>
+
+              <div class="pay-form-actions">
+                <button class="btn btn-primary" type="submit">${uiIcon('save')} Save settings</button>
+              </div>
+            </form>
           </div>
-          <div style="margin:0.75rem 0"><label style="display:block;margin-bottom:0.25rem">Portal button label</label><input name="button_label" value="${this.escapeHtml(s.button_label || 'PAY GCASH')}" style="${inp}"></div>
-          <button class="btn btn-primary" type="submit" style="margin-top:0.5rem">Save</button>
-        </form>
-        <div style="padding:1rem;border-top:1px solid var(--border);color:var(--text-muted);font-size:0.85rem;line-height:1.7">
-          <strong>PayMongo webhook</strong> — add this URL in PayMongo Dashboard → Developers → Webhooks:<br>
-          <code>${location.origin}/api/payments/paymongo/webhook</code><br>
-          Subscribe to events: <code>payment.paid</code>, <code>checkout_session.payment.paid</code>.<br>
-          The device gets <strong>${s.minutes || 0} min</strong> for <strong>${s.currency || 'PHP'} ${s.amount || 0}</strong> after payment is confirmed.
+
+          <div class="card">
+            <div class="card-header">
+              <h3>${uiIcon('ticket')} Pricing tiers</h3>
+              <button class="btn btn-primary btn-sm" onclick="App.addPaymentRate()">${uiIcon('plus')} Add Tier</button>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead><tr><th>Label</th><th>Price (${this.escapeHtml(payCurrency)})</th><th>Minutes</th><th>Active</th><th style="text-align:right">Actions</th></tr></thead>
+                <tbody id="rates-tbody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
+
+        <aside class="payments-side">
+          <div class="card">
+            <div class="card-header"><h3>${uiIcon('zap')} Checkout summary</h3></div>
+            <div class="pay-summary">
+              <div class="pay-summary-row"><span>Price</span><strong>${fmtPay(s.amount || 0)}</strong></div>
+              <div class="pay-summary-row"><span>Time granted</span><strong>${s.minutes || 0} min</strong></div>
+              <div class="pay-summary-row"><span>Status</span><strong>${s.enabled ? 'Live' : 'Paused'}</strong></div>
+            </div>
+            <div class="pay-summary-note">The device receives ${s.minutes || 0} minutes once PayMongo confirms the payment.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3>${uiIcon('link')} Webhook</h3></div>
+            <p class="pay-hint">Add this URL in PayMongo Dashboard → Developers → Webhooks.</p>
+            <div class="pay-code">
+              <code id="pay-webhook-url">${webhookUrl}</code>
+              <button class="btn btn-outline btn-sm" type="button" onclick="App.copyText(document.getElementById('pay-webhook-url').textContent)">${uiIcon('copy')} Copy</button>
+            </div>
+            <p class="pay-hint" style="margin-top:0.75rem;margin-bottom:0">Subscribe to <code>payment.paid</code> and <code>checkout_session.payment.paid</code>.</p>
+          </div>
+
+          <div class="pay-tip">
+            ${uiIcon('info')}
+            <span>Keep the secret key and webhook secret private. Devices are only unlocked after a verified webhook.</span>
+          </div>
+        </aside>
       </div>
 
-      <div class="card" style="margin-top:1rem">
+      <div class="card" style="margin-top:1.25rem">
         <div class="card-header">
-          <h3>Online Pricing Tiers</h3>
-          <button class="btn btn-primary btn-sm" onclick="App.addPaymentRate()">Add Tier</button>
-        </div>
-        <div class="table-wrapper">
-          <table>
-            <thead><tr><th>Label</th><th>Price (PHP)</th><th>Minutes</th><th>Active</th><th>Actions</th></tr></thead>
-            <tbody id="rates-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card" style="margin-top:1rem">
-        <div class="card-header">
-          <h3>Payments History</h3>
-          <button class="btn btn-outline btn-sm" onclick="App.renderOnlinePayment()">Refresh</button>
+          <h3>${uiIcon('activity')} Payments history</h3>
+          <button class="btn btn-outline btn-sm" onclick="App.renderOnlinePayment()">${uiIcon('refresh')} Refresh</button>
         </div>
         <div class="table-wrapper">
           <table>
@@ -310,15 +401,15 @@ const App = {
         ? rates.map((r) => `
             <tr>
               <td>${this.escapeHtml(r.label || '-')}</td>
-              <td>${this.escapeHtml(String(r.amount))}</td>
+              <td class="pay-amount">${fmtPay(r.amount)}</td>
               <td>${r.minutes}</td>
-              <td>${r.is_active ? 'Yes' : 'No'}</td>
-              <td>
-                <button class="btn btn-sm btn-outline" onclick="App.editPaymentRate(${r.id})">Edit</button>
-                <button class="btn btn-sm btn-outline" onclick="App.deletePaymentRate(${r.id})">Delete</button>
+              <td><span class="status-badge ${r.is_active ? 'connected' : 'disconnected'}">${r.is_active ? 'Active' : 'Hidden'}</span></td>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-sm btn-outline" onclick="App.editPaymentRate(${r.id})">${uiIcon('edit')} Edit</button>
+                <button class="btn btn-sm btn-outline" onclick="App.deletePaymentRate(${r.id})">${uiIcon('trash')} Delete</button>
               </td>
             </tr>`).join('')
-        : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1rem">No tiers yet — add one for the portal PAY GCASH options.</td></tr>';
+        : '<tr><td colspan="5" class="table-empty">No tiers yet — add one to offer options in the portal.</td></tr>';
     };
     renderRates();
 
@@ -326,24 +417,25 @@ const App = {
     if (tbP) {
       tbP.innerHTML = (payments && payments.length)
         ? payments.map((p) => {
-            const badge = p.status === 'paid' ? 'connected' : (p.status === 'pending' ? '' : 'disconnected');
+            const badge = p.status === 'paid' ? 'connected' : (p.status === 'pending' ? 'pending' : 'disconnected');
             return `
               <tr>
                 <td><code>${this.escapeHtml(p.reference || '-')}</code></td>
                 <td><code>${this.escapeHtml(p.mac_address || '-')}</code></td>
-                <td>${this.escapeHtml(String(p.amount != null ? p.amount : 0))}</td>
+                <td class="pay-amount">${fmtPay(p.amount != null ? p.amount : 0)}</td>
                 <td>${p.minutes || 0}</td>
                 <td><span class="status-badge ${badge}">${this.escapeHtml(p.status || '-')}</span></td>
                 <td>${this.escapeHtml(p.paid_at || '-')}</td>
                 <td>${this.escapeHtml(p.created_at || '-')}</td>
               </tr>`;
           }).join('')
-        : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1rem">No online payments yet.</td></tr>';
+        : '<tr><td colspan="7" class="table-empty">No online payments yet.</td></tr>';
     }
 
     document.getElementById('payment-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target;
+      const btn = f.querySelector('button[type="submit"]');
       const payload = {
         enabled: f.enabled.checked,
         public_key: f.public_key.value.trim(),
@@ -351,46 +443,93 @@ const App = {
         webhook_secret: f.webhook_secret.value.trim(),
         amount: parseFloat(f.amount.value) || 0,
         minutes: parseInt(f.minutes.value, 10) || 0,
-        currency: f.currency.value.trim() || 'PHP',
+        currency: (f.currency.value.trim() || 'PHP').toUpperCase(),
         description: f.description.value.trim(),
         button_label: f.button_label.value.trim() || 'PAY GCASH',
         methods: PAY_METHODS.filter((m) => f['pm_' + m.id] && f['pm_' + m.id].checked).map((m) => m.id).join(',') || 'qrph',
       };
+      if (btn) btn.disabled = true;
       try {
         await api.updatePaymentSettings(payload);
         this.toast('Payment settings saved', 'success');
+        await this.renderOnlinePayment();
       } catch (err) {
         this.toast(err.message, 'error');
+        if (btn) btn.disabled = false;
       }
     });
   },
 
-  async addPaymentRate() {
-    const label = window.prompt('Tier label (e.g. 30 Minutes):', '');
-    if (label === null) return;
-    const amount = window.prompt('Price (PHP):', '10');
-    if (amount === null) return;
-    const minutes = window.prompt('Minutes granted:', '30');
-    if (minutes === null) return;
-    try {
-      await api.createPaymentRate({ label: label.trim(), amount: parseFloat(amount) || 0, minutes: parseInt(minutes, 10) || 0, is_active: true });
-      this.toast('Tier added', 'success');
-      this.renderOnlinePayment();
-    } catch (err) { this.toast(err.message, 'error'); }
+  copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => this.toast('Copied to clipboard', 'success'),
+        () => this.toast('Copy failed', 'error'),
+      );
+    } else {
+      this.toast('Copy not supported in this browser', 'error');
+    }
   },
 
-  async editPaymentRate(id) {
-    const r = (this._paymentRates || []).find((x) => x.id === id) || {};
-    const label = window.prompt('Tier label:', r.label || '');
-    if (label === null) return;
-    const amount = window.prompt('Price (PHP):', String(r.amount != null ? r.amount : 0));
-    if (amount === null) return;
-    const minutes = window.prompt('Minutes granted:', String(r.minutes != null ? r.minutes : 0));
-    if (minutes === null) return;
-    const active = window.confirm('Active? (OK = yes, Cancel = no)');
+  addPaymentRate() {
+    this.showPaymentRateModal();
+  },
+
+  editPaymentRate(id) {
+    const r = (this._paymentRates || []).find((x) => x.id === id);
+    this.showPaymentRateModal(r || { id });
+  },
+
+  showPaymentRateModal(rate = {}) {
+    const isEdit = Boolean(rate.id);
+    const currency = (this._paymentCurrency || 'PHP');
+    this.openModal(isEdit ? 'Edit pricing tier' : 'Add pricing tier', `
+      <form id="payment-rate-form">
+        <div class="form-group">
+          <label>Label</label>
+          <input name="label" class="form-control" value="${this.escapeHtml(rate.label || '')}" placeholder="e.g. 30 Minutes" required>
+        </div>
+        <div class="pay-grid-2">
+          <div class="form-group">
+            <label>Price (${this.escapeHtml(currency)})</label>
+            <input name="amount" type="number" step="0.01" min="0" class="form-control" value="${rate.amount != null ? rate.amount : 10}" required>
+          </div>
+          <div class="form-group">
+            <label>Minutes granted</label>
+            <input name="minutes" type="number" min="1" class="form-control" value="${rate.minutes != null ? rate.minutes : 30}" required>
+          </div>
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" name="is_active" ${rate.is_active === false ? '' : 'checked'}> Show this tier in the portal
+        </label>
+      </form>`, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: isEdit ? 'Save tier' : 'Add tier', class: 'btn btn-primary', action: () => this.savePaymentRate(isEdit ? rate.id : null) },
+    ]);
+  },
+
+  async savePaymentRate(id) {
+    const f = document.getElementById('payment-rate-form');
+    if (!f) return;
+    const payload = {
+      label: f.label.value.trim(),
+      amount: parseFloat(f.amount.value) || 0,
+      minutes: parseInt(f.minutes.value, 10) || 0,
+      is_active: f.is_active.checked,
+    };
+    if (!payload.label || payload.minutes < 1) {
+      this.toast('Label and minutes are required', 'error');
+      return;
+    }
     try {
-      await api.updatePaymentRate(id, { label: label.trim(), amount: parseFloat(amount) || 0, minutes: parseInt(minutes, 10) || 0, is_active: active });
-      this.toast('Tier updated', 'success');
+      if (id) {
+        await api.updatePaymentRate(id, payload);
+        this.toast('Tier updated', 'success');
+      } else {
+        await api.createPaymentRate(payload);
+        this.toast('Tier added', 'success');
+      }
+      this.closeModal();
       this.renderOnlinePayment();
     } catch (err) { this.toast(err.message, 'error'); }
   },

@@ -623,6 +623,39 @@ class ApiClient {
 
   async deleteCompanyLogo() { return this.request('DELETE', '/settings/logo'); }
 
+  // --- Chat ---
+  async getChatThreads() { return this.get('/chat/threads'); }
+  async getChatMessages(threadId, before = 0) {
+    return this.get(`/chat/threads/${threadId}/messages${before ? `?before=${before}` : ''}`);
+  }
+  async sendChatMessage(threadId, body) { return this.post(`/chat/threads/${threadId}/messages`, { body }); }
+  async markChatRead(threadId) { return this.post(`/chat/threads/${threadId}/read`); }
+  async deleteChatThread(threadId) { return this.delete(`/chat/threads/${threadId}`); }
+  async getChatUnread() { return this.get('/chat/unread'); }
+
+  async uploadChatImage(threadId, blob) {
+    const headers = { 'Content-Type': 'image/jpeg' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${this.baseUrl}/chat/threads/${threadId}/image`, {
+      method: 'POST',
+      headers,
+      body: blob,
+    });
+
+    if (response.status === 401) {
+      this.setToken(null);
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Image upload failed');
+    }
+    return data;
+  }
+
   async getRadiusProfiles(routerId) {
     return this.get(`/radius-profiles/router/${routerId}`);
   }

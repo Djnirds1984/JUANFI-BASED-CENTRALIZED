@@ -123,6 +123,7 @@ const App = {
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('dashboard-screen').classList.add('active');
     this.loadSystemSettings();
+    this.startChatNotifications();
     this.navigate('overview');
   },
 
@@ -143,6 +144,7 @@ const App = {
 
   logout() {
     api.setToken(null);
+    this.stopChatNotifications();
     this._systemSettings = null;
     this._systemSettingsPromise = null;
     this.systemCurrency = 'PHP';
@@ -165,6 +167,7 @@ const App = {
     this.clearHotspotPollers();
     this.clearPppPollers();
     this.clearRadiusPollers();
+    this.clearChatPollers();
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -178,6 +181,7 @@ const App = {
       interfaces: 'Interfaces',
       vouchers: 'Vouchers',
       radius: 'RADIUS',
+      chat: 'Chat',
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
@@ -205,6 +209,7 @@ const App = {
         case 'interfaces': await this.renderInterfaces(); break;
         case 'vouchers': await this.renderVouchers(); break;
         case 'radius': await this.renderRadius(); break;
+        case 'chat': await this.renderChat(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
         case 'payments': await this.renderOnlinePayment(); break;
@@ -8698,6 +8703,369 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       this.toast('Device deleted', 'success');
       this.renderNodeMcu();
     } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
+  },
+
+  // ---------- Chat ----------
+  async renderChat() {
+    const content = document.getElementById('page-content');
+    content.innerHTML = '<div class="empty-state"><p>Loading conversations...</p></div>';
+
+    let threads = [];
+    try {
+      threads = await api.getChatThreads();
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><p>Error: ${this.escapeHtml(err.message)}</p></div>`;
+      return;
+    }
+    this._chatThreads = threads || [];
+    this._chatSignature = '';
+
+    content.innerHTML = `
+      <div class="chat-layout">
+        <div class="card chat-threads-card">
+          <div class="chat-threads-head">
+            <h3>${uiIcon('message')} Conversations</h3>
+            <button class="btn btn-outline btn-sm" onclick="App.refreshChat()">${uiIcon('refresh')} Refresh</button>
+          </div>
+          <div class="chat-thread-list" id="chat-thread-list"></div>
+        </div>
+        <div class="card chat-convo-card" id="chat-convo"></div>
+      </div>`;
+
+    this.renderChatThreadList();
+
+    const convo = document.getElementById('chat-convo');
+    if (this._chatActiveId && this._chatThreads.some((t) => t.id === this._chatActiveId)) {
+      await this.selectChatThread(this._chatActiveId, true);
+    } else {
+      this._chatActiveId = null;
+      convo.innerHTML = `<div class="chat-panel-empty">${this._chatThreads.length
+        ? 'Select a conversation to read messages.'
+        : 'No conversations yet. Messages sent from the hotspot portal will appear here.'}</div>`;
+    }
+
+    this.startChatPollers();
+  },
+
+  renderChatThreadList() {
+    const el = document.getElementById('chat-thread-list');
+    if (!el) return;
+    const threads = this._chatThreads || [];
+    if (!threads.length) {
+      el.innerHTML = '<div class="chat-panel-empty">No conversations yet.</div>';
+      return;
+    }
+    el.innerHTML = threads.map((t) => `
+      <div class="chat-thread ${t.id === this._chatActiveId ? 'active' : ''}" onclick="App.selectChatThread(${t.id})">
+        <div class="chat-thread-avatar">${uiIcon('user')}</div>
+        <div class="chat-thread-main">
+          <div class="chat-thread-top">
+            <span class="chat-thread-name">${this.escapeHtml(this.chatThreadLabel(t))}</span>
+            <span class="chat-thread-time">${this.chatTime(t.last_message_at || t.created_at, true)}</span>
+          </div>
+          <div class="chat-thread-sub">${this.escapeHtml(t.router_name || (t.router_id ? `Router #${t.router_id}` : 'No router'))}</div>
+          <div class="chat-thread-preview">${this.escapeHtml(t.last_preview || 'No messages yet')}</div>
+        </div>
+        ${t.unread_admin ? `<span class="chat-thread-unread">${t.unread_admin > 99 ? '99+' : t.unread_admin}</span>` : ''}
+      </div>`).join('');
+  },
+
+  chatThreadLabel(thread) {
+    const mac = thread.mac || '';
+    if (mac.indexOf('ip:') === 0) return mac.slice(3);
+    return mac || `Thread #${thread.id}`;
+  },
+
+  chatTime(value, withDate) {
+    if (!value) return '';
+    const iso = String(value).indexOf('T') === -1 ? String(value).replace(' ', 'T') + 'Z' : value;
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) return '';
+    const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (!withDate) return time;
+    const today = new Date();
+    const sameDay = date.toDateString() === today.toDateString();
+    return sameDay ? time : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+  },
+
+  async selectChatThread(threadId, keepComposer) {
+    const thread = (this._chatThreads || []).find((t) => t.id === threadId);
+    if (!thread) return;
+    this._chatActiveId = threadId;
+    if (!keepComposer) {
+      this._chatPendingImage = null;
+      this._chatSignature = '';
+    }
+    this.renderChatThreadList();
+
+    const convo = document.getElementById('chat-convo');
+    if (!convo) return;
+    convo.innerHTML = `
+      <div class="chat-convo-head">
+        <div class="chat-convo-title">
+          <div class="chat-thread-avatar">${uiIcon('user')}</div>
+          <div>
+            <h3>${this.escapeHtml(this.chatThreadLabel(thread))}</h3>
+            <span>${this.escapeHtml(thread.router_name || (thread.router_id ? `Router #${thread.router_id}` : 'No router'))}</span>
+          </div>
+        </div>
+        <div class="chat-convo-actions">
+          <button class="btn btn-outline btn-sm" onclick="App.deleteChatThread(${thread.id})">${uiIcon('trash')} Delete</button>
+        </div>
+      </div>
+      <div class="chat-convo-body" id="chat-convo-body"></div>
+      <div class="chat-composer">
+        <div class="chat-attach-preview" id="chat-attach-preview">
+          <img id="chat-attach-thumb" alt="Attachment preview">
+          <span>Image ready to send</span>
+          <button type="button" onclick="App.clearChatAttachment()" aria-label="Remove image">&times;</button>
+        </div>
+        <div class="chat-input-row">
+          <button class="btn btn-outline" style="flex:0 0 auto;" onclick="document.getElementById('chat-admin-file').click()" title="Attach image">${uiIcon('paperclip')}</button>
+          <textarea class="chat-textarea" id="chat-admin-textarea" rows="1" placeholder="Reply to this user..."></textarea>
+          <button class="btn btn-primary" style="flex:0 0 auto;" onclick="App.sendAdminChat()">${uiIcon('arrow-up')} Send</button>
+        </div>
+        <input type="file" id="chat-admin-file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="App.handleAdminChatFile(event)">
+      </div>`;
+
+    const textarea = document.getElementById('chat-admin-textarea');
+    if (textarea) {
+      textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          this.sendAdminChat();
+        }
+      });
+      textarea.addEventListener('input', () => {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 110) + 'px';
+      });
+    }
+
+    try {
+      const res = await api.getChatMessages(threadId);
+      this.paintChatMessages(res.messages || []);
+      const local = (this._chatThreads || []).find((t) => t.id === threadId);
+      if (local) local.unread_admin = 0;
+      this.renderChatThreadList();
+      this.refreshChatBadge();
+    } catch (err) {
+      const body = document.getElementById('chat-convo-body');
+      if (body) body.innerHTML = `<div class="chat-panel-empty">Error: ${this.escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  paintChatMessages(messages) {
+    const body = document.getElementById('chat-convo-body');
+    if (!body) return;
+    if (!messages.length) {
+      this._chatSignature = '0';
+      body.innerHTML = '<div class="chat-panel-empty">No messages yet.</div>';
+      return;
+    }
+    this._chatSignature = `${messages.length}:${messages[messages.length - 1].id}`;
+    body.innerHTML = messages.map((m) => {
+      const out = m.sender === 'admin';
+      const content = m.image_path
+        ? `<a href="${this.escapeHtml(m.image_path)}" target="_blank" rel="noopener"><img src="${this.escapeHtml(m.image_path)}" alt="Chat image"></a>`
+        : this.escapeHtml(m.body);
+      return `
+        <div class="chat-row ${out ? 'out' : 'in'}">
+          <div class="chat-bubble">${content}</div>
+          <div class="chat-time">${out ? 'You' : 'User'} · ${this.chatTime(m.created_at, true)}</div>
+        </div>`;
+    }).join('');
+    body.scrollTop = body.scrollHeight;
+  },
+
+  async refreshChat() {
+    if (this.currentPage !== 'chat') return;
+    try {
+      this._chatThreads = await api.getChatThreads();
+      this.renderChatThreadList();
+      if (this._chatActiveId) {
+        const res = await api.getChatMessages(this._chatActiveId);
+        const messages = res.messages || [];
+        const signature = messages.length ? `${messages.length}:${messages[messages.length - 1].id}` : '0';
+        if (signature !== this._chatSignature) this.paintChatMessages(messages);
+        const local = (this._chatThreads || []).find((t) => t.id === this._chatActiveId);
+        if (local) local.unread_admin = 0;
+      }
+      this.refreshChatBadge();
+    } catch (err) {
+      this.toast('Failed to refresh chats: ' + err.message, 'error');
+    }
+  },
+
+  async sendAdminChat() {
+    if (!this._chatActiveId || this._chatSending) return;
+    const textarea = document.getElementById('chat-admin-textarea');
+    if (!textarea) return;
+
+    this._chatSending = true;
+    try {
+      if (this._chatPendingImage) {
+        await api.uploadChatImage(this._chatActiveId, this._chatPendingImage);
+        this.clearChatAttachment();
+      } else {
+        const text = textarea.value.trim();
+        if (!text) return;
+        await api.sendChatMessage(this._chatActiveId, text);
+        textarea.value = '';
+        textarea.style.height = 'auto';
+      }
+      const res = await api.getChatMessages(this._chatActiveId);
+      this.paintChatMessages(res.messages || []);
+      await this.refreshChat();
+    } catch (err) {
+      this.toast('Failed to send: ' + err.message, 'error');
+    } finally {
+      this._chatSending = false;
+    }
+  },
+
+  handleAdminChatFile(event) {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      this.toast('Image is too large (max 10MB)', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => this.toast('Could not read that image', 'error');
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => this.toast('Could not read that image', 'error');
+      img.onload = () => {
+        const maxSide = 1280;
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            this.toast('Could not process that image', 'error');
+            return;
+          }
+          this._chatPendingImage = blob;
+          const preview = document.getElementById('chat-attach-preview');
+          const thumb = document.getElementById('chat-attach-thumb');
+          if (preview && thumb) {
+            thumb.src = URL.createObjectURL(blob);
+            preview.classList.add('show');
+          }
+        }, 'image/jpeg', 0.85);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  },
+
+  clearChatAttachment() {
+    const preview = document.getElementById('chat-attach-preview');
+    const thumb = document.getElementById('chat-attach-thumb');
+    if (thumb && thumb.src) URL.revokeObjectURL(thumb.src);
+    if (thumb) thumb.removeAttribute('src');
+    if (preview) preview.classList.remove('show');
+    this._chatPendingImage = null;
+  },
+
+  async deleteChatThread(threadId) {
+    if (!confirm('Delete this conversation and all of its messages? This cannot be undone.')) return;
+    try {
+      await api.deleteChatThread(threadId);
+      if (this._chatActiveId === threadId) {
+        this._chatActiveId = null;
+        this._chatSignature = '';
+      }
+      this._chatThreads = (this._chatThreads || []).filter((t) => t.id !== threadId);
+      this.renderChatThreadList();
+      const convo = document.getElementById('chat-convo');
+      if (convo && !this._chatActiveId) {
+        convo.innerHTML = `<div class="chat-panel-empty">${this._chatThreads.length
+          ? 'Select a conversation to read messages.'
+          : 'No conversations yet. Messages sent from the hotspot portal will appear here.'}</div>`;
+      }
+      this.refreshChatBadge();
+      this.toast('Conversation deleted', 'success');
+    } catch (err) {
+      this.toast('Failed to delete: ' + err.message, 'error');
+    }
+  },
+
+  startChatPollers() {
+    this.clearChatPollers();
+    this._chatPollTimer = setInterval(() => {
+      if (document.hidden || this.currentPage !== 'chat') return;
+      this.refreshChat();
+    }, 5000);
+  },
+
+  clearChatPollers() {
+    if (this._chatPollTimer) {
+      clearInterval(this._chatPollTimer);
+      this._chatPollTimer = null;
+    }
+  },
+
+  startChatNotifications() {
+    if (this._chatNavTimer) clearInterval(this._chatNavTimer);
+    this._chatNotifiedId = 0;
+    this._chatBaselineSet = false;
+    this.pollChatNotifications();
+    this._chatNavTimer = setInterval(() => this.pollChatNotifications(), 10000);
+  },
+
+  stopChatNotifications() {
+    if (this._chatNavTimer) {
+      clearInterval(this._chatNavTimer);
+      this._chatNavTimer = null;
+    }
+    this.updateChatBadge(0);
+  },
+
+  async pollChatNotifications() {
+    try {
+      const data = await api.getChatUnread();
+      const unread = data.unread || 0;
+      const lastId = data.last_id || 0;
+      this.updateChatBadge(unread);
+      if (!this._chatBaselineSet) {
+        this._chatBaselineSet = true;
+        this._chatNotifiedId = lastId;
+        return;
+      }
+      if (lastId > this._chatNotifiedId) {
+        this._chatNotifiedId = lastId;
+        if (unread > 0 && this.currentPage !== 'chat') {
+          this.toast('New chat message from a hotspot user', 'info');
+        }
+      }
+    } catch (err) {
+      // notifications are best-effort; ignore transient errors
+    }
+  },
+
+  async refreshChatBadge() {
+    try {
+      const data = await api.getChatUnread();
+      this.updateChatBadge(data.unread || 0);
+      this._chatNotifiedId = Math.max(this._chatNotifiedId || 0, data.last_id || 0);
+    } catch (err) {
+      // ignore
+    }
+  },
+
+  updateChatBadge(unread) {
+    const badge = document.getElementById('chat-nav-badge');
+    if (!badge) return;
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.style.display = unread > 0 ? '' : 'none';
   },
 
   closeModal() {

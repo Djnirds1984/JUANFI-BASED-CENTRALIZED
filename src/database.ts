@@ -324,6 +324,33 @@ export function initializeDatabase(): void {
       logo_path TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS chat_threads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mac TEXT NOT NULL,
+      router_id INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT,
+      last_preview TEXT NOT NULL DEFAULT '',
+      unread_admin INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(mac, router_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_threads_last ON chat_threads(last_message_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL,
+      sender TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      image_path TEXT NOT NULL DEFAULT '',
+      read_by_admin INTEGER NOT NULL DEFAULT 0,
+      read_by_user INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, id);
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

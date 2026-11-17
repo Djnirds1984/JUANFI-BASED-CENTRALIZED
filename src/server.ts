@@ -30,6 +30,7 @@ import radiusProfileRoutes from './api/radiusProfiles';
 import radiusSessionRoutes from './api/radiusSessions';
 import toolsRoutes from './api/tools';
 import settingsRoutes from './api/settings';
+import chatRoutes from './api/chat';
 
 const app = express();
 const server = http.createServer(app);
@@ -68,6 +69,7 @@ app.use('/api/radius-profiles', radiusProfileRoutes);
 app.use('/api/radius-sessions', radiusSessionRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

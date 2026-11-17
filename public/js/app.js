@@ -4685,8 +4685,8 @@ const App = {
 
     const fmtBps = (bps) => {
       if (!bps || bps === 0) return 'Unlimited';
-      if (bps >= 1000000) return `${Math.round(bps / 1000000)} Mbps`;
-      if (bps >= 1000) return `${Math.round(bps / 1000)} Kbps`;
+      if (bps >= 1000000) return `${Number((bps / 1000000).toFixed(3))} Mbps`;
+      if (bps >= 1000) return `${Number((bps / 1000).toFixed(1))} Kbps`;
       return `${bps} bps`;
     };
 
@@ -4801,6 +4801,7 @@ const App = {
       if (s >= 3600) return 'hours';
       return 'minutes';
     };
+    const toMbps = (bps) => (bps ? Number((bps / 1000000).toFixed(3)) : 0);
 
     return `
       <form id="radius-profile-form">
@@ -4810,28 +4811,28 @@ const App = {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
           <div class="form-group">
-            <label>Download Speed (bps)</label>
-            <input type="number" name="rate_rx" value="${p.rate_rx || 0}" min="0" placeholder="e.g. 5000000 for 5Mbps">
+            <label>Download Speed (Mbps)</label>
+            <input type="number" name="rate_rx" value="${toMbps(p.rate_rx)}" min="0" step="0.001" placeholder="e.g. 5">
           </div>
           <div class="form-group">
-            <label>Upload Speed (bps)</label>
-            <input type="number" name="rate_tx" value="${p.rate_tx || 0}" min="0" placeholder="e.g. 1000000 for 1Mbps">
+            <label>Upload Speed (Mbps)</label>
+            <input type="number" name="rate_tx" value="${toMbps(p.rate_tx)}" min="0" step="0.001" placeholder="e.g. 1">
           </div>
           <div class="form-group">
-            <label>Burst Download (bps)</label>
-            <input type="number" name="burst_rx" value="${p.burst_rx || 0}" min="0">
+            <label>Burst Download (Mbps)</label>
+            <input type="number" name="burst_rx" value="${toMbps(p.burst_rx)}" min="0" step="0.001">
           </div>
           <div class="form-group">
-            <label>Burst Upload (bps)</label>
-            <input type="number" name="burst_tx" value="${p.burst_tx || 0}" min="0">
+            <label>Burst Upload (Mbps)</label>
+            <input type="number" name="burst_tx" value="${toMbps(p.burst_tx)}" min="0" step="0.001">
           </div>
           <div class="form-group">
-            <label>Burst Threshold Down (bps)</label>
-            <input type="number" name="burst_threshold_rx" value="${p.burst_threshold_rx || 0}" min="0">
+            <label>Burst Threshold Down (Mbps)</label>
+            <input type="number" name="burst_threshold_rx" value="${toMbps(p.burst_threshold_rx)}" min="0" step="0.001">
           </div>
           <div class="form-group">
-            <label>Burst Threshold Up (bps)</label>
-            <input type="number" name="burst_threshold_tx" value="${p.burst_threshold_tx || 0}" min="0">
+            <label>Burst Threshold Up (Mbps)</label>
+            <input type="number" name="burst_threshold_tx" value="${toMbps(p.burst_threshold_tx)}" min="0" step="0.001">
           </div>
           <div class="form-group">
             <label>Burst Time Down (seconds)</label>
@@ -4931,14 +4932,16 @@ const App = {
       ? form.validity_fixed_expiry.value.replace('T', ' ')
       : null;
 
+    const mbps = (v) => Math.round((parseFloat(v) || 0) * 1000000);
+
     const data = {
       name: form.name.value.trim(),
-      rate_rx: parseInt(form.rate_rx.value) || 0,
-      rate_tx: parseInt(form.rate_tx.value) || 0,
-      burst_rx: parseInt(form.burst_rx.value) || 0,
-      burst_tx: parseInt(form.burst_tx.value) || 0,
-      burst_threshold_rx: parseInt(form.burst_threshold_rx.value) || 0,
-      burst_threshold_tx: parseInt(form.burst_threshold_tx.value) || 0,
+      rate_rx: mbps(form.rate_rx.value),
+      rate_tx: mbps(form.rate_tx.value),
+      burst_rx: mbps(form.burst_rx.value),
+      burst_tx: mbps(form.burst_tx.value),
+      burst_threshold_rx: mbps(form.burst_threshold_rx.value),
+      burst_threshold_tx: mbps(form.burst_threshold_tx.value),
       burst_time_rx: parseInt(form.burst_time_rx.value) || 0,
       burst_time_tx: parseInt(form.burst_time_tx.value) || 0,
       session_timeout: sessionTimeout,

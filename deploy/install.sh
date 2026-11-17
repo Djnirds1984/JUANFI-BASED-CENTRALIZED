@@ -137,6 +137,15 @@ if [ "$SAME_DIR" = false ]; then
     fi
 fi
 
+# dist/ is gitignored, so a fresh clone into APP_DIR has no build output and the
+# SAME_DIR path above copies nothing. Build here or the unit starts without a server.
+if [ ! -f "$APP_DIR/dist/server.js" ]; then
+    echo "  No build found in $APP_DIR, compiling TypeScript..."
+    cd "$APP_DIR"
+    npm install --production=false
+    npm run build
+fi
+
 # Install production dependencies
 echo "  Installing production dependencies..."
 cd "$APP_DIR"
@@ -185,6 +194,11 @@ systemctl enable "$APP_NAME"
 
 # Start service
 echo "[7/9] Starting service..."
+if [ ! -f "$APP_DIR/dist/server.js" ]; then
+    echo "ERROR: $APP_DIR/dist/server.js is missing; refusing to start a service that will crash-loop."
+    echo "  Build it manually: cd $APP_DIR && npm install --production=false && npm run build"
+    exit 1
+fi
 systemctl start "$APP_NAME"
 
 # Wait and check status

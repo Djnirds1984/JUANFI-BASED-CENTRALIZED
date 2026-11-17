@@ -66,10 +66,15 @@ npm install --production
 
 # A pruned or failed native build leaves better-sqlite3 without its binding, so the
 # restarted service would die immediately with "Could not locate the bindings file".
-if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+# The binding is loaded lazily by the Database constructor, so a plain require()
+# passes even when it is missing - open a real database to test it.
+SQLITE_CHECK="const D=require('$APP_DIR/node_modules/better-sqlite3');new D(':memory:').close()"
+if ! node -e "$SQLITE_CHECK" &>/dev/null; then
     echo "  better-sqlite3 binding missing, compiling from source (takes a few minutes on ARM)..."
+    command -v make &>/dev/null && command -v g++ &>/dev/null && command -v python3 &>/dev/null \
+        || apt-get install -y -qq python3 make g++ > /dev/null 2>&1
     npm rebuild better-sqlite3 --build-from-source
-    node -e "require('$APP_DIR/node_modules/better-sqlite3')" || {
+    node -e "$SQLITE_CHECK" || {
         echo "ERROR: better-sqlite3 still has no usable native binding."
         echo "  Retry manually: cd $APP_DIR && npm rebuild better-sqlite3 --build-from-source"
         exit 1

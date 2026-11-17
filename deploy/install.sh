@@ -153,8 +153,10 @@ npm install --production 2>/dev/null || npm install --production --ignore-script
 
 # --ignore-scripts and some ARM prebuild failures leave better-sqlite3 without its
 # native binding, which crashes the service on boot with "Could not locate the
-# bindings file". Compile from source instead of letting it crash-loop.
-if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+# bindings file". The constructor loads the binding lazily, so require() alone
+# proves nothing - open a real database to test it.
+SQLITE_CHECK="const D=require('$APP_DIR/node_modules/better-sqlite3');new D(':memory:').close()"
+if ! node -e "$SQLITE_CHECK" &>/dev/null; then
     echo "  better-sqlite3 binding missing, compiling from source (takes a few minutes on ARM)..."
     npm rebuild better-sqlite3 --build-from-source
 fi
@@ -207,7 +209,7 @@ if [ ! -f "$APP_DIR/dist/server.js" ]; then
     echo "  Build it manually: cd $APP_DIR && npm install --production=false && npm run build"
     exit 1
 fi
-if ! node -e "require('$APP_DIR/node_modules/better-sqlite3')" &>/dev/null; then
+if ! node -e "const D=require('$APP_DIR/node_modules/better-sqlite3');new D(':memory:').close()" &>/dev/null; then
     echo "ERROR: better-sqlite3 has no usable native binding; refusing to start the service."
     echo "  Retry manually: cd $APP_DIR && npm rebuild better-sqlite3 --build-from-source"
     exit 1

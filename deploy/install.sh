@@ -71,22 +71,21 @@ fi
 if [ -n "$NODE_PATH" ]; then
     NODE_VERSION=$("$NODE_PATH" -v | cut -d'.' -f1 | sed 's/v//')
     if [ "$NODE_VERSION" -lt "$NODE_MIN_VERSION" ]; then
-        echo "  WARNING: Node.js version too old ($("$NODE_PATH" -v)). Need v$NODE_MIN_VERSION or higher."
-        echo "  Please install Node.js manually and re-run this script."
-    else
-        echo "  Node.js $("$NODE_PATH" -v) found at $NODE_PATH - OK"
-        # Add to PATH for this script
-        export PATH="$(dirname $NODE_PATH):$PATH"
+        echo "  ERROR: Node.js version too old ($("$NODE_PATH" -v)). Need v$NODE_MIN_VERSION or higher."
+        echo "  Install Node.js manually and re-run this script."
+        exit 1
     fi
+    echo "  Node.js $("$NODE_PATH" -v) found at $NODE_PATH - OK"
+    # Add to PATH for this script
+    export PATH="$(dirname $NODE_PATH):$PATH"
 else
-    echo "  WARNING: Node.js not found in common locations."
-    echo "  Please install Node.js v$NODE_MIN_VERSION+ manually."
-    echo "  Common installation methods:"
-    echo "    - Using NodeSource: curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
+    echo "  ERROR: Node.js not found in common locations."
+    echo "  Install Node.js v$NODE_MIN_VERSION+ manually, then re-run this script:"
     echo "    - Using nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && nvm install 20"
     echo ""
     echo "  If Node.js is already installed, find its location with: which node"
     echo "  Then add it to the script's search path or create a symlink in /usr/local/bin/"
+    exit 1
 fi
 
 echo "  Node.js: $(node -v 2>/dev/null || echo 'not installed')"
@@ -178,6 +177,9 @@ setfacl -R -d -m u:"$APP_USER":rwx "$APP_DIR/hotspot"
 # Install systemd service
 echo "[6/9] Installing systemd service..."
 cp "$SCRIPT_DIR/deploy/mikrotik-controller.service" /etc/systemd/system/
+# The unit ships with /usr/bin/node; hosts using nvm or a non-standard prefix
+# would fail at EXEC with status=203, so point it at the binary we detected.
+sed -i "s|^ExecStart=/usr/bin/node |ExecStart=$NODE_PATH |" /etc/systemd/system/$APP_NAME.service
 systemctl daemon-reload
 systemctl enable "$APP_NAME"
 

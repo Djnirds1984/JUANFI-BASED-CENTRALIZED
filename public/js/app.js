@@ -1,3 +1,7 @@
+function uiIcon(name, cls) {
+  return '<svg class="icon' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + name + '"></use></svg>';
+}
+
 const App = {
   currentPage: 'overview',
   selectedRouterId: null,
@@ -654,7 +658,7 @@ const App = {
         <div class="form-group">
           <label>Port</label>
           <input type="number" name="port" value="8728">
-          <small style="color:var(--text-secondary);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
+          <small style="color:var(--text-muted);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
         </div>
         <div class="form-group">
           <label>Username</label>
@@ -686,7 +690,7 @@ const App = {
               RADIUS Mode
             </label>
           </div>
-          <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
+          <small style="color:var(--text-muted);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
         </div>
         <div class="form-group">
           <label>Portal Mode</label>
@@ -700,7 +704,7 @@ const App = {
               Panel-hosted (stub redirect)
             </label>
           </div>
-          <small style="color:var(--text-secondary);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
+          <small style="color:var(--text-muted);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
         </div>
         <div id="radius-secret-group" class="form-group" style="display:none">
           <label>RADIUS Shared Secret</label>
@@ -708,7 +712,7 @@ const App = {
             <input type="text" name="radius_shared_secret" placeholder="Auto-generated if empty" style="flex:1">
             <button type="button" class="btn btn-sm btn-outline" onclick="document.querySelector('#add-router-form [name=radius_shared_secret]').value=crypto.getRandomValues(new Uint8Array(16)).reduce((s,b)=>s+b.toString(16).padStart(2,'0'),'')">Generate</button>
           </div>
-          <small style="color:var(--text-secondary);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
+          <small style="color:var(--text-muted);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
         </div>
       </form>
     `, [
@@ -782,7 +786,7 @@ const App = {
           <div class="form-group">
             <label>Port</label>
             <input type="number" name="port" value="${router.port}">
-            <small style="color:var(--text-secondary);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
+            <small style="color:var(--text-muted);font-size:0.75rem">8728 for RouterOS API, 80 for REST API</small>
           </div>
           <div class="form-group">
             <label>Username</label>
@@ -814,7 +818,7 @@ const App = {
                 RADIUS Mode
               </label>
             </div>
-            <small style="color:var(--text-secondary);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
+            <small style="color:var(--text-muted);font-size:0.75rem">RADIUS: panel authenticates users directly (no hotspot users pushed to router)</small>
           </div>
           <div class="form-group">
             <label>Portal Mode</label>
@@ -828,7 +832,7 @@ const App = {
                 Panel-hosted (stub redirect)
               </label>
             </div>
-            <small style="color:var(--text-secondary);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
+            <small style="color:var(--text-muted);font-size:0.75rem">MikroTik-hosted: portal files uploaded to router. Panel-hosted: stub on router redirects to panel portal.</small>
           </div>
           <div id="radius-secret-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
             <label>RADIUS Shared Secret</label>
@@ -836,7 +840,7 @@ const App = {
               <input type="text" name="radius_shared_secret" value="${this.escapeHtml(router.radius_shared_secret || '')}" placeholder="Leave blank to keep current" style="flex:1">
               <button type="button" class="btn btn-sm btn-outline" id="regen-secret-btn">Regenerate</button>
             </div>
-            <small style="color:var(--text-secondary);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
+            <small style="color:var(--text-muted);font-size:0.75rem">Must match the RADIUS secret configured on the MikroTik router</small>
           </div>
           <div id="radius-tools-group" class="form-group" style="display:${currentMode === 'radius' ? '' : 'none'}">
             <label>RADIUS Diagnostics</label>
@@ -891,7 +895,7 @@ const App = {
           const result = await api.testRadiusConnectivity(routerId);
           resultsDiv.style.display = '';
           resultsDiv.innerHTML = `
-            <div style="background:var(--bg-secondary,#f1f5f9);border-radius:0.5rem;padding:0.75rem;font-size:0.8125rem;font-family:monospace">
+            <div style="background:var(--bg);border-radius:0.5rem;padding:0.75rem;font-size:0.8125rem;font-family:monospace">
               <div style="margin-bottom:0.375rem"><strong>RADIUS Server:</strong> <span style="color:${result.serverRunning ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${result.serverRunning ? 'RUNNING' : 'NOT RUNNING'}</span></div>
               <div style="margin-bottom:0.375rem"><strong>Port Check:</strong> <span style="color:${result.portCheck.includes('listening') ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${this.escapeHtml(result.portCheck)}</span></div>
               <div style="margin-bottom:0.375rem"><strong>Router Config:</strong> <span style="color:${result.routerConfigured ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)'}">${result.routerConfigured ? 'RADIUS enabled' : 'NOT configured'}</span></div>
@@ -982,14 +986,14 @@ const App = {
         case 'accounting': return 'var(--info,#3b82f6)';
         case 'warning': return 'var(--warning,#f59e0b)';
         case 'error': return 'var(--danger,#ef4444)';
-        default: return 'var(--text-secondary,#64748b)';
+        default: return 'var(--text-muted)';
       }
     };
 
     this.openModal('RADIUS Logs', `
       <div style="max-height:60vh;overflow-y:auto">
         ${logs.length === 0
-          ? '<div style="text-align:center;padding:2rem;color:var(--text-secondary)">No RADIUS events recorded yet</div>'
+          ? '<div style="text-align:center;padding:2rem;color:var(--text-muted)">No RADIUS events recorded yet</div>'
           : `<table style="width:100%;font-size:0.8125rem">
             <thead>
               <tr style="border-bottom:1px solid var(--border,#e2e8f0)">
@@ -1015,7 +1019,7 @@ const App = {
         }
       </div>
       <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:0.75rem;color:var(--text-secondary)">${logs.length} event${logs.length !== 1 ? 's' : ''}</span>
+        <span style="font-size:0.75rem;color:var(--text-muted)">${logs.length} event${logs.length !== 1 ? 's' : ''}</span>
         <button type="button" class="btn btn-sm btn-outline" id="refresh-logs-btn">Refresh</button>
       </div>
     `, [
@@ -2831,7 +2835,7 @@ const App = {
       } else if (step.current === 5) {
         fields = `<div class="form-group"><label>Admin Username</label><input type="text" id="hs-wiz-user" value="${this.escapeHtml(data.adminUsername)}" placeholder="e.g. admin" required></div><div class="form-group"><label>Admin Password</label><input type="password" id="hs-wiz-pass" value="${this.escapeHtml(data.adminPassword)}" placeholder="Password" required></div>`;
       }
-      return `<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="font-size:13px;color:var(--text-muted)">Step ${num} of ${total}</span><div style="flex:1;height:4px;background:var(--border-color);border-radius:2px;overflow:hidden"><div style="width:${(num/total)*100}%;height:100%;background:var(--primary-color);border-radius:2px;transition:width 0.2s"></div></div></div><h3 style="margin:0 0 4px 0;font-size:16px">${s.title}</h3><p style="margin:0;font-size:13px;color:var(--text-muted)">${s.desc}</p></div>${fields}`;
+      return `<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="font-size:13px;color:var(--text-muted)">Step ${num} of ${total}</span><div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:${(num/total)*100}%;height:100%;background:var(--primary-color);border-radius:2px;transition:width 0.2s"></div></div></div><h3 style="margin:0 0 4px 0;font-size:16px">${s.title}</h3><p style="margin:0;font-size:13px;color:var(--text-muted)">${s.desc}</p></div>${fields}`;
     };
 
     const render = () => {
@@ -4176,14 +4180,14 @@ const App = {
       <div class="voucher-summary" style="margin-bottom:1.5rem">
         <div class="voucher-summary-grid">
           <div class="voucher-summary-card voucher-summary-available">
-            <div class="voucher-summary-icon">○</div>
+            <div class="voucher-summary-icon">${uiIcon('clock')}</div>
             <div class="voucher-summary-content">
               <div class="voucher-summary-value">${availableCount}</div>
               <div class="voucher-summary-label">Available</div>
             </div>
           </div>
           <div class="voucher-summary-card voucher-summary-used">
-            <div class="voucher-summary-icon">✓</div>
+            <div class="voucher-summary-icon">${uiIcon('check-circle')}</div>
             <div class="voucher-summary-content">
               <div class="voucher-summary-value">${usedCount}</div>
               <div class="voucher-summary-label">Used</div>
@@ -4349,21 +4353,21 @@ const App = {
         <div class="voucher-summary" style="margin-bottom:1.5rem">
           <div class="voucher-summary-grid">
             <div class="voucher-summary-card voucher-summary-available">
-              <div class="voucher-summary-icon">○</div>
+              <div class="voucher-summary-icon">${uiIcon('clock')}</div>
               <div class="voucher-summary-content">
                 <div class="voucher-summary-value">${availableCount}</div>
                 <div class="voucher-summary-label">Available</div>
               </div>
             </div>
             <div class="voucher-summary-card voucher-summary-inuse">
-              <div class="voucher-summary-icon"></div>
+              <div class="voucher-summary-icon">${uiIcon('ban')}</div>
               <div class="voucher-summary-content">
                 <div class="voucher-summary-value">${inUseCount}</div>
                 <div class="voucher-summary-label">In Use</div>
               </div>
             </div>
             <div class="voucher-summary-card voucher-summary-used">
-              <div class="voucher-summary-icon">✓</div>
+              <div class="voucher-summary-icon">${uiIcon('check-circle')}</div>
               <div class="voucher-summary-content">
                 <div class="voucher-summary-value">${usedCount}</div>
                 <div class="voucher-summary-label">Used</div>
@@ -4404,13 +4408,13 @@ const App = {
 
                   if (!v.is_used) {
                     statusBadge = '<span class="status-badge voucher-available">Available</span>';
-                    statusIcon = '○';
+                    statusIcon = uiIcon('clock');
                   } else if (isActive) {
                     statusBadge = '<span class="status-badge voucher-inuse">In Use</span>';
-                    statusIcon = '◉';
+                    statusIcon = uiIcon('activity');
                   } else {
                     statusBadge = '<span class="status-badge voucher-used">Used</span>';
-                    statusIcon = '✓';
+                    statusIcon = uiIcon('check-circle');
                   }
                   
                   return `
@@ -5949,12 +5953,13 @@ const App = {
     };
 
     const fileIcon = (f) => {
-      if (!f.editable) return '&#128206;';
-      if (f.path.endsWith('.html')) return '&#128196;';
-      if (f.path.endsWith('.css')) return '&#127912;';
-      if (f.path.endsWith('.js')) return '&#9889;';
-      if (f.path.endsWith('.txt')) return '&#128221;';
-      return '&#128196;';
+      if (!f.editable) return uiIcon('paperclip');
+      if (/\.(png|jpe?g|gif|svg|ico|webp)$/i.test(f.path)) return uiIcon('image');
+      if (f.path.endsWith('.html')) return uiIcon('file-text');
+      if (f.path.endsWith('.css')) return uiIcon('palette');
+      if (f.path.endsWith('.js')) return uiIcon('zap');
+      if (f.path.endsWith('.txt')) return uiIcon('file-text');
+      return uiIcon('file-text');
     };
 
     const formatSize = (bytes) => {
@@ -5975,30 +5980,24 @@ const App = {
             ` : (activeTab === 'panel-page' ? '<span class="status-badge connected">Panel-hosted portal — served directly by this panel</span>' : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>')}
           </div>
         </div>
-        <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color,#e0e0e0);padding:0 1rem;background:var(--bg-secondary,#f5f5f5)">
-          <button class="portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'mikrotik' ? 'white' : 'transparent'};color:${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'mikrotik' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'mikrotik' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
-            &#128196; MikroTik Portal
-          </button>
-          <button class="portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'stub' ? 'white' : 'transparent'};color:${activeTab === 'stub' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'stub' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'stub' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
-            &#128279; Stub Portal
-          </button>
-          <button class="portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')" style="padding:0.75rem 1.5rem;border:none;background:${activeTab === 'panel-page' ? 'white' : 'transparent'};color:${activeTab === 'panel-page' ? 'var(--primary,#6a1b9a)' : 'var(--text-secondary,#666)'};font-weight:${activeTab === 'panel-page' ? '600' : '400'};cursor:pointer;border-bottom:2px solid ${activeTab === 'panel-page' ? 'var(--primary,#6a1b9a)' : 'transparent'};margin-bottom:-2px;transition:all 0.2s">
-            &#127912; Panel Portal
-          </button>
+        <div class="tabs portal-tabs">
+          <button class="tab portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')">${uiIcon('file-text')} MikroTik Portal</button>
+          <button class="tab portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')">${uiIcon('link')} Stub Portal</button>
+          <button class="tab portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')">${uiIcon('monitor')} Panel Portal</button>
         </div>
         ${activeTab === 'stub' && routers.length > 0 ? (() => {
           const selectedRouter = routers.find(r => r.id === this.selectedRouterId);
           const panelUrl = selectedRouter?.panel_url || '';
           return `
-            <div style="padding:1rem;background:var(--bg-secondary,#f5f5f5);border-bottom:1px solid var(--border-color,#e0e0e0)">
+            <div style="padding:1rem;background:var(--bg);border-bottom:1px solid var(--border)">
               <div style="display:flex;gap:0.5rem;align-items:center;max-width:600px">
                 <label style="font-weight:600;white-space:nowrap">Panel Redirect URL:</label>
                 <input type="text" id="stub-panel-url-input" value="${this.escapeHtml(panelUrl)}"
                   placeholder="http://10.0.0.252:3000 (leave empty for auto-detect)"
-                  style="flex:1;padding:0.5rem;border:1px solid var(--border-color,#ccc);border-radius:4px;font-size:0.875rem">
+                  style="flex:1;padding:0.5rem;border:1px solid var(--border);border-radius:4px;font-size:0.875rem">
                 <button class="btn btn-sm btn-primary" onclick="App.saveStubPanelUrl()">Save</button>
               </div>
-              <small style="color:var(--text-secondary);font-size:0.75rem;display:block;margin-top:0.25rem">
+              <small style="color:var(--text-muted);font-size:0.75rem;display:block;margin-top:0.25rem">
                 The URL where stubs should redirect to (this panel's address). Update when moving SBC to a different network.
               </small>
             </div>
@@ -6030,7 +6029,7 @@ const App = {
               <div class="portal-file-info" id="portal-file-info"></div>
               <div class="portal-actions">
                 <span id="portal-dirty" class="portal-dirty" style="visibility:hidden">Unsaved changes</span>
-                ${activeTab !== 'stub' ? '<button class="btn btn-sm btn-outline" id="portal-themes-btn" onclick="App.openPortalThemes()">&#127912; Themes</button>' : ''}
+                ${activeTab !== 'stub' ? `<button class="btn btn-sm btn-outline" id="portal-themes-btn" onclick="App.openPortalThemes()">${uiIcon('palette')} Themes</button>` : ''}
                 <button class="btn btn-sm btn-outline" id="portal-toggle-preview" onclick="App.togglePortalPreview()">Hide Preview</button>
                 <button class="btn btn-sm btn-outline" id="portal-upload-btn" onclick="App.uploadPortalFile()">Upload to Router</button>
                 <button class="btn btn-sm btn-outline" id="portal-reset-btn" onclick="App.resetPortalFile()">Reset to Default</button>
@@ -6425,17 +6424,17 @@ const App = {
       if (!status.installed) {
         container.innerHTML = `
           <div style="text-align:center;padding:2rem 0">
-            <div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>
+            <div style="margin-bottom:1rem">${uiIcon('lock', 'icon-3xl')}</div>
             <h4>ZeroTier Not Installed</h4>
-            <p style="color:var(--text-secondary);max-width:500px;margin:0.5rem auto 1.5rem">
+            <p style="color:var(--text-muted);max-width:500px;margin:0.5rem auto 1.5rem">
               Install ZeroTier to access this panel remotely from anywhere in the world.
               ZeroTier creates a secure virtual network between your devices.
             </p>
             <button class="btn btn-primary btn-lg" onclick="App.installZeroTier()" id="zt-install-btn">
               Install ZeroTier
             </button>
-            <div id="zt-install-status" style="margin-top:1rem;color:var(--text-secondary);font-size:0.9rem"></div>
-            <div id="zt-manual-instructions" style="display:none;background:var(--bg-secondary);padding:1.5rem;border-radius:8px;max-width:650px;margin:1.5rem auto 0;text-align:left">
+            <div id="zt-install-status" style="margin-top:1rem;color:var(--text-muted);font-size:0.9rem"></div>
+            <div id="zt-manual-instructions" style="display:none;background:var(--bg);padding:1.5rem;border-radius:8px;max-width:650px;margin:1.5rem auto 0;text-align:left">
               <h5 style="margin-top:0">Manual Installation (if auto-install fails):</h5>
               <pre style="background:var(--bg);padding:1rem;border-radius:4px;overflow-x:auto;font-size:0.9rem;margin:0">
 SSH into your SBC and run:
@@ -6459,13 +6458,13 @@ Then join your network:
             <div style="padding:1rem;display:flex;justify-content:space-between;align-items:center">
               <div>
                 <div style="font-weight:600;font-size:1rem">${this.escapeHtml(n.name || 'Network')}</div>
-                <div style="font-size:0.85rem;color:var(--text-secondary)">
+                <div style="font-size:0.85rem;color:var(--text-muted)">
                   ID: ${this.escapeHtml(n.nwid)} &middot;
                   Status: <span style="color:${n.status === 'OK' ? 'var(--success)' : 'var(--warning)'}">${this.escapeHtml(n.status)}</span> &middot;
                   Type: ${this.escapeHtml(n.type)}
                 </div>
                 ${n.assignedAddresses.length > 0 ? `
-                  <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.25rem">
+                  <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.25rem">
                     IPs: ${n.assignedAddresses.map((a) => this.escapeHtml(a)).join(', ')}
                   </div>
                 ` : ''}
@@ -6474,19 +6473,19 @@ Then join your network:
             </div>
           </div>
         `).join('')
-        : '<p style="color:var(--text-secondary);text-align:center;padding:1rem 0">No networks joined yet.</p>';
+        : '<p style="color:var(--text-muted);text-align:center;padding:1rem 0">No networks joined yet.</p>';
 
       container.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem">
           <div class="card" style="border:1px solid var(--border)">
             <div style="padding:1rem">
-              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.25rem">ZeroTier Address</div>
+              <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.25rem">ZeroTier Address</div>
               <div style="font-weight:600;font-size:1.1rem;font-family:monospace">${this.escapeHtml(status.address || 'N/A')}</div>
             </div>
           </div>
           <div class="card" style="border:1px solid var(--border)">
             <div style="padding:1rem">
-              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.25rem">Status</div>
+              <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.25rem">Status</div>
               <div style="font-weight:600;font-size:1.1rem">
                 <span class="status-badge ${status.online ? 'connected' : 'disconnected'}">${status.online ? 'Online' : 'Offline'}</span>
               </div>
@@ -6514,9 +6513,9 @@ Then join your network:
         <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
           <div style="padding:1.5rem">
             <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
-              <span style="font-size:1.3rem">&#128229;</span> Download Backup
+              ${uiIcon('download')} Download Backup
             </h4>
-            <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+            <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
               Download a copy of your database including all hotspot users, vouchers, sessions,
               router configurations, and settings. Keep this file safe for disaster recovery.
             </p>
@@ -6529,9 +6528,9 @@ Then join your network:
         <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
           <div style="padding:1.5rem">
             <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
-              <span style="font-size:1.3rem">&#128228;</span> Restore Database
+              ${uiIcon('upload')} Restore Database
             </h4>
-            <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+            <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
               Upload a previously downloaded backup to restore your system. The current database
               will be backed up automatically before restoring.
             </p>
@@ -6548,9 +6547,9 @@ Then join your network:
         <div class="card" style="border:1px solid var(--danger);background:rgba(220,53,69,0.05)">
           <div style="padding:1.5rem">
             <h4 style="margin-top:0;color:var(--danger);display:flex;align-items:center;gap:0.5rem">
-              <span style="font-size:1.3rem">&#9888;</span> Important Notes
+              ${uiIcon('alert-triangle')} Important Notes
             </h4>
-            <ul style="color:var(--text-secondary);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
+            <ul style="color:var(--text-muted);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
               <li>After restoring, <strong>restart the panel</strong> for changes to take effect.</li>
               <li>Restoring replaces all current data &mdash; users, vouchers, sessions, and settings.</li>
               <li>A backup of the current database is created automatically before any restore.</li>
@@ -6581,7 +6580,7 @@ Then join your network:
     }
     if (!confirm('This will replace your current database. All existing data will be lost. Continue?')) return;
     if (btn) { btn.disabled = true; btn.textContent = 'Restoring...'; }
-    if (statusEl) { statusEl.style.color = 'var(--text-secondary)'; statusEl.textContent = 'Reading file...'; }
+    if (statusEl) { statusEl.style.color = 'var(--text-muted)'; statusEl.textContent = 'Reading file...'; }
     try {
       const file = fileInput.files[0];
       const base64 = await new Promise((resolve, reject) => {
@@ -6616,7 +6615,7 @@ Then join your network:
               <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
                 <span style="font-size:1.3rem">&#9729;</span> Turso Cloud Database
               </h4>
-              <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+              <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
                 Sync your devices, vouchers, and session tokens to Turso cloud database for backup and multi-panel access.
               </p>
 
@@ -6628,15 +6627,15 @@ Then join your network:
               <div style="margin-bottom:1rem">
                 <label style="display:block;margin-bottom:0.25rem;font-weight:500;font-size:0.9rem">Auth Token</label>
                 <input type="password" id="turso-token" value="" placeholder="Enter your Turso auth token" class="form-control">
-                ${cfg.configured ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.25rem">Current: ${this.escapeHtml(cfg.authToken)}</div>` : ''}
+                ${cfg.configured ? `<div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.25rem">Current: ${this.escapeHtml(cfg.authToken)}</div>` : ''}
               </div>
 
-              <div style="margin-bottom:1rem;padding:1rem;background:var(--bg-secondary);border-radius:6px">
+              <div style="margin-bottom:1rem;padding:1rem;background:var(--bg);border-radius:6px">
                 <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
                   <input type="checkbox" id="turso-auto-sync" ${cfg.autoSync ? 'checked' : ''}>
                   <span style="font-weight:500">Enable Auto-Sync</span>
                 </label>
-                <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.5rem">
+                <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem">
                   Automatically sync to cloud every
                   <input type="number" id="turso-sync-interval" value="${cfg.autoSyncInterval || 10}" min="5" max="300" style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
                   seconds. New controllers with empty database will auto-pull from cloud on startup.
@@ -6654,9 +6653,9 @@ Then join your network:
           <div class="card" style="border:1px solid var(--border);margin-bottom:1.5rem">
             <div style="padding:1.5rem">
               <h4 style="margin-top:0;display:flex;align-items:center;gap:0.5rem">
-                <span style="font-size:1.3rem">&#128228;</span> Sync & Restore
+                ${uiIcon('upload')} Sync &amp; Restore
               </h4>
-              <p style="color:var(--text-secondary);margin:0.5rem 0 1rem">
+              <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
                 Sync pushes local data to Turso. Restore pulls from Turso and replaces local data.
               </p>
               <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
@@ -6673,8 +6672,8 @@ Then join your network:
 
           <div class="card" style="border:1px solid var(--border)">
             <div style="padding:1.5rem">
-              <h4 style="margin-top:0;color:var(--text-secondary);font-size:1rem">What Gets Synced</h4>
-              <ul style="color:var(--text-secondary);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
+              <h4 style="margin-top:0;color:var(--text-muted);font-size:1rem">What Gets Synced</h4>
+              <ul style="color:var(--text-muted);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
                 <li><strong>hotspot_users</strong> — All device/user accounts</li>
                 <li><strong>vouchers</strong> — All voucher codes and status</li>
                 <li><strong>device_sessions</strong> — Active session tokens and roaming data</li>
@@ -6844,7 +6843,7 @@ Then join your network:
         ${themes.map((t) => `
           <div class="appearance-card${t.id === activeId ? ' active' : ''}" data-theme="${t.id}" onclick="App.applyAdminTheme('${t.id}')">
             <div class="appearance-banner" style="background: ${t.banner}">
-              ${t.id === activeId ? '<span class="appearance-check">&#10003;</span>' : ''}
+              ${t.id === activeId ? `<span class="appearance-check">${uiIcon('check')}</span>` : ''}
             </div>
             <div class="appearance-body">
               <div class="appearance-name">${this.escapeHtml(t.name)}</div>
@@ -6884,7 +6883,7 @@ Then join your network:
       if (isActive && banner && !check) {
         check = document.createElement('span');
         check.className = 'appearance-check';
-        check.innerHTML = '&#10003;';
+        check.innerHTML = uiIcon('check');
         banner.appendChild(check);
       } else if (!isActive && check) {
         check.remove();

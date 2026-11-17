@@ -13,6 +13,10 @@
   --sidebar-bg: #0f172a;
   --sidebar-text: #cbd5e1;
   --sidebar-active: #2563eb;
+  --primary-fill: var(--primary);
+  --primary-fill-dark: var(--primary-dark);
+  --primary-contrast: #fff;
+  --sidebar-active-contrast: #fff;
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 16px;
@@ -111,9 +115,9 @@ h1, h2, h3, h4 {
   border-radius: 12px;
   display: grid;
   place-items: center;
-  color: #fff;
-  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  box-shadow: 0 8px 20px -6px color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--primary-contrast);
+  background: linear-gradient(135deg, var(--primary-fill), var(--primary-fill-dark));
+  box-shadow: 0 8px 20px -6px color-mix(in srgb, var(--primary-fill) 60%, transparent);
   margin-bottom: 1.25rem;
 }
 
@@ -213,13 +217,13 @@ h1, h2, h3, h4 {
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 90%, #fff), var(--primary));
-  color: #fff;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary-fill) 90%, #fff), var(--primary-fill));
+  color: var(--primary-contrast);
   box-shadow: 0 1px 2px rgba(2, 6, 23, 0.18);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(180deg, var(--primary), var(--primary-dark));
+  background: linear-gradient(180deg, var(--primary-fill), var(--primary-fill-dark));
 }
 
 .btn-success {
@@ -316,9 +320,9 @@ h1, h2, h3, h4 {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  color: #fff;
-  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--primary) 70%, transparent);
+  color: var(--primary-contrast);
+  background: linear-gradient(135deg, var(--primary-fill), var(--primary-fill-dark));
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--primary-fill) 70%, transparent);
   flex-shrink: 0;
 }
 
@@ -373,7 +377,7 @@ h1, h2, h3, h4 {
 
 .nav-item.active {
   background: linear-gradient(135deg, var(--sidebar-active), color-mix(in srgb, var(--sidebar-active) 72%, #000));
-  color: #fff;
+  color: var(--sidebar-active-contrast);
   box-shadow: 0 6px 16px -8px color-mix(in srgb, var(--sidebar-active) 80%, transparent);
 }
 
@@ -803,7 +807,7 @@ td {
 .toast.success { background: var(--success); }
 .toast.error { background: var(--danger); }
 .toast.warning { background: var(--warning); }
-.toast.info { background: var(--primary); }
+.toast.info { background: var(--primary-fill); color: var(--primary-contrast); }
 
 @keyframes slideIn {
   from { transform: translateX(100%); opacity: 0; }
@@ -1857,8 +1861,8 @@ td {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-  color: #fff;
+  background: linear-gradient(135deg, var(--primary-fill) 0%, var(--primary-fill-dark) 100%);
+  color: var(--primary-contrast);
   padding: 1.5rem 1.75rem;
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
@@ -1868,7 +1872,7 @@ td {
 .appearance-hero-text h2 {
   font-size: 1.375rem;
   margin-bottom: 0.375rem;
-  color: #fff;
+  color: var(--primary-contrast);
 }
 
 .appearance-hero-text p {
@@ -2850,4 +2854,45 @@ tr.radius-row-offline:hover td {
 .portal-tab .icon {
   width: 15px;
   height: 15px;
+}
+
+/* ============================================
+   Naruto Shippuden (Kurama Mode) theme
+   ============================================ */
+body[data-admin-theme="naruto"] {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(180deg, rgba(251, 250, 247, 0.78), rgba(251, 250, 247, 0.9)),
+    url("/assets/img/kurama-bg.jpg");
+  background-repeat: no-repeat;
+  background-position: center top;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+body[data-admin-theme="naruto"] #login-screen {
+  background-image:
+    linear-gradient(160deg, rgba(12, 10, 9, 0.6) 0%, rgba(12, 10, 9, 0.84) 100%),
+    url("/assets/img/kurama-bg.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+body[data-admin-theme="naruto"] .content-header {
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  border-bottom-color: rgba(202, 138, 4, 0.22);
+}
+
+body[data-admin-theme="naruto"] .sidebar {
+  background: linear-gradient(180deg, #171310 0%, #0c0a09 100%);
+  border-right-color: rgba(250, 204, 21, 0.22);
+}
+
+body[data-admin-theme="naruto"] .brand-mark {
+  box-shadow: 0 6px 18px -6px rgba(234, 179, 8, 0.65);
+}
+
+body[data-admin-theme="naruto"] .nav-item.active {
+  box-shadow: 0 6px 18px -6px rgba(250, 204, 21, 0.55);
 }

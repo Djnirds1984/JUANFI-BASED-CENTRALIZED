@@ -281,6 +281,26 @@ function replaceStubPlaceholders(content: string, routerId: number): string {
     .replace(/PANEL_URL_PLACEHOLDER/g, hostOnly);
 }
 
+// Re-push every stub file with freshly replaced placeholders. Used after a
+// router's panel_url / portal_mode changes so the uploaded stubs never keep a
+// stale redirect host (e.g. the localhost fallback from an earlier push).
+export async function pushStubFiles(routerId: number): Promise<void> {
+  for (const f of listHotspotFiles('stub')) {
+    if (!f.editable) continue;
+    const diskPath = resolveDiskPath(f.path, 'stub');
+    let content: string;
+    try {
+      content = fs.readFileSync(diskPath, 'utf8');
+    } catch {
+      const def = getPortalDefaultContent(f.path, 'stub');
+      if (!def) continue;
+      content = def;
+    }
+    content = replaceStubPlaceholders(content, routerId);
+    await mikroTikService.uploadFileSFTP(routerId, `hotspot/${f.path}`, content);
+  }
+}
+
 router.get('/', (req: Request, res: Response) => {
   try {
     const folder = getFolder(req);

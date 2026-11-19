@@ -33,6 +33,17 @@ const controllerLanIp = (process.env.CONTROLLER_LAN_IP || '').trim() || detectLa
 // Leave unset to point straight at the node process (http://<lan-ip>:<PORT>).
 const panelPublicUrl = (process.env.PANEL_PUBLIC_URL || '').trim().replace(/\/+$/, '');
 
+// The localhost fallback is unreachable for hotspot clients — any stub pushed
+// while it is active bakes a broken redirect into the router. Warn loudly so
+// the operator pins CONTROLLER_LAN_IP / PANEL_PUBLIC_URL before pushing stubs.
+if (!panelPublicUrl && !controllerLanIp) {
+  console.warn(
+    `[config] No LAN IP detected and CONTROLLER_LAN_IP / PANEL_PUBLIC_URL unset — ` +
+    `portal stubs will redirect to http://localhost:${port}, which hotspot clients cannot reach. ` +
+    `Set CONTROLLER_LAN_IP in .env.`
+  );
+}
+
 export const config = {
   port,
   host: process.env.HOST || '0.0.0.0',

@@ -893,7 +893,7 @@ class MikroTikService {
       if (restData['split-user-domain'] !== undefined) {
         restData['split-user-domain'] = restData['split-user-domain'] === 'yes';
       }
-      return await this.restApiCall(config, 'PUT', `/ip/hotspot/profile/${profileId}`, restData);
+      return await this.restApiCall(config, 'PATCH', `/ip/hotspot/profile/${profileId}`, restData);
     }
 
     const client = this.getClient(routerId);
@@ -1014,7 +1014,7 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'PUT', `/ip/hotspot/${serverId}`, data);
+      return await this.restApiCall(config, 'PATCH', `/ip/hotspot/${serverId}`, data);
     }
 
     const client = this.getClient(routerId);
@@ -1327,7 +1327,7 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'POST', '/ip/hotspot/walled-garden', data);
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/walled-garden/add', data);
     }
 
     const client = this.getClient(routerId);
@@ -1366,7 +1366,7 @@ class MikroTikService {
     const config = this.routerConfigs.get(routerId);
 
     if (config?.useRestApi) {
-      return await this.restApiCall(config, 'PUT', `/ip/hotspot/walled-garden/${id}`, data);
+      return await this.restApiCall(config, 'PATCH', `/ip/hotspot/walled-garden/${id}`, data);
     }
 
     const client = this.getClient(routerId);

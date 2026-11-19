@@ -5,6 +5,7 @@ import { config } from '../config';
 import { mikroTikService, RouterConnection } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { getRadiusStatus, hasRadiusClients, startRadiusServer, stopRadiusServer, testRadiusConnectivity, getRadiusLogs, clearRadiusLogs } from '../services/radiusServer';
+import { pushStubFiles } from './portal';
 
 const router = Router();
 
@@ -230,6 +231,22 @@ router.put('/:id', async (req: Request, res: Response) => {
         } catch (err) {
           console.warn('Could not push RADIUS config to router:', err);
         }
+      }
+    }
+
+    // Keep uploaded stubs in sync: a changed panel_url (or switching to stub
+    // mode) must re-push the stub files, otherwise the router keeps redirecting
+    // clients to the old host baked into the previous push.
+    const routerIdNum = parseInt(req.params.id);
+    if (
+      newPortalMode === 'stub' &&
+      mikroTikService.isConnected(routerIdNum) &&
+      (newPanelUrl !== existing.panel_url || existing.portal_mode !== 'stub')
+    ) {
+      try {
+        await pushStubFiles(routerIdNum);
+      } catch (err) {
+        console.warn('Could not re-push stub files to router:', err);
       }
     }
 

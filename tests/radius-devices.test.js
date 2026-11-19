@@ -380,3 +380,56 @@ test('dashboard renders CRUD controls, escaped hostnames, access filters and off
   assert.equal(app.filterRadiusDevices(mapped).length, 0);
   assert.match(app.radiusDeviceTimeCell({ 'access-mode': 'bypassed' }), /Unlimited/);
 });
+
+test('check-session shows restored time on the roamed MAC (account keeps original identity)', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/portal', require('../src/api/portal').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/portal`;
+  const check = mac => fetch(`${base}/check-session?mac=${encodeURIComponent(mac)}&routerId=1`).then(r => r.json());
+  try {
+    const oldMac = '50:7b:9d:3c:0a:d2';
+    const newMac = '4c:34:88:a4:31:ed';
+    const username = '507B9D3C0AD2';
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'Aircoins', 0, datetime('now', '+1 day'))"
+    ).run(username);
+    // Roamed session: token rebind to the NEW mac, account keeps the ORIGINAL username.
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, previous_mac, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, ?, 1, 'active', 80000, 79733, 1, datetime('now'), datetime('now'))`
+    ).run('a'.repeat(48), newMac, oldMac, username);
+
+    // Router unreachable: stored remaining time must still resolve via the roam binding.
+    connected = false;
+    let res = await check(newMac);
+    assert.equal(res.hasSession, true);
+    assert.equal(res.remainingSeconds, 79733);
+    assert.equal(res.username, username);
+
+    // Online: the live session (original username on the new MAC) is authoritative.
+    connected = true;
+    live = [{ '.id': '*1', mac: newMac, user: username, 'session-time-left': '22h8m53s', server: 'hotspot1' }];
+    res = await check(newMac);
+    assert.equal(res.hasSession, true);
+    assert.equal(res.online, true);
+    assert.equal(res.remainingSeconds, 22 * 3600 + 8 * 60 + 53);
+    assert.equal(res.username, username);
+
+    // The original MAC keeps working too (same account, matched by username).
+    res = await check(oldMac);
+    assert.equal(res.hasSession, true);
+    assert.equal(res.username, username);
+
+    // Unknown MAC with no binding and no live session still reports no session.
+    res = await check('06:5f:5c:fb:0d:f9');
+    assert.equal(res.hasSession, false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});

@@ -228,7 +228,11 @@ function checkSessionState() {
 				showConnectedState(data.remainingSeconds);
 				if (!tokenBound) {
 					tokenBound = true;
-					bindRoamingToken(macVoucherCode(), data.remainingSeconds);
+					// Bind the ORIGINAL account identity (data.username). After a
+					// roam the current MAC differs from the account username —
+					// binding the new MAC here would overwrite the session's
+					// identity and break the next roam restore.
+					bindRoamingToken(data.username || macVoucherCode(), data.remainingSeconds);
 				}
 			} else {
 				showDisconnectedState();
@@ -277,6 +281,14 @@ function tryRoamingRestore() {
 			if (!res || res.restore !== true || !res.username) return null;
 			tokenBound = true;
 			doLogin(res.username);
+			// Show the restored time right away (the login submits into a hidden
+			// iframe, so nothing else would switch the panel to connected), then
+			// let the live sync confirm/adjust it once the router session is up.
+			if (res.remaining > 0 && chapId && chapChallenge && linkLoginOnly) {
+				showConnectedState(res.remaining);
+			}
+			setTimeout(function() { syncSessionTime(); }, 3000);
+			setTimeout(function() { syncSessionTime(); }, 8000);
 			return true;
 		});
 	}).catch(function() {});

@@ -88,14 +88,28 @@ router.get('/check-session', async (req: Request, res: Response) => {
 
     const db = getDb();
 
-    // Check if hotspot_user exists for this MAC (username = MAC without colons)
-    const hotspotUser = db.prepare(
-      'SELECT id, username, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
-    ).get(routerId, macNoColons) as any;
+    // The account behind this MAC. Normally username = MAC without colons, but
+    // after a roam the device presents a NEW MAC while the account keeps the
+    // ORIGINAL identity (restoreSession rebinds the token, not the account).
+    // Resolve the original identity via the token-bound session so the portal
+    // still sees the restored time instead of "no session".
+    const accountFor = (username: string): any =>
+      db.prepare(
+        'SELECT id, username, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
+      ).get(routerId, username);
 
+    let effectiveUsername = macNoColons;
+    let hotspotUser = accountFor(macNoColons);
     if (!hotspotUser) {
-      res.json({ hasSession: false });
-      return;
+      const bound = db.prepare(
+        `SELECT username FROM device_sessions
+         WHERE router_id = ? AND mac_address = ? AND username <> ''
+         ORDER BY last_seen DESC LIMIT 1`
+      ).get(routerId, macWithColons) as any;
+      if (bound && bound.username) {
+        effectiveUsername = String(bound.username).trim().toUpperCase();
+        hotspotUser = accountFor(effectiveUsername);
+      }
     }
 
     // The panel's Active Devices tab shows the router's live `session-time-left`
@@ -109,7 +123,8 @@ router.get('/check-session', async (req: Request, res: Response) => {
 
     // 1) Live MikroTik active session - exactly what the panel renders.
     //    When found, its value is authoritative (0 = expired), so the fallbacks
-    //    below must NOT re-introduce stale time.
+    //    below must NOT re-introduce stale time. Match by the device's CURRENT
+    //    MAC or by the resolved (original) username — after a roam these differ.
     let liveChecked = false;
     let online = false;
     try {
@@ -119,10 +134,17 @@ router.get('/check-session', async (req: Request, res: Response) => {
         const conn = (Array.isArray(live) ? live : []).find((c: any) => {
           const connMac = String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '');
           const connUser = String(c.user || '').toUpperCase();
-          return (!!connMac && connMac === macKey) || (!!connUser && connUser === macNoColons);
+          return (!!connMac && connMac === macKey) || (!!connUser && connUser === effectiveUsername);
         });
         if (conn) {
           online = true;
+          // A live connection can also reveal the identity when no session row
+          // bound this MAC yet (e.g. token lost, device logged in manually).
+          const connUser = String(conn.user || '').toUpperCase();
+          if (!hotspotUser && connUser) {
+            effectiveUsername = connUser;
+            hotspotUser = accountFor(effectiveUsername);
+          }
           const left = mikrotikTimeToSeconds(conn['session-time-left']);
           if (left !== Infinity) {
             remainingSeconds = Math.max(0, Math.floor(left));
@@ -134,6 +156,13 @@ router.get('/check-session', async (req: Request, res: Response) => {
       console.error('check-session live lookup failed:', liveErr.message);
     }
 
+    // No account for this MAC (directly, via the roaming binding, or via a
+    // live session) — nothing to show.
+    if (!hotspotUser) {
+      res.json({ hasSession: false });
+      return;
+    }
+
     // 2) Synced mirror in active_devices (background sync, every few seconds).
     if (!resolved) {
       const active = db.prepare(
@@ -141,7 +170,7 @@ router.get('/check-session', async (req: Request, res: Response) => {
          WHERE router_id = ? AND status = 'active'
            AND (REPLACE(REPLACE(LOWER(mac_address), ':', ''), '-', '') = ? OR UPPER(user) = ?)
          ORDER BY last_seen DESC, id DESC LIMIT 1`
-      ).get(routerId, macKey, macNoColons) as any;
+      ).get(routerId, macKey, effectiveUsername) as any;
       if (active && active.session_time_left) {
         const left = mikrotikTimeToSeconds(active.session_time_left);
         if (left !== Infinity && left > 0) {
@@ -155,9 +184,9 @@ router.get('/check-session', async (req: Request, res: Response) => {
     if (!resolved) {
       const session = db.prepare(
         `SELECT remaining_seconds FROM device_sessions
-         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND username = ?))
+         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
          ORDER BY is_online DESC, last_seen DESC, id DESC LIMIT 1`
-      ).get(routerId, macWithColons, macNoColons) as any;
+      ).get(routerId, macWithColons, effectiveUsername) as any;
       const secs = session ? Math.max(0, Math.floor(Number(session.remaining_seconds) || 0)) : 0;
       if (secs > 0) {
         remainingSeconds = secs;
@@ -188,7 +217,7 @@ router.get('/check-session', async (req: Request, res: Response) => {
       expiresAt: hotspotUser.expiry_at || null,
       online,
       liveChecked,
-      username: macNoColons,
+      username: effectiveUsername,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

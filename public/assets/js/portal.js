@@ -34,6 +34,7 @@ var topupMode = 'INTERNET';
 
 // ---- Session state ----
 var isConnected = false;
+var isPaused = false;
 var remainingSeconds = 0;
 var countdownTimer = null;
 var sessionSyncTimer = null;
@@ -90,7 +91,9 @@ function setupEventListeners() {
 		insertBtnAction();
 	});
 	document.getElementById('connectedPromoRateBtn').addEventListener('click', function() { showModal('promoModal'); loadPromoRates(); });
-	document.getElementById('pauseTimeBtn').addEventListener('click', function() { alert('Pause time feature coming soon.'); });
+	document.getElementById('pauseTimeBtn').addEventListener('click', function() {
+		if (isPaused) doResume(); else doPause();
+	});
 	document.getElementById('logoutBtn').addEventListener('click', function() { doLogout(); });
 
 	// Coin modal
@@ -117,6 +120,7 @@ function setupEventListeners() {
 // ---- State Management ----
 function showDisconnectedState() {
 	isConnected = false;
+	isPaused = false;
 	stopCountdown();
 	stopSessionSync();
 	document.getElementById('disconnectedPanel').style.display = '';
@@ -126,10 +130,12 @@ function showDisconnectedState() {
 	document.getElementById('statusBadge').style.borderColor = 'rgba(239, 68, 68, 0.2)';
 	document.getElementById('statusText').textContent = 'Disconnected';
 	document.getElementById('statusText').className = 'blinking1 text-danger font-weight-bold';
+	setPauseButton(false);
 }
 
 function showConnectedState(remaining) {
 	isConnected = true;
+	isPaused = false;
 	remainingSeconds = Math.max(0, Math.floor(remaining));
 	sessionExpiresAt = Date.now() + remainingSeconds * 1000;
 
@@ -140,10 +146,48 @@ function showConnectedState(remaining) {
 	document.getElementById('statusBadge').style.borderColor = 'rgba(16, 185, 129, 0.2)';
 	document.getElementById('statusText').textContent = 'Connected';
 	document.getElementById('statusText').className = 'blinking2 text-success font-weight-bold';
+	document.getElementById('timeRemainingDisplay').parentNode.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+	setPauseButton(false);
 
 	updateCountdownDisplay();
 	startCountdown();
 	startSessionSync();
+}
+
+// PAUSED: paid time is frozen server-side (account disabled, balance stored).
+// Show the connected panel with an amber frozen countdown and a RESUME button;
+// keep the session sync running so a top-up / external resume is picked up.
+function showPausedState(remaining) {
+	isConnected = false;
+	isPaused = true;
+	remainingSeconds = Math.max(0, Math.floor(remaining));
+	sessionExpiresAt = null;
+	stopCountdown();
+
+	document.getElementById('disconnectedPanel').style.display = 'none';
+	document.getElementById('connectedPanel').style.display = '';
+	document.getElementById('statusBadge').style.background = 'rgba(245, 158, 11, 0.12)';
+	document.getElementById('statusBadge').style.color = '#d97706';
+	document.getElementById('statusBadge').style.borderColor = 'rgba(245, 158, 11, 0.3)';
+	document.getElementById('statusText').textContent = 'Paused';
+	document.getElementById('statusText').className = 'font-weight-bold';
+	document.getElementById('timeRemainingDisplay').parentNode.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+	setPauseButton(true);
+
+	updateCountdownDisplay();
+	document.getElementById('expirationDisplay').textContent = 'Time frozen — press RESUME TIME to continue';
+	startSessionSync();
+}
+
+// PAUSE TIME (amber) <-> RESUME TIME (green).
+function setPauseButton(resumeMode) {
+	var btn = document.getElementById('pauseTimeBtn');
+	if (!btn) return;
+	btn.disabled = false;
+	btn.textContent = resumeMode ? 'RESUME TIME' : 'PAUSE TIME';
+	btn.style.background = resumeMode
+		? 'linear-gradient(135deg, #10b981, #059669)'
+		: 'linear-gradient(135deg, #f59e0b, #d97706)';
 }
 
 function startCountdown() {
@@ -175,6 +219,10 @@ function syncSessionTime() {
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
+			if (data && data.paused && data.remainingSeconds > 0) {
+				showPausedState(data.remainingSeconds);
+				return;
+			}
 			if (sessionIsOnline(data)) {
 				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
 				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
@@ -183,7 +231,7 @@ function syncSessionTime() {
 				} else {
 					updateCountdownDisplay();
 				}
-			} else if (isConnected) {
+			} else if (isConnected || isPaused) {
 				showDisconnectedState();
 			}
 		})
@@ -224,7 +272,13 @@ function checkSessionState() {
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
-			if (sessionIsOnline(data)) {
+			if (data && data.paused && data.remainingSeconds > 0) {
+				showPausedState(data.remainingSeconds);
+				if (!tokenBound) {
+					tokenBound = true;
+					bindRoamingToken(data.username || macVoucherCode(), data.remainingSeconds);
+				}
+			} else if (sessionIsOnline(data)) {
 				showConnectedState(data.remainingSeconds);
 				if (!tokenBound) {
 					tokenBound = true;
@@ -278,6 +332,14 @@ function tryRoamingRestore() {
 	window.JuanFiSession.ensureToken(mac, ip, '').then(function(token) {
 		if (!token) return null;
 		return window.JuanFiSession.restore(mac, ip, '').then(function(res) {
+			// Paused on another SSID: stay paused here too — show the frozen
+			// balance with RESUME instead of re-logging in (RADIUS would reject
+			// the disabled account anyway).
+			if (res && res.reason === 'paused' && res.remaining > 0) {
+				tokenBound = true;
+				showPausedState(res.remaining);
+				return true;
+			}
 			if (!res || res.restore !== true || !res.username) return null;
 			tokenBound = true;
 			doLogin(res.username);
@@ -495,6 +557,66 @@ function doLogout() {
 	.catch(function() {
 		localStorage.removeItem('activeVoucher');
 		showDisconnectedState();
+	});
+}
+
+// ---- PAUSE / RESUME TIME ----
+// Pause freezes the balance server-side (kicks the live session, disables the
+// account so time cannot drain) and resume re-enables it with the full balance
+// then re-logs in with the ORIGINAL identity (roam-safe).
+function doPause() {
+	if (!mac || !routerId) { alert('Missing device parameters. Please access the portal through the MikroTik redirect.'); return; }
+	var btn = document.getElementById('pauseTimeBtn');
+	btn.disabled = true;
+	btn.textContent = 'PAUSING...';
+	fetch('/api/portal/pause', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, routerId: routerId }),
+	}).then(function(r) { return r.json(); })
+	.then(function(data) {
+		if (data && data.success) {
+			if (juanFiSessionAvailable()) { try { window.JuanFiSession.reportState('pause'); } catch (e) {} }
+			showPausedState(data.remainingSeconds);
+		} else {
+			setPauseButton(isPaused);
+			alert('Could not pause: ' + ((data && data.error) || 'unknown error'));
+		}
+	}).catch(function() {
+		setPauseButton(isPaused);
+		alert('Pause request failed. Please try again.');
+	});
+}
+
+function doResume() {
+	if (!mac || !routerId) { alert('Missing device parameters. Please access the portal through the MikroTik redirect.'); return; }
+	var btn = document.getElementById('pauseTimeBtn');
+	btn.disabled = true;
+	btn.textContent = 'RESUMING...';
+	fetch('/api/portal/resume', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, routerId: routerId }),
+	}).then(function(r) { return r.json(); })
+	.then(function(data) {
+		if (data && data.success) {
+			if (juanFiSessionAvailable()) { try { window.JuanFiSession.reportState('active'); } catch (e) {} }
+			// Re-login with the ORIGINAL account identity (after a roam the
+			// current MAC differs from the username). Hidden-iframe submit, so
+			// flip the panel to connected right away and let live sync confirm.
+			if (chapId && chapChallenge && linkLoginOnly) {
+				doLogin(data.username);
+			}
+			showConnectedState(data.remainingSeconds);
+			setTimeout(function() { syncSessionTime(); }, 3000);
+			setTimeout(function() { syncSessionTime(); }, 8000);
+		} else {
+			setPauseButton(isPaused);
+			alert('Could not resume: ' + ((data && data.error) || 'unknown error'));
+		}
+	}).catch(function() {
+		setPauseButton(isPaused);
+		alert('Resume request failed. Please try again.');
 	});
 }
 
@@ -751,10 +873,19 @@ function refreshSessionAfterExtend() {
 	fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
+			if (data && data.paused && data.remainingSeconds > 0) {
+				showPausedState(data.remainingSeconds);
+				return;
+			}
 			if (data.hasSession && data.remainingSeconds > 0) {
 				remainingSeconds = Math.max(0, Math.floor(data.remainingSeconds));
 				sessionExpiresAt = Date.now() + remainingSeconds * 1000;
-				updateCountdownDisplay();
+				if (isPaused) {
+					// A top-up while paused unpauses the account server-side.
+					showConnectedState(remainingSeconds);
+				} else {
+					updateCountdownDisplay();
+				}
 			}
 		})
 		.catch(function() {});
@@ -794,7 +925,7 @@ function showPayRates() {
 	if (!payRates.length) { alert('Online payment is not available right now.'); return; }
 	var html = '<div style="font-weight:bold;color:#333;margin-bottom:8px;">Choose an amount to pay</div>';
 	payRates.forEach(function(r) {
-		html += '<button type="button" class="btn portal-btn mb-2" style="display:block;width:100%;" onclick="payOnline(' + r.id + '); return false;">' +
+		html += '<button type="button" class="btn portal-btn mb-2" style="display:block;width:100%;background:linear-gradient(135deg, #007dfe, #0057e7);color:#fff;" onclick="payOnline(' + r.id + '); return false;">' +
 			payCurrency + ' ' + r.amount + ' → ' + r.minutes + ' min' + (r.label ? ' (' + r.label + ')' : '') + '</button>';
 	});
 	panel.innerHTML = html;

@@ -475,6 +475,12 @@ export function initializeDatabase(): void {
   if (!hotspotUserCols.some((c: any) => c.name === 'shared_users')) {
     db.exec("ALTER TABLE hotspot_users ADD COLUMN shared_users INTEGER NOT NULL DEFAULT 1");
   }
+  // Portal "Pause Time": the account is disabled while paused so RADIUS rejects
+  // re-auth (time cannot drain), but it must stay distinguishable from a logout
+  // (which also disables). The frozen balance lives in device_sessions.
+  if (!hotspotUserCols.some((c: any) => c.name === 'paused')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+  }
 
   const voucherCols2 = db.prepare("PRAGMA table_info('vouchers')").all() as any[];
   if (!voucherCols2.some((c: any) => c.name === 'radius_profile_id')) {

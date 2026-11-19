@@ -91,13 +91,34 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     // Match tolerating the router's username casing / MAC separators so we
     // update the EXISTING account instead of inserting a duplicate row (which
     // left the real account disabled/expired and auth kept failing).
-    const existing = db.prepare(
-      `SELECT id, expiry_at FROM hotspot_users
+    let accountUsername = macNoColon;
+    let existing = db.prepare(
+      `SELECT id, expiry_at, paused FROM hotspot_users
        WHERE router_id = ?
          AND (LOWER(username) = LOWER(?)
               OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
        ORDER BY id DESC LIMIT 1`
     ).get(routerId, macNoColon, macNoColon) as any;
+
+    // After a roam the device presents a NEW MAC while the account keeps the
+    // ORIGINAL username (token binding). Resolve the same identity check-session
+    // uses so the coin stacks onto the real account (and its frozen paused
+    // balance) instead of creating a duplicate account for the new MAC.
+    const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
+    if (!existing && macColon) {
+      const bound = db.prepare(
+        `SELECT username FROM device_sessions
+         WHERE router_id = ? AND mac_address = ? AND username <> ''
+         ORDER BY last_seen DESC LIMIT 1`
+      ).get(routerId, macColon) as any;
+      if (bound && bound.username) {
+        accountUsername = String(bound.username).trim().toUpperCase();
+        existing = db.prepare(
+          `SELECT id, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ?
+           ORDER BY id DESC LIMIT 1`
+        ).get(routerId, accountUsername) as any;
+      }
+    }
 
     let expiryAt: string;
     let hadRemaining = false;
@@ -109,9 +130,21 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       // as an "extend". A new coin insert must ADD to any remaining time, never
       // reset it (otherwise the leftover time is lost before the new time is
       // applied - the captive-popup "time disappears then adds" bug).
-      const currentExpiry = existing.expiry_at
+      let currentExpiry = existing.expiry_at
         ? new Date(String(existing.expiry_at).replace(' ', 'T') + 'Z').getTime()
         : 0;
+      // Paused account: pause cleared expiry_at and froze the balance in
+      // device_sessions. Stack the coin onto that frozen balance (and unpause
+      // via the UPDATE below) so no paid time is lost.
+      if (existing.paused) {
+        const sess = db.prepare(
+          `SELECT remaining_seconds FROM device_sessions
+           WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
+           ORDER BY last_seen DESC LIMIT 1`
+        ).get(routerId, macColon, accountUsername) as any;
+        const frozen = sess ? Math.max(0, Math.floor(Number(sess.remaining_seconds) || 0)) : 0;
+        if (frozen > 0) currentExpiry = now.getTime() + frozen * 1000;
+      }
       if (currentExpiry > now.getTime()) {
         hadRemaining = true;
         expiryAt = new Date(currentExpiry + addMs).toISOString().replace('T', ' ').slice(0, 19);
@@ -119,7 +152,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
       }
       db.prepare(
-        `UPDATE hotspot_users SET disabled = 0, expiry_at = ?, updated_at = datetime('now'),
+        `UPDATE hotspot_users SET disabled = 0, paused = 0, expiry_at = ?, updated_at = datetime('now'),
           source = ?, profile = COALESCE(NULLIF(profile, ''), ?),
           radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?`
       ).run(
@@ -135,18 +168,18 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source, radius_profile_id)
          VALUES (?, ?, '', ?, 'Coin-insert MAC user', 0, ?, ?, ?)`
       ).run(
-        routerId, macNoColon,
+        routerId, accountUsername,
         defaultProfile?.name || 'default',
         expiryAt,
         authMode === 'radius' ? 'radius' : 'api',
         defaultProfile?.id ?? null
       );
     }
-    return { expiryAt, hadRemaining };
+    return { expiryAt, hadRemaining, accountUsername };
   });
 
   try {
-    const { expiryAt, hadRemaining } = upsert();
+    const { expiryAt, hadRemaining, accountUsername } = upsert();
 
     // Bind a permanent roaming session token to this MAC + account NOW (server
     // side), so the panel DB already holds the mac+token+time binding even if
@@ -160,8 +193,8 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
       );
       if (macColon) {
         const init = initSession({ mac: macColon, ip: '', server: '', routerId });
-        bindSession({ token: init.token, mac: macColon, username: macNoColon, sessionTimeLeft: tokenRemaining, routerId });
-        console.log(`coin-auth: bound session token for ${macNoColon} (remaining ${tokenRemaining}s)`);
+        bindSession({ token: init.token, mac: macColon, username: accountUsername, sessionTimeLeft: tokenRemaining, routerId });
+        console.log(`coin-auth: bound session token for ${macColon} -> ${accountUsername} (remaining ${tokenRemaining}s)`);
       }
     } catch (bindErr: any) {
       console.error(`coin-auth: token bind failed for ${macNoColon}:`, bindErr.message);
@@ -189,7 +222,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           `SELECT session_id, nas_ip, username FROM radius_sessions
            WHERE router_id = ? AND LOWER(username) = LOWER(?) AND status = 'active'
            ORDER BY updated_at DESC LIMIT 1`
-        ).get(routerId, macNoColon) as any;
+        ).get(routerId, accountUsername) as any;
         const realSessionId = sess?.session_id && !String(sess.session_id).startsWith('coin_')
           ? String(sess.session_id) : '';
 
@@ -203,7 +236,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
           // without Acct-Session-Id.
           const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
           const nasIp = String(routerRow?.host || '').split(':')[0];
-          let coaUser = macNoColon;
+          let coaUser = accountUsername;
           let coaIp = '';
           try {
             if (mikroTikService.isConnected(routerId)) {
@@ -257,8 +290,9 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
         // so we extend the ACTUAL live user instead of silently creating a
         // second, unused one (which is why "time added" had no effect).
         const normalizeUserName = (v: any) => String(v || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
-        const existingOnRouter = routerUsers.find((u: any) => normalizeUserName(u.name) === macNoColon);
-        const routerUserName = existingOnRouter ? String(existingOnRouter.name) : macNoColon;
+        const existingOnRouter = routerUsers.find((u: any) =>
+          normalizeUserName(u.name) === macNoColon || normalizeUserName(u.name) === accountUsername);
+        const routerUserName = existingOnRouter ? String(existingOnRouter.name) : accountUsername;
         const msLeft = new Date(expiryAt + 'Z').getTime() - Date.now();
 
         if (!existingOnRouter) {
@@ -266,7 +300,7 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
             console.log(`coin-auth: hybrid RADIUS - no local user for ${macNoColon} to reuse (RADIUS auth + CoA)`);
           } else {
             await mikroTikService.createHotspotUser(routerId, {
-              username: macNoColon,
+              username: accountUsername,
               password: '',
               profile: 'default',
               uptimeLimit: secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000))),

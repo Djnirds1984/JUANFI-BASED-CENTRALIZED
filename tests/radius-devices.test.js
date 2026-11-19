@@ -57,6 +57,8 @@ mt.getActiveConnections = async () => live;
 mt.getHotspotHosts = async () => hosts;
 mt.removeActiveConnection = async (routerId, id) => { kicks.push(id); live = live.filter(c => c['.id'] !== id); };
 mt.removeHotspotHost = async (routerId, id) => { hostKicks.push(id); hosts = hosts.filter(c => c['.id'] !== id); };
+mt.resetHotspotUserCounters = async () => true;
+mt.setUserUptimeLimit = async () => true;
 
 const sockets = [];
 const dgram = require('node:dgram');
@@ -428,6 +430,179 @@ test('check-session shows restored time on the roamed MAC (account keeps origina
     // Unknown MAC with no binding and no live session still reports no session.
     res = await check('06:5f:5c:fb:0d:f9');
     assert.equal(res.hasSession, false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+// Session-Timeout (RADIUS attribute 27) from a raw response packet.
+function radiusSessionTimeout(packet) {
+  for (let o = 20; o + 2 <= packet.length;) {
+    const type = packet[o], len = packet[o + 1];
+    if (len < 2) break;
+    if (type === 27 && len === 6) return packet.readUInt32BE(o + 2);
+    o += len;
+  }
+  return null;
+}
+
+test('pause freezes live time, resume restores it, and RADIUS grants the frozen balance', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/portal', require('../src/api/portal').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/portal`;
+  const post = (path, body) => fetch(base + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(async r => ({ status: r.status, body: await r.json() }));
+  const check = m => fetch(`${base}/check-session?mac=${encodeURIComponent(m)}&routerId=1`).then(r => r.json());
+  const pauseMac = 'aa:bb:cc:dd:ee:10';
+  const pauseUser = 'AABBCCDDEE10';
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, datetime('now', '+2 hours'))"
+    ).run(pauseUser);
+    connected = true;
+    live = [{ '.id': '*P1', mac: pauseMac, user: pauseUser, 'session-time-left': '1h30m', server: 'hotspot1' }];
+
+    // PAUSE: freeze the LIVE balance, kick the session, disable the account.
+    let res = await post('/pause', { mac: pauseMac, routerId: 1 });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.remainingSeconds, 5400);
+    assert.deepEqual(kicks, ['*P1']);
+    let acct = account(pauseUser);
+    assert.equal(acct.disabled, 1);
+    assert.equal(acct.paused, 1);
+    assert.equal(acct.expiry_at, null);
+    const sess = db.prepare('SELECT * FROM device_sessions WHERE router_id = 1 AND mac_address = ?').get(pauseMac);
+    assert.equal(sess.status, 'paused');
+    assert.equal(sess.remaining_seconds, 5400);
+    assert.equal(sess.username, pauseUser);
+
+    // check-session reports the frozen balance as paused (not connected), and
+    // it does not drain on subsequent reads.
+    let cs = await check(pauseMac);
+    assert.equal(cs.paused, true);
+    assert.equal(cs.hasSession, true);
+    assert.equal(cs.remainingSeconds, 5400);
+    assert.equal(cs.online, false);
+    assert.equal(cs.username, pauseUser);
+    assert.equal((await check(pauseMac)).remainingSeconds, 5400);
+
+    // Idempotent pause; RADIUS rejects the disabled account while paused.
+    res = await post('/pause', { mac: pauseMac, routerId: 1 });
+    assert.equal(res.body.alreadyPaused, true);
+    db.prepare("INSERT INTO radius_clients (router_id, shared_secret) VALUES (1, 'test-only')").run();
+    radius.startRadiusServer();
+    assert.equal(radiusRequest(pauseUser, pauseMac)[0], 3);
+
+    // RESUME: re-enable with expiry = now + balance; RADIUS accepts with that
+    // exact Session-Timeout so the re-login gets the full frozen time.
+    res = await post('/resume', { mac: pauseMac, routerId: 1 });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.remainingSeconds, 5400);
+    acct = account(pauseUser);
+    assert.equal(acct.disabled, 0);
+    assert.equal(acct.paused, 0);
+    const expiryMs = new Date(acct.expiry_at.replace(' ', 'T') + 'Z').getTime();
+    assert.ok(Math.abs(expiryMs - (Date.now() + 5400000)) < 5000);
+    const accept = radiusRequest(pauseUser, pauseMac);
+    assert.equal(accept[0], 2);
+    const timeout = radiusSessionTimeout(accept);
+    assert.ok(timeout >= 5395 && timeout <= 5400, `Session-Timeout ${timeout}`);
+    cs = await check(pauseMac);
+    assert.equal(cs.paused, false);
+    assert.equal(cs.hasSession, true);
+
+    // Logout forfeits the balance — no RESUME offer afterwards.
+    await post('/pause', { mac: pauseMac, routerId: 1 });
+    await post('/logout', { mac: pauseMac, routerId: 1 });
+    assert.equal(account(pauseUser).paused, 0);
+    assert.equal((await check(pauseMac)).hasSession, false);
+
+    // Invalid requests are rejected, not silently accepted.
+    assert.equal((await post('/pause', { mac: 'zz', routerId: 1 })).status, 400);
+    assert.equal((await post('/resume', { mac: pauseMac, routerId: 1 })).status, 404);
+    assert.equal((await post('/pause', { mac: '06:5f:5c:fb:0d:f9', routerId: 1 })).status, 404);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('paused time survives a roam and stacks with a coin top-up', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/portal', require('../src/api/portal').default);
+  app.use('/vouchers', require('../src/api/vouchers').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const oldMac = '50:7b:9d:3c:0a:d2';
+  const newMac = '4c:34:88:a4:31:ed';
+  const username = '507B9D3C0AD2';
+  const token = 'b'.repeat(48);
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, paused, expiry_at) VALUES (1, ?, '', 'default', 1, 1, NULL)"
+    ).run(username);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'paused', 80000, 79733, 0, datetime('now'), datetime('now'))`
+    ).run(token, oldMac, username);
+    connected = false;
+
+    // Roam to a new MAC: restore refuses to re-login but rebinds the token and
+    // reports the frozen balance so the portal shows the paused panel.
+    const res = await restoreSession({ token, mac: newMac, routerId: 1 });
+    assert.equal(res.restore, false);
+    assert.equal(res.reason, 'paused');
+    assert.equal(res.remaining, 79733);
+    assert.equal(res.rebind, true);
+    const rebound = db.prepare('SELECT mac_address, status FROM device_sessions WHERE session_token = ?').get(token);
+    assert.equal(rebound.mac_address, newMac);
+    assert.equal(rebound.status, 'paused');
+
+    // check-session on the NEW mac resolves the paused balance via the binding.
+    const cs = await fetch(`${base}/portal/check-session?mac=${encodeURIComponent(newMac)}&routerId=1`).then(r => r.json());
+    assert.equal(cs.paused, true);
+    assert.equal(cs.remainingSeconds, 79733);
+    assert.equal(cs.username, username);
+
+    // Resume from the NEW mac works (binding resolves the original account).
+    const resumed = await fetch(`${base}/portal/resume`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac: newMac, routerId: 1 }),
+    }).then(r => r.json());
+    assert.equal(resumed.success, true);
+    assert.equal(resumed.username, username);
+    assert.equal(resumed.remainingSeconds, 79733);
+    assert.equal(account(username).paused, 0);
+
+    // Pause again, then a coin top-up must STACK onto the frozen balance and
+    // unpause — never lose the paid time.
+    await fetch(`${base}/portal/pause`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac: newMac, routerId: 1 }),
+    }).then(r => r.json());
+    assert.equal(account(username).paused, 1);
+    const coin = await fetch(`${base}/vouchers/coin-auth`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac: newMac, durationMinutes: 5, routerId: 1 }),
+    }).then(r => r.json());
+    assert.equal(coin.success, true);
+    assert.ok(coin.remainingSeconds >= 79733 + 300 - 5 && coin.remainingSeconds <= 79733 + 300,
+      `stacked balance ${coin.remainingSeconds}`);
+    const acct = account(username);
+    assert.equal(acct.paused, 0);
+    assert.equal(acct.disabled, 0);
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

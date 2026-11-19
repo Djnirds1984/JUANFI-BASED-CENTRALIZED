@@ -249,7 +249,14 @@ export async function restoreSession(params: {
   const oldMac = session.mac_address;
   const rebind = !!newMac && !!oldMac && newMac !== oldMac;
 
-  if (mikroTikService.isConnected(routerId)) {
+  // A paused session stays paused across roams: the account is disabled, so a
+  // silent re-login here would be rejected by RADIUS anyway. Still re-bind the
+  // token to the new MAC (the device legitimately owns it) so check-session on
+  // the new SSID resolves the frozen balance and the portal keeps showing the
+  // paused panel with RESUME. No router kick / limit-uptime while paused.
+  const paused = session.status === 'paused';
+
+  if (!paused && mikroTikService.isConnected(routerId)) {
     // 1) free the shared-users slot - the old session may still be live on SSID-A
     try {
       await mikroTikService.kickActiveSession(routerId, { mac: oldMac, username: session.username });
@@ -288,7 +295,7 @@ export async function restoreSession(params: {
         ).run(newMac, oldMac, params.server || '', now, now, session.id);
         db.prepare(
           'INSERT INTO session_bindings (session_id, old_mac, new_mac, hotspot_server, reason) VALUES (?, ?, ?, ?, ?)'
-        ).run(session.id, oldMac, newMac, params.server || '', 'roam');
+        ).run(session.id, oldMac, newMac, params.server || '', paused ? 'roam-paused' : 'roam');
       } else {
         db.prepare(
           `UPDATE device_sessions SET hotspot_server = COALESCE(NULLIF(?, ''), hotspot_server), last_seen = ? WHERE id = ?`
@@ -299,6 +306,10 @@ export async function restoreSession(params: {
   } catch (err) {
     console.error(`restoreSession DB update failed for session ${session.id}:`, (err as Error).message);
     return { restore: false, reason: 'db-error' };
+  }
+
+  if (paused) {
+    return { restore: false, reason: 'paused', username: session.username, remaining, rebind, token: session.session_token };
   }
 
   return {

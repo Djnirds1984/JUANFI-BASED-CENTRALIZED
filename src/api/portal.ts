@@ -6,7 +6,7 @@ import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
-import { mikrotikTimeToSeconds } from '../services/deviceSessions';
+import { mikrotikTimeToSeconds, secondsToLimitUptime, generateSessionToken } from '../services/deviceSessions';
 
 const router = Router();
 
@@ -157,8 +157,34 @@ router.get('/check-session', async (req: Request, res: Response) => {
     }
 
     // No account for this MAC (directly, via the roaming binding, or via a
-    // live session) — nothing to show.
+    // live session). It may still be PAUSED: pause disables the account (so
+    // RADIUS rejects re-auth and time cannot drain) but keeps the frozen
+    // balance in device_sessions. Report it so the portal shows the paused
+    // panel with a RESUME button instead of "no session".
     if (!hotspotUser) {
+      const pausedAcct = db.prepare(
+        'SELECT id, username FROM hotspot_users WHERE router_id = ? AND username = ? AND paused = 1'
+      ).get(routerId, effectiveUsername) as any;
+      if (pausedAcct) {
+        const sess = db.prepare(
+          `SELECT remaining_seconds FROM device_sessions
+           WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
+           ORDER BY last_seen DESC LIMIT 1`
+        ).get(routerId, macWithColons, effectiveUsername) as any;
+        const frozen = sess ? Math.max(0, Math.floor(Number(sess.remaining_seconds) || 0)) : 0;
+        if (frozen > 0) {
+          res.json({
+            hasSession: true,
+            remainingSeconds: frozen,
+            expiresAt: null,
+            online: false,
+            liveChecked,
+            paused: true,
+            username: effectiveUsername,
+          });
+          return;
+        }
+      }
       res.json({ hasSession: false });
       return;
     }
@@ -217,6 +243,7 @@ router.get('/check-session', async (req: Request, res: Response) => {
       expiresAt: hotspotUser.expiry_at || null,
       online,
       liveChecked,
+      paused: false,
       username: effectiveUsername,
     });
   } catch (error: any) {
@@ -238,14 +265,216 @@ router.post('/logout', (req: Request, res: Response) => {
     const db = getDb();
 
     // Case/separator tolerant so logout targets the real account row.
+    // Clear `paused` too: a logout forfeits the balance, it must not look like
+    // a paused session (which would offer RESUME) on the next portal visit.
     db.prepare(
-      `UPDATE hotspot_users SET disabled = 1, expiry_at = NULL, updated_at = datetime('now')
+      `UPDATE hotspot_users SET disabled = 1, paused = 0, expiry_at = NULL, updated_at = datetime('now')
        WHERE router_id = ?
          AND (LOWER(username) = LOWER(?)
               OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)`
     ).run(routerId, macNoColons, macNoColons);
 
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resolve the account behind a MAC the same way check-session does: normally
+// username = MAC without colons, but after a roam the device presents a NEW
+// MAC while the account keeps the ORIGINAL identity (token binding).
+function resolvePortalIdentity(db: any, routerId: number, macWithColons: string, macNoColons: string, pausedOnly: boolean): { username: string; acct: any } | null {
+  const filter = pausedOnly ? 'paused = 1' : 'disabled = 0';
+  let acct = db.prepare(
+    `SELECT id, username, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ? AND ${filter}`
+  ).get(routerId, macNoColons) as any;
+  let username = macNoColons;
+  if (!acct) {
+    const bound = db.prepare(
+      `SELECT username FROM device_sessions
+       WHERE router_id = ? AND mac_address = ? AND username <> ''
+       ORDER BY last_seen DESC LIMIT 1`
+    ).get(routerId, macWithColons) as any;
+    if (bound && bound.username) {
+      username = String(bound.username).trim().toUpperCase();
+      acct = db.prepare(
+        `SELECT id, username, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ? AND ${filter}`
+      ).get(routerId, username) as any;
+    }
+  }
+  if (!acct) return null;
+  return { username: String(acct.username).trim().toUpperCase(), acct };
+}
+
+// Frozen balance for a paused identity (device_sessions is the canonical store).
+function pausedBalance(db: any, routerId: number, macWithColons: string, username: string): number {
+  const sess = db.prepare(
+    `SELECT remaining_seconds FROM device_sessions
+     WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
+     ORDER BY last_seen DESC LIMIT 1`
+  ).get(routerId, macWithColons, username) as any;
+  return sess ? Math.max(0, Math.floor(Number(sess.remaining_seconds) || 0)) : 0;
+}
+
+// POST /api/portal/pause — freeze the remaining time. Kicks the live session
+// (router stops counting), disables the account so RADIUS rejects re-auth
+// (time cannot drain while away) and stores the balance in device_sessions.
+// The wall-clock expiry_at is cleared; resume rebuilds it from the balance.
+router.post('/pause', async (req: Request, res: Response) => {
+  try {
+    const mac = String(req.body.mac || req.query.mac || '').trim().toLowerCase().replace(/-/g, ':');
+    const routerId = parseInt(String(req.body.routerId || req.query.routerId || '1'), 10);
+    if (!mac || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) {
+      res.status(400).json({ error: 'Valid MAC is required' });
+      return;
+    }
+    const macNoColons = mac.replace(/:/g, '').toUpperCase();
+    const db = getDb();
+
+    const ident = resolvePortalIdentity(db, routerId, mac, macNoColons, false)
+      || resolvePortalIdentity(db, routerId, mac, macNoColons, true);
+    if (!ident) {
+      res.status(404).json({ error: 'No account for this device' });
+      return;
+    }
+    const { username, acct } = ident;
+
+    // Already paused: idempotent success with the frozen balance.
+    if (acct.paused) {
+      res.json({ success: true, alreadyPaused: true, remainingSeconds: pausedBalance(db, routerId, mac, username), username });
+      return;
+    }
+
+    // Remaining time: live session-time-left (authoritative) > stored session
+    // balance > wall-clock expiry. Same precedence as check-session.
+    let remaining = 0;
+    try {
+      if (mikroTikService.isConnected(routerId)) {
+        const live = await mikroTikService.getActiveConnections(routerId);
+        const conn = (Array.isArray(live) ? live : []).find((c: any) => {
+          const connMac = String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+          const connUser = String(c.user || '').toUpperCase();
+          return (!!connMac && connMac === macNoColons.toLowerCase()) || (!!connUser && connUser === username);
+        });
+        if (conn) {
+          const left = mikrotikTimeToSeconds(conn['session-time-left']);
+          if (left !== Infinity) remaining = Math.max(0, Math.floor(left));
+        }
+      }
+    } catch (liveErr: any) {
+      console.error('pause live lookup failed:', liveErr.message);
+    }
+    if (remaining <= 0) remaining = pausedBalance(db, routerId, mac, username);
+    if (remaining <= 0 && acct.expiry_at) {
+      const expiryMs = new Date(String(acct.expiry_at).replace(' ', 'T') + 'Z').getTime();
+      if (Number.isFinite(expiryMs)) remaining = Math.max(0, Math.floor((expiryMs - Date.now()) / 1000));
+    }
+    if (remaining <= 0) {
+      res.status(400).json({ error: 'No time remaining to pause' });
+      return;
+    }
+
+    // Kick the live session so the router stops counting down immediately.
+    try {
+      if (mikroTikService.isConnected(routerId)) {
+        await mikroTikService.kickActiveSession(routerId, { mac, username });
+      }
+    } catch (kickErr: any) {
+      console.warn('pause kick failed (account is disabled anyway):', kickErr.message);
+    }
+
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const apply = db.transaction(() => {
+      db.prepare(
+        `UPDATE hotspot_users SET disabled = 1, paused = 1, expiry_at = NULL, updated_at = datetime('now') WHERE id = ?`
+      ).run(acct.id);
+      // Upsert the session row that holds the frozen balance. Prefer the row
+      // that owns this MAC, else the one bound to the account username.
+      let sess = db.prepare(
+        'SELECT id FROM device_sessions WHERE router_id = ? AND mac_address = ?'
+      ).get(routerId, mac) as any;
+      if (!sess) {
+        sess = db.prepare(
+          `SELECT id FROM device_sessions WHERE router_id = ? AND username <> '' AND UPPER(username) = ?
+           ORDER BY last_seen DESC LIMIT 1`
+        ).get(routerId, username) as any;
+      }
+      if (sess) {
+        // Free the MAC slot from any other holder (unique index) before rebinding.
+        db.prepare(
+          `UPDATE device_sessions SET mac_address = '' WHERE router_id = ? AND mac_address = ? AND id <> ?`
+        ).run(routerId, mac, sess.id);
+        db.prepare(
+          `UPDATE device_sessions SET mac_address = ?, username = ?, remaining_seconds = ?,
+             status = 'paused', is_online = 0, last_seen = ? WHERE id = ?`
+        ).run(mac, username, remaining, now, sess.id);
+      } else {
+        db.prepare(
+          `INSERT INTO device_sessions (session_token, mac_address, router_id, username, status,
+             total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+           VALUES (?, ?, ?, ?, 'paused', ?, ?, 0, ?, ?)`
+        ).run(generateSessionToken(), mac, routerId, username, remaining, remaining, now, now);
+      }
+    });
+    apply();
+
+    console.log(`portal pause: ${username} on router ${routerId} frozen at ${remaining}s`);
+    res.json({ success: true, remainingSeconds: remaining, username });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/portal/resume — unfreeze: re-enable the account with
+// expiry_at = now + frozen balance (RADIUS then grants exactly that as
+// Session-Timeout on the portal's re-login) and reset the router counters so
+// the full balance applies. The portal submits the CHAP login right after.
+router.post('/resume', async (req: Request, res: Response) => {
+  try {
+    const mac = String(req.body.mac || req.query.mac || '').trim().toLowerCase().replace(/-/g, ':');
+    const routerId = parseInt(String(req.body.routerId || req.query.routerId || '1'), 10);
+    if (!mac || !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) {
+      res.status(400).json({ error: 'Valid MAC is required' });
+      return;
+    }
+    const macNoColons = mac.replace(/:/g, '').toUpperCase();
+    const db = getDb();
+
+    const ident = resolvePortalIdentity(db, routerId, mac, macNoColons, true);
+    if (!ident) {
+      res.status(404).json({ error: 'No paused session for this device' });
+      return;
+    }
+    const { username, acct } = ident;
+    const remaining = pausedBalance(db, routerId, mac, username);
+    if (remaining <= 0) {
+      res.status(400).json({ error: 'No paused time to resume' });
+      return;
+    }
+
+    const expiryAt = new Date(Date.now() + remaining * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare(
+      `UPDATE hotspot_users SET disabled = 0, paused = 0, expiry_at = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(expiryAt, acct.id);
+    db.prepare(
+      `UPDATE device_sessions SET status = 'active', is_online = 0, remaining_seconds = ?, last_seen = datetime('now')
+       WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))`
+    ).run(remaining, routerId, mac, username);
+
+    // The next login must start with the FULL balance: reset accumulated
+    // counters and set limit-uptime (local-auth fallback; RADIUS mode derives
+    // Session-Timeout from expiry_at). Mirrors restoreSession's roam logic.
+    try {
+      if (mikroTikService.isConnected(routerId)) {
+        await mikroTikService.resetHotspotUserCounters(routerId, username);
+        await mikroTikService.setUserUptimeLimit(routerId, username, secondsToLimitUptime(remaining));
+      }
+    } catch (limitErr: any) {
+      console.warn('resume limit-uptime failed (RADIUS expiry still applies):', limitErr.message);
+    }
+
+    console.log(`portal resume: ${username} on router ${routerId} with ${remaining}s`);
+    res.json({ success: true, remainingSeconds: remaining, username, expiresAt: expiryAt });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

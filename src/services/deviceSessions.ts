@@ -254,7 +254,24 @@ export async function restoreSession(params: {
   // token to the new MAC (the device legitimately owns it) so check-session on
   // the new SSID resolves the frozen balance and the portal keeps showing the
   // paused panel with RESUME. No router kick / limit-uptime while paused.
-  const paused = session.status === 'paused';
+  //
+  // IMPORTANT: device_sessions.status is NOT authoritative for a user pause.
+  // The background sync writes 'paused' for any session that merely went
+  // OFFLINE with time left (and logout reports do too), and it can flip a real
+  // paused row back to 'active' while the router still lists the session.
+  // Only the account's paused flag decides: otherwise offline-then-returning
+  // devices get stuck on a "paused" panel that /resume refuses (the account
+  // was never paused).
+  const dbChk = getDb();
+  const nameKey = String(session.username).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+  const acctChk = dbChk.prepare(
+    `SELECT paused FROM hotspot_users
+     WHERE router_id = ?
+       AND (LOWER(username) = LOWER(?)
+            OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC LIMIT 1`
+  ).get(session.router_id, session.username, nameKey.length === 12 ? nameKey : '', nameKey) as any;
+  const paused = !!acctChk && Number(acctChk.paused) === 1;
 
   if (!paused && mikroTikService.isConnected(routerId)) {
     // 1) free the shared-users slot - the old session may still be live on SSID-A

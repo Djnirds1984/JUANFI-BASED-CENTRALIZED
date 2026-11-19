@@ -608,3 +608,43 @@ test('paused time survives a roam and stacks with a coin top-up', async () => {
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('offline-sync paused status does not trap a device whose account is not paused', async () => {
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const mac = 'aa:bb:cc:dd:ee:20';
+  const username = 'AABBCCDDEE20';
+  const token = 'c'.repeat(48);
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    // The background sync marks ANY session that went offline with time left
+    // as status='paused' — but the account was never user-paused. Restore must
+    // still re-login (the old behaviour trapped these devices on a paused
+    // panel whose RESUME failed with "No paused session for this device").
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, paused, expiry_at) VALUES (1, ?, '', 'default', 0, 0, ?)"
+    ).run(username, expiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'paused', 3600, 3000, 0, datetime('now'), datetime('now'))`
+    ).run(token, mac, username);
+    connected = false;
+
+    const res = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res.restore, true);
+    assert.equal(res.username, username);
+    assert.ok(res.remaining > 0);
+
+    // Reverse direction: the sync can flip a REAL paused row back to 'active'
+    // while the router still lists the session. The account flag must win.
+    db.prepare("UPDATE hotspot_users SET disabled = 1, paused = 1, expiry_at = NULL WHERE router_id = 1 AND username = ?").run(username);
+    db.prepare("UPDATE device_sessions SET status = 'active' WHERE session_token = ?").run(token);
+    const res2 = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res2.restore, false);
+    assert.equal(res2.reason, 'paused');
+    assert.equal(res2.remaining, 3000);
+  } finally {
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});

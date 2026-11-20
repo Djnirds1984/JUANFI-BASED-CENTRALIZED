@@ -339,6 +339,69 @@ test('expired grace is one-shot: refresh cannot farm free 60s sessions; top-up r
   assert.equal(radiusRequest(mac, mac)[0], 3);
 });
 
+test('voucher redeem credits the MAC identity (MAC-as-voucher mode), single-use and stacking', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/api/vouchers', require('../src/api/vouchers').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/vouchers`;
+  const post = (path, body) => fetch(base + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const macKey = mac.replace(/:/g, '');
+  const insertVoucher = code => db.prepare(
+    `INSERT INTO vouchers (router_id, code, username, profile, duration_minutes) VALUES (1, ?, ?, 'default', 10)`
+  ).run(code, code);
+  // Isolate from accounts/vouchers left behind by earlier tests.
+  db.prepare('DELETE FROM hotspot_users WHERE router_id = 1').run();
+  db.prepare('DELETE FROM vouchers WHERE router_id = 1').run();
+  try {
+    insertVoucher('TESTVC01');
+    db.prepare(`INSERT INTO hotspot_users (router_id, username, password, comment, disabled)
+                VALUES (1, 'TESTVC01', '', 'Voucher: TESTVC01', 0)`).run();
+
+    // Redeem (code typed lower-case) credits the MAC account, marks the
+    // voucher used and disables the voucher's own account.
+    const res = await post('/redeem', { mac, code: 'testvc01', routerId: 1 });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.success);
+    assert.ok(Math.abs(body.remainingSeconds - 600) < 5, `remaining ${body.remainingSeconds}`);
+    assert.equal(db.prepare('SELECT is_used FROM vouchers WHERE code = ?').get('TESTVC01').is_used, 1);
+    assert.equal(account('TESTVC01').disabled, 1);
+    const acct = account(macKey);
+    assert.ok(acct, 'MAC account created');
+    const expiryMs = new Date(acct.expiry_at.replace(' ', 'T') + 'Z').getTime();
+    assert.ok(Math.abs(expiryMs - (Date.now() + 600000)) < 5000);
+
+    // RADIUS accepts the MAC with exactly the redeemed time.
+    db.prepare("INSERT INTO radius_clients (router_id, shared_secret) VALUES (1, 'test-only')").run();
+    radius.startRadiusServer();
+    const accept = radiusRequest(mac, mac);
+    assert.equal(accept[0], 2);
+    const timeout = radiusSessionTimeout(accept);
+    assert.ok(timeout >= 595 && timeout <= 600, `Session-Timeout ${timeout}`);
+
+    // Single-use: replay rejected; unknown code rejected.
+    assert.equal((await post('/redeem', { mac, code: 'TESTVC01', routerId: 1 })).status, 409);
+    assert.equal((await post('/redeem', { mac, code: 'NOPE1234', routerId: 1 })).status, 404);
+
+    // A second voucher stacks onto the same MAC account.
+    insertVoucher('TESTVC02');
+    const stacked = await post('/redeem', { mac, code: 'TESTVC02', routerId: 1 });
+    assert.equal(stacked.status, 200);
+    const sb = await stacked.json();
+    assert.ok(Math.abs(sb.remainingSeconds - 1200) < 5, `stacked ${sb.remainingSeconds}`);
+  } finally {
+    db.prepare("DELETE FROM vouchers WHERE code IN ('TESTVC01','TESTVC02')").run();
+    db.prepare("DELETE FROM hotspot_users WHERE username IN ('TESTVC01','TESTVC02')").run();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('first login cannot overwrite an admin top-up with profile validity', async () => {
   const d = newDevice();
   await devices.addActiveDeviceTime(1, d.id, 60);

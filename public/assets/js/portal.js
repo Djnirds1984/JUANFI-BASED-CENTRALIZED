@@ -493,11 +493,17 @@ function doLogin(loginAs) {
 		document.getElementById('voucherInput').value = vc;
 	} else {
 		vc = document.getElementById('voucherInput').value.trim();
-		// Panel-served portal always authenticates as MAC-as-voucher.
-		// Typing anything else is ignored so it can never conflict with the
-		// coin-insert MAC session.
+		// MAC-as-voucher: the identity stays the MAC. A GENERATED voucher code
+		// typed here is redeemed onto the MAC account (like a coin insert) and
+		// then we log in as the MAC — never authenticate as the code itself.
 		if (macAsVoucherCode) {
-			vc = macVoucherCode();
+			var macCode = macVoucherCode();
+			var typedKey = vc.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+			if (vc && typedKey !== macCode) {
+				redeemVoucher(vc);
+				return false;
+			}
+			vc = macCode;
 			document.getElementById('voucherInput').value = vc;
 		}
 	}
@@ -536,6 +542,30 @@ function doLogin(loginAs) {
 	// Keep the roaming token bound to this identity so a later roam restores it.
 	setTimeout(function() { bindRoamingToken(vc); }, 2500);
 	return false;
+}
+
+// Redeem a generated voucher code onto this device's MAC account, then log in
+// as the MAC (single identity: pause/resume, roam and coin top-ups keep working).
+function redeemVoucher(code) {
+	fetch('/api/vouchers/redeem', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, code: code, routerId: routerId }),
+	}).then(function(r) {
+		return r.json().then(function(d) { return { ok: r.ok, d: d }; });
+	}).then(function(res) {
+		if (res.ok && res.d && res.d.success) {
+			document.getElementById('voucherInput').value = macVoucherCode();
+			doLogin();
+			showConnectedState(res.d.remainingSeconds);
+			setTimeout(function() { syncSessionTime(); }, 2500);
+			setTimeout(function() { syncSessionTime(); }, 8000);
+		} else {
+			alert('Voucher: ' + ((res.d && res.d.error) || 'could not be redeemed'));
+		}
+	}).catch(function() {
+		alert('Voucher redemption failed. Please try again.');
+	});
 }
 
 // ---- Logout ----

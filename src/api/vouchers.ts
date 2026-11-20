@@ -29,6 +29,130 @@ function secondsToUptimeLimit(seconds: number): string {
   return days > 0 ? `${days}d${clock}` : clock;
 }
 
+// Credit `duration` minutes onto the MAC identity account, stacking on any
+// remaining (or frozen paused) balance. Shared by coin-auth and voucher
+// redeem so a redeemed voucher behaves exactly like a coin insert. Plain
+// function: the CALLER wraps it in a transaction (redeem combines it with the
+// voucher mark-used update; nested transactions are not portable).
+function creditMacAccount(db: any, routerId: number, macNoColon: string, duration: number, authMode: string) {
+  // RADIUS mode: give the coin-insert account the router's DEFAULT RADIUS
+  // profile so rate-limit / idle-timeout come from the profile (the coin's
+  // own paid time still becomes the Session-Timeout).
+  const defaultProfile = authMode === 'radius'
+    ? (db.prepare('SELECT id, name FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1')
+        .get(routerId) as any)
+    : null;
+
+  // Match tolerating the router's username casing / MAC separators so we
+  // update the EXISTING account instead of inserting a duplicate row (which
+  // left the real account disabled/expired and auth kept failing).
+  let accountUsername = macNoColon;
+  let existing = db.prepare(
+    `SELECT id, expiry_at, paused FROM hotspot_users
+     WHERE router_id = ?
+       AND (LOWER(username) = LOWER(?)
+            OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
+     ORDER BY id DESC LIMIT 1`
+  ).get(routerId, macNoColon, macNoColon) as any;
+
+  // After a roam the device presents a NEW MAC while the account keeps the
+  // ORIGINAL username (token binding). Resolve the same identity check-session
+  // uses so the coin stacks onto the real account (and its frozen paused
+  // balance) instead of creating a duplicate account for the new MAC.
+  const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
+  if (!existing && macColon) {
+    const bound = db.prepare(
+      `SELECT username FROM device_sessions
+       WHERE router_id = ? AND mac_address = ? AND username <> ''
+       ORDER BY last_seen DESC LIMIT 1`
+    ).get(routerId, macColon) as any;
+    if (bound && bound.username) {
+      accountUsername = String(bound.username).trim().toUpperCase();
+      existing = db.prepare(
+        `SELECT id, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ?
+         ORDER BY id DESC LIMIT 1`
+      ).get(routerId, accountUsername) as any;
+    }
+  }
+
+  let expiryAt: string;
+  let hadRemaining = false;
+  const now = new Date();
+  const addMs = duration * 60 * 1000;
+
+  if (existing) {
+    // ALWAYS stack onto unused time - whether or not the portal flagged this
+    // as an "extend". A new coin insert must ADD to any remaining time, never
+    // reset it (otherwise the leftover time is lost before the new time is
+    // applied - the captive-popup "time disappears then adds" bug).
+    let currentExpiry = existing.expiry_at
+      ? new Date(String(existing.expiry_at).replace(' ', 'T') + 'Z').getTime()
+      : 0;
+    // Paused account: pause cleared expiry_at and froze the balance in
+    // device_sessions. Stack the coin onto that frozen balance (and unpause
+    // via the UPDATE below) so no paid time is lost.
+    if (existing.paused) {
+      const sess = db.prepare(
+        `SELECT remaining_seconds FROM device_sessions
+         WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
+         ORDER BY last_seen DESC LIMIT 1`
+      ).get(routerId, macColon, accountUsername) as any;
+      const frozen = sess ? Math.max(0, Math.floor(Number(sess.remaining_seconds) || 0)) : 0;
+      if (frozen > 0) currentExpiry = now.getTime() + frozen * 1000;
+    }
+    if (currentExpiry > now.getTime()) {
+      hadRemaining = true;
+      expiryAt = new Date(currentExpiry + addMs).toISOString().replace('T', ' ').slice(0, 19);
+    } else {
+      expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
+    }
+    db.prepare(
+      `UPDATE hotspot_users SET disabled = 0, paused = 0, expiry_at = ?, updated_at = datetime('now'),
+        source = ?, profile = COALESCE(NULLIF(profile, ''), ?),
+        radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?`
+    ).run(
+      expiryAt,
+      authMode === 'radius' ? 'radius' : 'api',
+      defaultProfile?.name || 'default',
+      defaultProfile?.id ?? null,
+      existing.id
+    );
+  } else {
+    expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare(
+      `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source, radius_profile_id)
+       VALUES (?, ?, '', ?, 'Coin-insert MAC user', 0, ?, ?, ?)`
+    ).run(
+      routerId, accountUsername,
+      defaultProfile?.name || 'default',
+      expiryAt,
+      authMode === 'radius' ? 'radius' : 'api',
+      defaultProfile?.id ?? null
+    );
+  }
+  return { expiryAt, hadRemaining, accountUsername };
+}
+
+// Bind a permanent roaming session token to this MAC + account (server side)
+// so the panel DB holds the mac+token+time binding even if the portal's own
+// bind never runs. On roam, /session/restore finds it and restores the time.
+function bindMacToken(routerId: number, macNoColon: string, accountUsername: string, expiryAt: string): void {
+  try {
+    const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
+    const tokenRemaining = Math.max(
+      0,
+      Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+    );
+    if (macColon) {
+      const init = initSession({ mac: macColon, ip: '', server: '', routerId });
+      bindSession({ token: init.token, mac: macColon, username: accountUsername, sessionTimeLeft: tokenRemaining, routerId });
+      console.log(`mac-credit: bound session token for ${macColon} -> ${accountUsername} (remaining ${tokenRemaining}s)`);
+    }
+  } catch (bindErr: any) {
+    console.error(`mac-credit: token bind failed for ${macNoColon}:`, bindErr.message);
+  }
+}
+
 // Public endpoint for coin-insert flow — MAC-AS-VOUCHER ONLY.
 // Creates/extends the hotspot_user whose username is the device MAC
 // (no colons, UPPERCASE) so the upcoming auto-login authenticates the
@@ -79,126 +203,11 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
   const duration = parseInt(durationMinutes) || 0;
   console.log(`coin-auth: request mac=${macNoColon} routerId=${routerId} authMode=${authMode} extend=${isExtend} duration=${duration}min`);
 
-  const upsert = db.transaction(() => {
-    // RADIUS mode: give the coin-insert account the router's DEFAULT RADIUS
-    // profile so rate-limit / idle-timeout come from the profile (the coin's
-    // own paid time still becomes the Session-Timeout).
-    const defaultProfile = authMode === 'radius'
-      ? (db.prepare('SELECT id, name FROM radius_profiles WHERE router_id = ? AND is_default = 1 LIMIT 1')
-          .get(routerId) as any)
-      : null;
-
-    // Match tolerating the router's username casing / MAC separators so we
-    // update the EXISTING account instead of inserting a duplicate row (which
-    // left the real account disabled/expired and auth kept failing).
-    let accountUsername = macNoColon;
-    let existing = db.prepare(
-      `SELECT id, expiry_at, paused FROM hotspot_users
-       WHERE router_id = ?
-         AND (LOWER(username) = LOWER(?)
-              OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
-       ORDER BY id DESC LIMIT 1`
-    ).get(routerId, macNoColon, macNoColon) as any;
-
-    // After a roam the device presents a NEW MAC while the account keeps the
-    // ORIGINAL username (token binding). Resolve the same identity check-session
-    // uses so the coin stacks onto the real account (and its frozen paused
-    // balance) instead of creating a duplicate account for the new MAC.
-    const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
-    if (!existing && macColon) {
-      const bound = db.prepare(
-        `SELECT username FROM device_sessions
-         WHERE router_id = ? AND mac_address = ? AND username <> ''
-         ORDER BY last_seen DESC LIMIT 1`
-      ).get(routerId, macColon) as any;
-      if (bound && bound.username) {
-        accountUsername = String(bound.username).trim().toUpperCase();
-        existing = db.prepare(
-          `SELECT id, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ?
-           ORDER BY id DESC LIMIT 1`
-        ).get(routerId, accountUsername) as any;
-      }
-    }
-
-    let expiryAt: string;
-    let hadRemaining = false;
-    const now = new Date();
-    const addMs = duration * 60 * 1000;
-
-    if (existing) {
-      // ALWAYS stack onto unused time - whether or not the portal flagged this
-      // as an "extend". A new coin insert must ADD to any remaining time, never
-      // reset it (otherwise the leftover time is lost before the new time is
-      // applied - the captive-popup "time disappears then adds" bug).
-      let currentExpiry = existing.expiry_at
-        ? new Date(String(existing.expiry_at).replace(' ', 'T') + 'Z').getTime()
-        : 0;
-      // Paused account: pause cleared expiry_at and froze the balance in
-      // device_sessions. Stack the coin onto that frozen balance (and unpause
-      // via the UPDATE below) so no paid time is lost.
-      if (existing.paused) {
-        const sess = db.prepare(
-          `SELECT remaining_seconds FROM device_sessions
-           WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
-           ORDER BY last_seen DESC LIMIT 1`
-        ).get(routerId, macColon, accountUsername) as any;
-        const frozen = sess ? Math.max(0, Math.floor(Number(sess.remaining_seconds) || 0)) : 0;
-        if (frozen > 0) currentExpiry = now.getTime() + frozen * 1000;
-      }
-      if (currentExpiry > now.getTime()) {
-        hadRemaining = true;
-        expiryAt = new Date(currentExpiry + addMs).toISOString().replace('T', ' ').slice(0, 19);
-      } else {
-        expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
-      }
-      db.prepare(
-        `UPDATE hotspot_users SET disabled = 0, paused = 0, expiry_at = ?, updated_at = datetime('now'),
-          source = ?, profile = COALESCE(NULLIF(profile, ''), ?),
-          radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?`
-      ).run(
-        expiryAt,
-        authMode === 'radius' ? 'radius' : 'api',
-        defaultProfile?.name || 'default',
-        defaultProfile?.id ?? null,
-        existing.id
-      );
-    } else {
-      expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
-      db.prepare(
-        `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source, radius_profile_id)
-         VALUES (?, ?, '', ?, 'Coin-insert MAC user', 0, ?, ?, ?)`
-      ).run(
-        routerId, accountUsername,
-        defaultProfile?.name || 'default',
-        expiryAt,
-        authMode === 'radius' ? 'radius' : 'api',
-        defaultProfile?.id ?? null
-      );
-    }
-    return { expiryAt, hadRemaining, accountUsername };
-  });
-
   try {
-    const { expiryAt, hadRemaining, accountUsername } = upsert();
+    const { expiryAt, hadRemaining, accountUsername } = db.transaction(() =>
+      creditMacAccount(db, routerId, macNoColon, duration, authMode))();
 
-    // Bind a permanent roaming session token to this MAC + account NOW (server
-    // side), so the panel DB already holds the mac+token+time binding even if
-    // the portal's own bind never runs. On roam, /session/restore finds it and
-    // restores the remaining time on the new SSID/MAC.
-    try {
-      const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
-      const tokenRemaining = Math.max(
-        0,
-        Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
-      );
-      if (macColon) {
-        const init = initSession({ mac: macColon, ip: '', server: '', routerId });
-        bindSession({ token: init.token, mac: macColon, username: accountUsername, sessionTimeLeft: tokenRemaining, routerId });
-        console.log(`coin-auth: bound session token for ${macColon} -> ${accountUsername} (remaining ${tokenRemaining}s)`);
-      }
-    } catch (bindErr: any) {
-      console.error(`coin-auth: token bind failed for ${macNoColon}:`, bindErr.message);
-    }
+    bindMacToken(routerId, macNoColon, accountUsername, expiryAt);
 
     // Extend/top-up: NEVER kick/disconnect the live session here.
     // The live /ip/hotspot/active session keeps running and stays online;
@@ -396,6 +405,114 @@ router.post('/coin-auth', async (req: Request, res: Response) => {
     res.json({ success: true, remainingSeconds, extended: isExtend || hadRemaining });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Public endpoint: redeem a GENERATED voucher code from the panel portal
+// while MAC-as-voucher mode is on. The voucher's minutes are credited to the
+// device's MAC identity (exactly like a coin insert) and the voucher is marked
+// used in the SAME transaction; the portal then logs in as the MAC. One
+// account per device keeps pause/resume, roam and later top-ups working.
+router.post('/redeem', async (req: Request, res: Response) => {
+  const { mac, code, routerId: bodyRouterId } = req.body;
+  const macNoColon = String(mac || '').replace(/:/g, '').replace(/-/g, '').toUpperCase();
+  const codeClean = String(code || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(macNoColon) || !codeClean || !bodyRouterId) {
+    res.status(400).json({ error: 'mac (12 hex chars), code and routerId are required' });
+    return;
+  }
+  const routerId = parseInt(bodyRouterId, 10);
+  const db = getDb();
+  const routerRow = db.prepare(
+    'SELECT id, auth_mode, radius_local_users FROM routers WHERE id = ? AND is_active = 1'
+  ).get(routerId) as any;
+  if (!routerRow) {
+    res.status(404).json({ error: 'Router not found or not active' });
+    return;
+  }
+  const authMode = routerRow.auth_mode || 'api';
+
+  const voucher = db.prepare('SELECT * FROM vouchers WHERE router_id = ? AND UPPER(code) = ?')
+    .get(routerId, codeClean) as any;
+  if (!voucher) {
+    res.status(404).json({ error: 'Invalid voucher code' });
+    return;
+  }
+  if (Number(voucher.is_used) === 1) {
+    res.status(409).json({ error: 'Voucher already used' });
+    return;
+  }
+  if (voucher.expires_at && new Date(String(voucher.expires_at).replace(' ', 'T') + 'Z').getTime() <= Date.now()) {
+    res.status(410).json({ error: 'Voucher expired' });
+    return;
+  }
+  const minutes = parseInt(voucher.duration_minutes) || 0;
+  if (minutes <= 0) {
+    res.status(400).json({ error: 'Voucher has no time value' });
+    return;
+  }
+
+  try {
+    // Mark-used + credit in ONE transaction: any failure rolls back both, so
+    // the voucher is never lost nor double-spent.
+    const { expiryAt, accountUsername } = db.transaction(() => {
+      const marked = db.prepare(
+        `UPDATE vouchers SET is_used = 1, used_at = datetime('now') WHERE id = ? AND is_used = 0`
+      ).run(voucher.id);
+      if (marked.changes !== 1) {
+        const e: any = new Error('Voucher already used');
+        e.status = 409;
+        throw e;
+      }
+      return creditMacAccount(db, routerId, macNoColon, minutes, authMode);
+    })();
+
+    // The voucher's own account must not stay usable after redemption.
+    db.prepare('UPDATE hotspot_users SET disabled = 1 WHERE router_id = ? AND username = ?')
+      .run(routerId, voucher.username);
+
+    bindMacToken(routerId, macNoColon, accountUsername, expiryAt);
+
+    // API mode only: the router needs a LOCAL MAC user for the CHAP login.
+    // RADIUS mode authenticates the MAC account directly (no local user).
+    if (authMode !== 'radius' && mikroTikService.isConnected(routerId)) {
+      try {
+        const routerUsers = await mikroTikService.getHotspotUsers(routerId);
+        const normalize = (v: any) => String(v || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+        const existingOnRouter = routerUsers.find((u: any) =>
+          normalize(u.name) === macNoColon || normalize(u.name) === accountUsername);
+        const msLeft = new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now();
+        const limit = secondsToUptimeLimit(Math.max(60, Math.floor(msLeft / 1000)));
+        if (!existingOnRouter) {
+          await mikroTikService.createHotspotUser(routerId, {
+            username: accountUsername, password: '', profile: 'default',
+            uptimeLimit: limit, comment: 'Voucher-redeem MAC user',
+          });
+        } else {
+          await mikroTikService.resetHotspotUserCounters(routerId, String(existingOnRouter.name));
+          await mikroTikService.setUserUptimeLimit(routerId, String(existingOnRouter.name), limit);
+          if (existingOnRouter['.id']) {
+            try { await mikroTikService.enableHotspotUser(routerId, existingOnRouter['.id']); } catch {}
+          }
+        }
+        // Remove the voucher's local user so the code cannot login directly.
+        const voucherOnRouter = routerUsers.find((u: any) => u.name === voucher.username);
+        if (voucherOnRouter && voucherOnRouter['.id']) {
+          try { await mikroTikService.removeHotspotUser(routerId, voucherOnRouter['.id']); } catch {}
+        }
+      } catch (mtErr: any) {
+        console.error(`redeem: router push failed for ${macNoColon}:`, mtErr.message);
+      }
+    }
+
+    const remainingSeconds = Math.max(
+      0,
+      Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+    );
+    console.log(`redeem: voucher ${codeClean} -> ${accountUsername} (+${minutes}min, remaining ${remainingSeconds}s) router=${routerId}`);
+    res.json({ success: true, remainingSeconds, username: accountUsername });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

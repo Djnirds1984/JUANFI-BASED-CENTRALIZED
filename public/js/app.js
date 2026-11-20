@@ -4414,6 +4414,7 @@ const App = {
               <th>Username</th>
               <th>RADIUS Profile</th>
               <th>Duration</th>
+              <th>Price</th>
               <th>Status</th>
               <th>Created</th>
               <th>Actions</th>
@@ -4424,6 +4425,7 @@ const App = {
               const created = v.created_at ? new Date(v.created_at).toLocaleDateString() : '';
               const profileName = v.radius_profile_name || '-';
               const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 1440)}d ${Math.floor((v.duration_minutes % 1440) / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
+              const price = Number(v.price) > 0 ? `₱${Number(v.price).toFixed(2)}` : '—';
               let statusBadge;
               if (!v.is_used) {
                 statusBadge = '<span class="status-badge voucher-available">Available</span>';
@@ -4436,6 +4438,7 @@ const App = {
                   <td>${this.escapeHtml(v.username)}</td>
                   <td>${this.escapeHtml(profileName)}</td>
                   <td>${dur}</td>
+                  <td>${price}</td>
                   <td>${statusBadge}</td>
                   <td>${created}</td>
                   <td>
@@ -4488,6 +4491,10 @@ const App = {
           </div>
         </div>
         <div class="form-group">
+          <label>Price per Voucher (₱, optional)</label>
+          <input type="number" name="price" placeholder="e.g. 5" min="0" step="0.01">
+        </div>
+        <div class="form-group">
           <label>Code Prefix (optional)</label>
           <input type="text" name="prefix" placeholder="e.g. WIFI">
         </div>
@@ -4519,6 +4526,7 @@ const App = {
         durationMinutes: totalMinutes > 0 ? totalMinutes : null,
         prefix: form.prefix.value || undefined,
         usePassword: form.usePassword.checked || false,
+        price: form.price.value ? parseFloat(form.price.value) : 0,
       });
 
       this.closeModal();
@@ -4597,6 +4605,7 @@ const App = {
                   <th>Username</th>
                   <th>Profile</th>
                   <th>Duration</th>
+                  <th>Price</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th>Actions</th>
@@ -4605,6 +4614,7 @@ const App = {
               <tbody>
                 ${vouchers.map((v) => {
                   const dur = v.duration_minutes ? `${Math.floor(v.duration_minutes / 60)}h ${v.duration_minutes % 60}m` : 'Unlimited';
+                  const price = Number(v.price) > 0 ? `₱${Number(v.price).toFixed(2)}` : '—';
 
                   const isActive = routerUsers.some(u => u.name === v.username && u.disabled !== 'true');
                   let statusBadge, statusIcon;
@@ -4626,6 +4636,7 @@ const App = {
                     <td>${this.escapeHtml(v.username)}</td>
                     <td>${this.escapeHtml(v.profile)}</td>
                     <td>${dur}</td>
+                    <td>${price}</td>
                     <td>
                       <div class="voucher-status">
                         <span class="voucher-status-icon">${statusIcon}</span>
@@ -4707,6 +4718,10 @@ const App = {
           <input type="number" name="dataLimitMb" placeholder="e.g. 1024">
         </div>
         <div class="form-group">
+          <label>Price per Voucher (₱, optional)</label>
+          <input type="number" name="price" placeholder="e.g. 5" min="0" step="0.01">
+        </div>
+        <div class="form-group">
           <label>Code Prefix (optional)</label>
           <input type="text" name="prefix" placeholder="e.g. WIFI">
         </div>
@@ -4732,6 +4747,7 @@ const App = {
         dataLimitMb: form.dataLimitMb.value ? parseInt(form.dataLimitMb.value) : null,
         prefix: form.prefix.value || undefined,
         codeLength: parseInt(form.codeLength.value) || 8,
+        price: form.price.value ? parseFloat(form.price.value) : 0,
       });
 
       this.closeModal();
@@ -6018,6 +6034,10 @@ const App = {
             <label style="display:block;margin-bottom:0.5rem;font-size:0.9rem;color:var(--text-muted)">Prefix (optional)</label>
             <input type="text" name="prefix" placeholder="e.g., P" style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
           </div>
+          <div style="margin-bottom:1rem">
+            <label style="display:block;margin-bottom:0.5rem;font-size:0.9rem;color:var(--text-muted)">Price per Voucher (₱, optional)</label>
+            <input type="number" name="price" placeholder="e.g. 5" min="0" step="0.01" style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+          </div>
           <div style="display:flex;gap:0.5rem;justify-content:flex-end">
             <button type="button" class="btn btn-outline" onclick="this.closest('.modal').remove()">Cancel</button>
             <button type="submit" class="btn btn-primary">Generate</button>
@@ -6046,6 +6066,7 @@ const App = {
         radiusProfileId: parseInt(formData.get('profile_id'), 10),
         prefix: formData.get('prefix') || 'P',
         codeLength: 8,
+        price: formData.get('price') ? parseFloat(formData.get('price')) : 0,
       };
 
       try {

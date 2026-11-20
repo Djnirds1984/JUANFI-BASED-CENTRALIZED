@@ -87,6 +87,7 @@ export function initializeDatabase(): void {
       profile TEXT NOT NULL,
       duration_minutes INTEGER,
       data_limit_mb INTEGER,
+      price REAL NOT NULL DEFAULT 0,
       is_used INTEGER NOT NULL DEFAULT 0,
       used_at TEXT,
       expires_at TEXT,

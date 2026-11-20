@@ -451,6 +451,43 @@ test('generated vouchers do not self-expire: an old unused voucher still redeems
   }
 });
 
+test('voucher generation stores the selling price and rejects invalid prices', async () => {
+  const express = require('express');
+  const jwt = require('jsonwebtoken');
+  const app = express();
+  app.use(express.json());
+  app.use('/api/vouchers', require('../src/api/vouchers').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const token = jwt.sign({ userId: 1, username: 'admin', role: 'admin' }, process.env.JWT_SECRET);
+  const post = (path, body) => fetch(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  }).then(async r => ({ status: r.status, body: await r.json() }));
+  try {
+    db.exec('DELETE FROM hotspot_users; DELETE FROM vouchers;');
+    const gen = await post('/api/vouchers/router/1/generate', { count: 2, durationMinutes: 60, price: 5.5 });
+    assert.equal(gen.status, 201);
+    assert.equal(gen.body.vouchers[0].price, 5.5);
+    const rows = db.prepare('SELECT price FROM vouchers').all();
+    assert.equal(rows.length, 2);
+    for (const r of rows) assert.equal(r.price, 5.5);
+
+    // Optional: omitted price defaults to 0; negative / non-numeric rejected.
+    const free = await post('/api/vouchers/router/1/generate', { count: 1 });
+    assert.equal(free.status, 201);
+    assert.equal(db.prepare('SELECT price FROM vouchers WHERE code = ?').get(free.body.vouchers[0].code).price, 0);
+    assert.equal((await post('/api/vouchers/router/1/generate', { count: 1, price: -5 })).status, 400);
+    assert.equal((await post('/api/vouchers/router/1/generate', { count: 1, price: 'abc' })).status, 400);
+  } finally {
+    db.exec('DELETE FROM hotspot_users; DELETE FROM vouchers;');
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('voucher account first login gets the voucher duration, not days of profile validity', async () => {
   const profile = db.prepare("INSERT INTO radius_profiles (router_id, name, validity_period) VALUES (1, 'Two days', 172800)").run();
   db.prepare("INSERT INTO hotspot_users (router_id, username, password, comment, radius_profile_id, disabled) VALUES (1, 'TESTVACC', '', 'Voucher: TESTVACC', ?, 0)")

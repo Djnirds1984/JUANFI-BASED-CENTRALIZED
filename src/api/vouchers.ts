@@ -625,10 +625,16 @@ router.get('/router/:routerId', async (req: Request, res: Response) => {
 router.post('/router/:routerId/generate', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength, radiusProfileId, usePassword } = req.body;
+    const { count, profile, durationMinutes, dataLimitMb, prefix, codeLength, radiusProfileId, usePassword, price } = req.body;
 
     const quantity = Math.min(count || 1, 100);
     const codeLen = Math.min(Math.max(parseInt(codeLength) || 8, 4), 20);
+    // Selling price per voucher (optional, for sales tracking / display).
+    const priceValue = price === undefined || price === null || price === '' ? 0 : Number(price);
+    if (!Number.isFinite(priceValue) || priceValue < 0 || priceValue > 1000000) {
+      res.status(400).json({ error: 'price must be a number from 0 to 1000000' });
+      return;
+    }
     const db = getDb();
 
     const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
@@ -648,8 +654,8 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
 
     const vouchers: any[] = [];
     const insertStmt = db.prepare(
-      `INSERT INTO vouchers (router_id, code, username, password, profile, duration_minutes, data_limit_mb, expires_at, radius_profile_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO vouchers (router_id, code, username, password, profile, duration_minutes, data_limit_mb, expires_at, radius_profile_id, price)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     const insertHotspotUserStmt = db.prepare(
@@ -675,7 +681,8 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           durationMinutes || null,
           dataLimitMb || null,
           null,
-          isRadius ? rProfileId : null
+          isRadius ? rProfileId : null,
+          priceValue
         );
 
         if (isRadius) {
@@ -697,6 +704,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           durationMinutes,
           dataLimitMb,
           radiusProfileId: isRadius ? rProfileId : null,
+          price: priceValue,
         });
       }
     });

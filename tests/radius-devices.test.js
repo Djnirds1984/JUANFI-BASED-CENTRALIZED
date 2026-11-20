@@ -975,3 +975,97 @@ test('check-session resolves colon-form MAC accounts and the RADIUS MAC alias', 
     db.prepare('DELETE FROM device_macs WHERE mac_address = ?').run(aliasMac);
   }
 });
+
+test('restore refuses a stale balance once the account expiry is consumed', async () => {
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const mac = 'aa:bb:cc:dd:ee:40';
+  const username = 'AABBCCDDEE40';
+  const token = 'f'.repeat(48);
+  const pastExpiry = new Date(Date.now() - 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(username, pastExpiry);
+    // Sync froze the balance at 3s before the account expired. Granting it
+    // again made the portal auto-login with phantom time forever, so the
+    // router never dropped the device to the captive portal.
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'paused', 3600, 3, 0, datetime('now'), datetime('now'))`
+    ).run(token, mac, username);
+    connected = false;
+    live = [];
+
+    const res = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res.restore, false);
+    assert.equal(res.reason, 'expired');
+    const row = db.prepare('SELECT remaining_seconds, status FROM device_sessions WHERE session_token = ?').get(token);
+    assert.equal(row.remaining_seconds, 0);
+    assert.equal(row.status, 'expired');
+
+    // A top-up re-arms the account: restore works again with the paid time.
+    const futureExpiry = new Date(Date.now() + 1800 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE router_id = 1 AND username = ?').run(futureExpiry, username);
+    db.prepare("UPDATE device_sessions SET remaining_seconds = 1800, status = 'active' WHERE session_token = ?").run(token);
+    const res2 = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res2.restore, true);
+
+    // A GENUINE pause (account paused=1) keeps its frozen balance restorable.
+    db.prepare('UPDATE hotspot_users SET disabled = 1, paused = 1, expiry_at = NULL WHERE router_id = 1 AND username = ?').run(username);
+    db.prepare("UPDATE device_sessions SET remaining_seconds = 900, status = 'paused' WHERE session_token = ?").run(token);
+    const res3 = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res3.restore, false);
+    assert.equal(res3.reason, 'paused');
+    assert.equal(res3.remaining, 900);
+  } finally {
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});
+
+test('check-session reports no session for consumed accounts despite stale balances', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/portal', require('../src/api/portal').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/portal`;
+  const check = m => fetch(`${base}/check-session?mac=${encodeURIComponent(m)}&routerId=1`).then(r => r.json());
+  const mac = 'aa:bb:cc:dd:ee:41';
+  const username = 'AABBCCDDEE41';
+  const token = 'a'.repeat(48);
+  const pastExpiry = new Date(Date.now() - 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(username, pastExpiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'active', 3600, 59, 0, datetime('now'), datetime('now'))`
+    ).run(token, mac, username);
+    connected = false;
+    live = [];
+
+    // Offline + expired account: the stale 59s must NOT be reported.
+    let res = await check(mac);
+    assert.equal(res.hasSession, false);
+    assert.equal(res.remainingSeconds, 0);
+
+    // A LIVE session still wins (the one-shot expired-grace window): the
+    // portal must show the grace countdown, not "no session".
+    connected = true;
+    live = [{ '.id': '*G1', mac, user: username, 'session-time-left': '55s', server: 'hotspot1' }];
+    res = await check(mac);
+    assert.equal(res.hasSession, true);
+    assert.equal(res.online, true);
+    assert.ok(res.remainingSeconds > 0 && res.remainingSeconds <= 55);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});

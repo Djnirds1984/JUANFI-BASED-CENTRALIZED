@@ -240,6 +240,38 @@ export async function restoreSession(params: {
     }
   }
 
+  // Consumed time must NOT come back from a stale session balance. When the
+  // account's wall-clock expiry has passed (and it is not genuinely paused),
+  // whatever remaining_seconds the row still holds is already spent — sync
+  // snapshots freeze at the last seen value. Granting it made the portal
+  // auto-login with phantom 3s/59s sessions forever, so the router never
+  // dropped the device to the captive portal. Zero the stale balance and
+  // refuse; a top-up/redeem re-arms the account, a real pause keeps paused=1.
+  const dbG = getDb();
+  const gKey = String(session.username).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+  const guardAcct = dbG.prepare(
+    `SELECT disabled, paused, expiry_at FROM hotspot_users
+     WHERE router_id = ?
+       AND (LOWER(username) = LOWER(?)
+            OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC LIMIT 1`
+  ).get(session.router_id, session.username, gKey.length === 12 ? gKey : '', gKey) as any;
+  if (guardAcct && Number(guardAcct.paused) !== 1) {
+    const gExp = guardAcct.expiry_at
+      ? new Date(String(guardAcct.expiry_at).replace(' ', 'T') + 'Z').getTime()
+      : NaN;
+    const consumed = Number.isFinite(gExp) && gExp <= Date.now();
+    // Logged-out / disabled accounts without an expiry must not restore
+    // either — RADIUS rejects their re-login anyway.
+    const inactive = Number(guardAcct.disabled) === 1 && !guardAcct.expiry_at;
+    if (consumed || inactive) {
+      dbG.prepare(
+        `UPDATE device_sessions SET remaining_seconds = 0, status = 'expired', is_online = 0, last_seen = datetime('now') WHERE id = ?`
+      ).run(session.id);
+      return { restore: false, reason: consumed ? 'expired' : 'disabled', username: session.username };
+    }
+  }
+
   if (session.status === 'expired' || remaining <= 0) {
     return { restore: false, reason: 'no-time-remaining', username: session.username };
   }

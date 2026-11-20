@@ -210,6 +210,28 @@ router.get('/check-session', async (req: Request, res: Response) => {
       return;
     }
 
+    // Consumed time must not be reported from stale snapshots: when the
+    // resolved account's wall-clock expiry has passed, any stored balance
+    // (active_devices / device_sessions) is already spent. Reporting it made
+    // the portal count down phantom seconds and auto-login forever instead
+    // of letting the router show the captive portal. A LIVE session above
+    // still wins — that is the one-shot expired-grace window.
+    if (!resolved && hotspotUser.expiry_at) {
+      const hsExp = new Date(String(hotspotUser.expiry_at).replace(' ', 'T') + 'Z').getTime();
+      if (Number.isFinite(hsExp) && hsExp <= Date.now()) {
+        res.json({
+          hasSession: false,
+          remainingSeconds: 0,
+          expiresAt: null,
+          online,
+          liveChecked,
+          paused: false,
+          username: effectiveUsername,
+        });
+        return;
+      }
+    }
+
     // 2) Synced mirror in active_devices (background sync, every few seconds).
     if (!resolved) {
       const active = db.prepare(

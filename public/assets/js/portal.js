@@ -94,7 +94,6 @@ function setupEventListeners() {
 	document.getElementById('pauseTimeBtn').addEventListener('click', function() {
 		if (isPaused) doResume(); else doPause();
 	});
-	document.getElementById('logoutBtn').addEventListener('click', function() { doLogout(); });
 
 	// Coin modal
 	document.getElementById('coinSaveBtn').addEventListener('click', function() {

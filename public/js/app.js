@@ -185,6 +185,7 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
+      sales: 'Sales Report',
       payments: 'Online Payment',
       appearance: 'Appearance',
       settings: 'System Settings',
@@ -212,6 +213,7 @@ const App = {
         case 'chat': await this.renderChat(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'sales': await this.renderSalesReport(); break;
         case 'payments': await this.renderOnlinePayment(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
@@ -8222,6 +8224,204 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       this.toast(disabled ? 'Customer disabled' : 'Customer enabled', 'success');
       this.loadPppTab();
     } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- Sales Report ----
+  _salesReport: null,
+  _salesRange: null,
+
+  async renderSalesReport() {
+    const content = document.getElementById('page-content');
+    const today = new Date().toISOString().slice(0, 10);
+    if (!this._salesRange) this._salesRange = { from: today, to: today };
+    const { from, to } = this._salesRange;
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>${uiIcon('chart')} Sales Report</h3>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <input type="date" id="sales-from" class="form-control" style="width:auto" value="${from}">
+            <span style="color:var(--text-muted)">to</span>
+            <input type="date" id="sales-to" class="form-control" style="width:auto" value="${to}">
+            <button class="btn btn-sm btn-primary" onclick="App.loadSalesReport()">Apply</button>
+            <button class="btn btn-sm btn-outline" onclick="App.exportSalesCsv()">Export CSV</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+          <button class="btn btn-sm btn-outline" onclick="App.setSalesRange('today')">Today</button>
+          <button class="btn btn-sm btn-outline" onclick="App.setSalesRange('7d')">Last 7 Days</button>
+          <button class="btn btn-sm btn-outline" onclick="App.setSalesRange('30d')">Last 30 Days</button>
+          <button class="btn btn-sm btn-outline" onclick="App.setSalesRange('month')">This Month</button>
+        </div>
+        <div id="sales-report-body"><div class="empty-state"><p>Loading...</p></div></div>
+      </div>
+    `;
+    await this.loadSalesReport();
+  },
+
+  setSalesRange(kind) {
+    const now = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const to = iso(now);
+    let from = to;
+    if (kind === '7d' || kind === '30d') {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - (kind === '7d' ? 6 : 29));
+      from = iso(d);
+    } else if (kind === 'month') {
+      from = to.slice(0, 8) + '01';
+    }
+    this._salesRange = { from, to };
+    const f = document.getElementById('sales-from');
+    const t = document.getElementById('sales-to');
+    if (f) f.value = from;
+    if (t) t.value = to;
+    this.loadSalesReport();
+  },
+
+  async loadSalesReport() {
+    const body = document.getElementById('sales-report-body');
+    if (!body) return;
+    const from = (document.getElementById('sales-from') || {}).value || '';
+    const to = (document.getElementById('sales-to') || {}).value || '';
+    this._salesRange = { from, to };
+    body.innerHTML = '<div class="empty-state"><p>Loading sales data...</p></div>';
+
+    let r;
+    try {
+      r = await api.getSalesReport(from, to);
+    } catch (err) {
+      body.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+      return;
+    }
+    this._salesReport = r;
+    const fmt = (v) => this.formatMoney(v);
+    const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+
+    const vendoRows = (r.vendo.devices || []).map((d) => `
+      <tr>
+        <td>${esc(d.name)}</td>
+        <td>${esc(d.ip)}</td>
+        <td><span class="status-badge ${d.online ? 'connected' : 'disconnected'}">${d.online ? 'Online' : 'Offline'}</span></td>
+        <td>${d.online ? fmt(d.lifetimeCoins) : '—'}</td>
+        <td>${d.online ? fmt(d.currentCoins) : '—'}</td>
+        <td>${d.online ? d.customerCount : '—'}</td>
+      </tr>`).join('');
+
+    const voucherRows = (r.vouchers.rows || []).map((v) => `
+      <tr>
+        <td><code>${esc(v.code)}</code></td>
+        <td>${esc(v.profile)}</td>
+        <td>${fmt(v.price)}</td>
+        <td>${v.duration_minutes == null ? '—' : v.duration_minutes}</td>
+        <td>${esc(v.used_at)}</td>
+        <td>${esc(v.router_name || v.router_id)}</td>
+      </tr>`).join('');
+
+    const gcashRows = (r.gcash.rows || []).map((p) => `
+      <tr>
+        <td><code>${esc(p.reference)}</code></td>
+        <td>${esc(p.mac_address)}</td>
+        <td>${fmt(p.amount)}</td>
+        <td>${p.minutes}</td>
+        <td>${esc(p.paid_at)}</td>
+      </tr>`).join('');
+
+    body.innerHTML = `
+      <div class="overview-grid">
+        <div class="dash-card">
+          <div class="dash-card-title">Voucher Sales (range)</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.voucherSales)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${r.vouchers.count} redeemed · ${r.vouchers.generatedCount} generated (${fmt(r.vouchers.generatedAmount)})</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">GCash / Online (range)</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.gcashSales)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${r.gcash.count} paid payments</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Sub-Vendo Coins (lifetime)</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.vendoLifetimeCoins)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${fmt(r.totals.vendoCurrentCoins)} since reset · ${r.vendo.customerCount} customers · ${r.vendo.onlineCount}/${r.vendo.deviceCount} online</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Total Sales (range)</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.periodTotal)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">Vouchers + GCash within ${esc(r.from)} → ${esc(r.to)}</div>
+        </div>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.8125rem;margin:0.75rem 0">
+        Sub-vendo counters are lifetime totals stored on each device (1 coin = ${fmt(1)}) and are not affected by the date range.
+        Voucher and GCash rows are filtered by UTC date.
+      </p>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header"><h3>${uiIcon('store')} Sub-Vendo / NodeMCU Sales</h3></div>
+        ${r.vendo.devices.length ? `
+        <table class="table">
+          <thead><tr><th>Device</th><th>IP</th><th>Status</th><th>Lifetime</th><th>Since Reset</th><th>Customers</th></tr></thead>
+          <tbody>${vendoRows}</tbody>
+        </table>` : '<div class="empty-state"><p>No sub-vendo devices configured. Add them under SubVendo → Sub-Vendo Devices.</p></div>'}
+      </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header"><h3>${uiIcon('ticket')} Redeemed Vouchers</h3><span class="status-badge connected">${r.vouchers.count} · ${fmt(r.vouchers.amount)}</span></div>
+        ${voucherRows ? `
+        <table class="table">
+          <thead><tr><th>Code</th><th>Profile</th><th>Price</th><th>Minutes</th><th>Used At (UTC)</th><th>Router</th></tr></thead>
+          <tbody>${voucherRows}</tbody>
+        </table>` : '<div class="empty-state"><p>No vouchers redeemed in this range.</p></div>'}
+      </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header"><h3>${uiIcon('card')} GCash / Online Payments</h3><span class="status-badge connected">${r.gcash.count} · ${fmt(r.gcash.amount)}</span></div>
+        ${gcashRows ? `
+        <table class="table">
+          <thead><tr><th>Reference</th><th>MAC</th><th>Amount</th><th>Minutes</th><th>Paid At (UTC)</th></tr></thead>
+          <tbody>${gcashRows}</tbody>
+        </table>` : '<div class="empty-state"><p>No paid online payments in this range.</p></div>'}
+      </div>
+    `;
+  },
+
+  exportSalesCsv() {
+    const r = this._salesReport;
+    if (!r) { this.toast('Load a report first', 'error'); return; }
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [];
+    lines.push(['SALES REPORT', r.from, r.to].map(q).join(','));
+    lines.push('');
+    lines.push(['SUMMARY', 'Count', 'Amount'].map(q).join(','));
+    lines.push(['Voucher sales (redeemed in range)', r.vouchers.count, r.vouchers.amount].map(q).join(','));
+    lines.push(['GCash / online (paid in range)', r.gcash.count, r.gcash.amount].map(q).join(','));
+    lines.push(['Total sales in range', '', r.totals.periodTotal].map(q).join(','));
+    lines.push(['Sub-vendo lifetime coins', '', r.totals.vendoLifetimeCoins].map(q).join(','));
+    lines.push(['Sub-vendo coins since reset', '', r.totals.vendoCurrentCoins].map(q).join(','));
+    lines.push('');
+    lines.push(['SUB-VENDO DEVICES', 'IP', 'Status', 'Lifetime Coins', 'Since Reset', 'Customers'].map(q).join(','));
+    (r.vendo.devices || []).forEach((d) => {
+      lines.push([d.name, d.ip, d.online ? 'online' : 'offline', d.lifetimeCoins, d.currentCoins, d.customerCount].map(q).join(','));
+    });
+    lines.push('');
+    lines.push(['REDEEMED VOUCHERS', 'Profile', 'Price', 'Minutes', 'Used At (UTC)', 'Router'].map(q).join(','));
+    (r.vouchers.rows || []).forEach((v) => {
+      lines.push([v.code, v.profile, v.price, v.duration_minutes, v.used_at, v.router_name || v.router_id].map(q).join(','));
+    });
+    lines.push('');
+    lines.push(['GCASH PAYMENTS', 'MAC', 'Amount', 'Minutes', 'Paid At (UTC)'].map(q).join(','));
+    (r.gcash.rows || []).forEach((p) => {
+      lines.push([p.reference, p.mac_address, p.amount, p.minutes, p.paid_at].map(q).join(','));
+    });
+
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `sales-report_${r.from}_to_${r.to}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
   },
 
   _nodemcuRefreshInterval: null,

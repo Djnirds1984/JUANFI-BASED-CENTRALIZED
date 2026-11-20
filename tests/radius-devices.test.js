@@ -1118,3 +1118,112 @@ test('walled garden denies captive-portal probe hosts ahead of wildcard allows',
     mt.moveWalledGarden = origMove;
   }
 });
+
+test('sales report aggregates redeemed vouchers, paid GCash and sub-vendo counters', async () => {
+  const { buildSalesReport, normalizeRange } = require('../src/services/salesReport');
+  const { nodeMcuService } = require('../src/services/nodemcu');
+  const origDash = nodeMcuService.getDashboard;
+  const today = new Date().toISOString().slice(0, 10);
+  const old = new Date(Date.now() - 10 * 86400 * 1000).toISOString().slice(0, 10);
+  const devOnline = { id: 91, name: 'Vendo A', ip: '10.0.0.91', username: 'admin', password: '' };
+  const devOffline = { id: 92, name: 'Vendo B', ip: '10.0.0.92', username: 'admin', password: '' };
+  nodeMcuService.getDashboard = async (d) => {
+    if (d.id === 91) return { lifetimeCoins: 100, currentCoins: 40, customerCount: 7 };
+    throw new Error('Request timeout');
+  };
+  try {
+    // Isolate from vouchers/payments left behind by earlier tests.
+    db.exec('DELETE FROM vouchers; DELETE FROM payments;');
+    db.prepare(
+      "INSERT INTO vouchers (router_id, code, username, profile, price, duration_minutes, is_used, used_at, created_at) VALUES (1, 'SALES-V1', 'U1', 'default', 10, 60, 1, ?, ?)"
+    ).run(`${today} 12:00:00`, `${today} 08:00:00`);
+    db.prepare(
+      "INSERT INTO vouchers (router_id, code, username, profile, price, duration_minutes, is_used, used_at, created_at) VALUES (1, 'SALES-V2', 'U2', 'default', 25, 120, 1, ?, ?)"
+    ).run(`${old} 12:00:00`, `${old} 08:00:00`);
+    db.prepare(
+      "INSERT INTO vouchers (router_id, code, username, profile, price, duration_minutes, is_used, created_at) VALUES (1, 'SALES-V3', 'U3', 'default', 50, 240, 0, ?)"
+    ).run(`${today} 09:00:00`);
+    db.prepare(
+      "INSERT INTO payments (reference, mac_address, amount, minutes, status, paid_at, created_at) VALUES ('SALES-P1', 'AABBCCDDEE91', 20, 60, 'paid', ?, ?)"
+    ).run(`${today} 13:00:00`, `${today} 12:50:00`);
+    db.prepare(
+      "INSERT INTO payments (reference, mac_address, amount, minutes, status, created_at) VALUES ('SALES-P2', 'AABBCCDDEE92', 99, 60, 'pending', ?)"
+    ).run(`${today} 12:55:00`);
+    db.prepare(
+      "INSERT INTO payments (reference, mac_address, amount, minutes, status, paid_at, created_at) VALUES ('SALES-P3', 'AABBCCDDEE93', 30, 60, 'paid', ?, ?)"
+    ).run(`${old} 13:00:00`, `${old} 12:50:00`);
+
+    // Today only: unredeemed/pending rows and old sales stay out.
+    const r = await buildSalesReport({ from: today, to: today }, [devOnline, devOffline]);
+    assert.equal(r.vouchers.count, 1);
+    assert.equal(r.vouchers.amount, 10);
+    assert.equal(r.vouchers.rows[0].code, 'SALES-V1');
+    assert.equal(r.vouchers.rows[0].router_name, 'Test');
+    assert.equal(r.vouchers.generatedCount, 2);
+    assert.equal(r.vouchers.generatedAmount, 60);
+    assert.equal(r.gcash.count, 1);
+    assert.equal(r.gcash.amount, 20);
+    assert.equal(r.gcash.rows[0].reference, 'SALES-P1');
+    assert.equal(r.vendo.deviceCount, 2);
+    assert.equal(r.vendo.onlineCount, 1);
+    assert.equal(r.vendo.lifetimeCoins, 100);
+    assert.equal(r.vendo.currentCoins, 40);
+    assert.equal(r.vendo.customerCount, 7);
+    const offline = r.vendo.devices.find(d => d.id === 92);
+    assert.equal(offline.online, false);
+    assert.ok(offline.error);
+    assert.equal(r.totals.periodTotal, 30);
+
+    // Reversed bounds are swapped; the wide range picks up the old sales too.
+    const wide = await buildSalesReport({ from: today, to: '2000-01-01' }, []);
+    assert.equal(wide.from, '2000-01-01');
+    assert.equal(wide.to, today);
+    assert.equal(wide.vouchers.count, 2);
+    assert.equal(wide.vouchers.amount, 35);
+    assert.equal(wide.gcash.count, 2);
+    assert.equal(wide.gcash.amount, 50);
+    assert.equal(wide.vendo.deviceCount, 0);
+
+    // Invalid/missing dates fall back to today.
+    const norm = normalizeRange('not-a-date', undefined);
+    assert.equal(norm.from, today);
+    assert.equal(norm.to, today);
+  } finally {
+    nodeMcuService.getDashboard = origDash;
+    db.prepare("DELETE FROM vouchers WHERE code LIKE 'SALES-V%'").run();
+    db.prepare("DELETE FROM payments WHERE reference LIKE 'SALES-P%'").run();
+  }
+});
+
+test('sales report endpoint rejects anonymous access and serves the report', async () => {
+  const express = require('express');
+  const jwt = require('jsonwebtoken');
+  const { nodeMcuService } = require('../src/services/nodemcu');
+  const origDash = nodeMcuService.getDashboard;
+  // Never reach real hardware from tests, even if a devices file exists.
+  nodeMcuService.getDashboard = async () => ({ lifetimeCoins: 0, currentCoins: 0, customerCount: 0 });
+  const app = express();
+  app.use(express.json());
+  app.use('/sales', require('../src/api/sales').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/sales`;
+  try {
+    const anon = await fetch(`${base}/report`);
+    assert.equal(anon.status, 401);
+
+    const token = jwt.sign({ id: 1, username: 'admin', role: 'admin' }, config.jwtSecret, { expiresIn: '1h' });
+    const res = await fetch(`${base}/report`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const today = new Date().toISOString().slice(0, 10);
+    assert.equal(body.from, today);
+    assert.equal(body.to, today);
+    assert.ok(body.totals && typeof body.totals.periodTotal === 'number');
+    assert.ok(Array.isArray(body.vendo.devices));
+  } finally {
+    nodeMcuService.getDashboard = origDash;
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});

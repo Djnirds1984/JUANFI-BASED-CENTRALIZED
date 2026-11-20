@@ -593,6 +593,15 @@ class ApiClient {
   async updatePaymentRate(id, data) { return this.put(`/payments/rates/${id}`, data); }
   async deletePaymentRate(id) { return this.delete(`/payments/rates/${id}`); }
 
+  // --- Sales report ---
+  async getSalesReport(from, to, limit = 1000) {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    params.set('limit', String(limit));
+    return this.get(`/sales/report?${params.toString()}`);
+  }
+
   // --- System settings ---
   async getSystemSettings() { return this.get('/settings'); }
   async updateSystemSettings(data) { return this.put('/settings', data); }

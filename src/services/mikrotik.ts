@@ -1362,6 +1362,26 @@ class MikroTikService {
     }
   }
 
+  async moveWalledGarden(routerId: number, id: string, destination: number): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'POST', '/ip/hotspot/walled-garden/move', {
+        numbers: id,
+        destination: String(destination),
+      });
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      await client.write(['/ip/hotspot/walled-garden/move', `=.id=${id}`, `=destination=${destination}`]);
+    } catch (err) {
+      console.error(`moveWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async updateWalledGarden(routerId: number, id: string, data: any): Promise<any> {
     const config = this.routerConfigs.get(routerId);
 

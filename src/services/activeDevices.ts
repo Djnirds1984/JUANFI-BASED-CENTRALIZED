@@ -642,11 +642,61 @@ export async function ensureWalledGardenForController(routerId: number): Promise
       });
       console.log(`Walled garden entry added for controller ${lanIp} on router ${routerId}`);
     }
+
+    await ensureCaptiveProbeHostsDenied(routerId);
   } catch (err) {
     // Non-fatal: the token restore simply won't work until the entry is added
     // manually; log once so it can be diagnosed.
     walledGardenChecked.delete(routerId);
     console.error(`Walled garden check failed for router ${routerId}:`, (err as Error).message);
+  }
+}
+
+/*
+ * Samsung/Android captive-portal detection probes these exact hosts. When a
+ * walled-garden WILDCARD allow (*.gstatic.com / *.googleapis.com, typically
+ * added for checkout-page assets) covers them, the probe receives a real 204
+ * while the device is still UNAUTHENTICATED: Samsung then closes the portal
+ * popup by itself and reports "connected" with zero time (OPPO probes other
+ * hosts, so it stays captive). Deny the exact probe hosts and keep them at
+ * the TOP of the list — walled garden is first-match, so the deny must win
+ * against any later wildcard allow.
+ */
+const CAPTIVE_PROBE_HOSTS = [
+  'connectivitycheck.gstatic.com',
+  'www.googleapis.com',
+];
+
+async function ensureCaptiveProbeHostsDenied(routerId: number): Promise<void> {
+  const entries = await mikroTikService.getWalledGarden(routerId);
+  let list = Array.isArray(entries) ? entries : [];
+  for (const host of CAPTIVE_PROBE_HOSTS) {
+    const existing = list.find((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
+    if (existing) {
+      if (String(existing.action) === 'deny') {
+        // Keep an existing deny ahead of any wildcard allow.
+        await mikroTikService.moveWalledGarden(routerId, String(existing['.id']), 0);
+      } else {
+        console.warn(`Walled garden: probe host ${host} is explicitly ALLOWED on router ${routerId}; Samsung devices may skip the captive portal`);
+      }
+      continue;
+    }
+    const created = await mikroTikService.createWalledGarden(routerId, {
+      'dst-host': host,
+      action: 'deny',
+      comment: 'captive-portal probe - must stay captive',
+    });
+    const item = Array.isArray(created) ? created[0] : created;
+    let id = item && (item['.id'] || item.id);
+    if (!id) {
+      // Some firmwares return no body on add: look the new entry up instead.
+      const refreshed = await mikroTikService.getWalledGarden(routerId);
+      list = Array.isArray(refreshed) ? refreshed : [];
+      const row = list.find((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
+      id = row && row['.id'];
+    }
+    if (id) await mikroTikService.moveWalledGarden(routerId, String(id), 0);
+    console.log(`Walled garden: denied captive-probe host ${host} on router ${routerId}`);
   }
 }
 

@@ -1069,3 +1069,52 @@ test('check-session reports no session for consumed accounts despite stale balan
     db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
   }
 });
+
+test('walled garden denies captive-portal probe hosts ahead of wildcard allows', async () => {
+  // Samsung probes connectivitycheck.gstatic.com/generate_204. A wildcard
+  // *.gstatic.com allow let the probe pass UNAUTHENTICATED, so Samsung closed
+  // the portal popup and reported "connected" with zero time. The exact probe
+  // hosts must be denied BEFORE any wildcard allow (first match wins).
+  const origGet = mt.getWalledGarden, origCreate = mt.createWalledGarden, origMove = mt.moveWalledGarden;
+  let wgEntries = [], wgCreates = [], wgMoves = [];
+  mt.getWalledGarden = async () => wgEntries;
+  mt.createWalledGarden = async (routerId, data) => {
+    const row = { '.id': `*W${wgEntries.length + 1}`, ...data };
+    wgEntries.push(row);
+    wgCreates.push(data);
+    return row;
+  };
+  mt.moveWalledGarden = async (routerId, id, destination) => {
+    wgMoves.push({ id, destination });
+    const idx = wgEntries.findIndex(e => e['.id'] === id);
+    const [row] = wgEntries.splice(idx, 1);
+    wgEntries.splice(destination, 0, row);
+  };
+  try {
+    // Fresh router: wildcard allows present, no probe entries yet.
+    wgEntries = [
+      { '.id': '*1', 'dst-host': '*.paymongo.com', action: 'allow' },
+      { '.id': '*2', 'dst-host': '*.googleapis.com', action: 'allow' },
+      { '.id': '*3', 'dst-host': '*.gstatic.com', action: 'allow' },
+    ];
+    wgCreates = []; wgMoves = [];
+    await devices.ensureWalledGardenForController(77);
+    const denied = wgCreates.filter(c => c.action === 'deny').map(c => c['dst-host']);
+    assert.ok(denied.includes('connectivitycheck.gstatic.com'));
+    assert.ok(denied.includes('www.googleapis.com'));
+    const idxProbe = wgEntries.findIndex(e => e['dst-host'] === 'connectivitycheck.gstatic.com');
+    const idxWildcard = wgEntries.findIndex(e => e['dst-host'] === '*.gstatic.com');
+    assert.ok(idxProbe >= 0 && idxProbe < idxWildcard, 'probe deny must precede the wildcard allow');
+    assert.ok(wgMoves.every(m => m.destination === 0));
+
+    // Idempotent: existing denies are only re-positioned, never duplicated.
+    wgCreates = []; wgMoves = [];
+    await devices.ensureWalledGardenForController(78);
+    assert.equal(wgCreates.filter(c => c.action === 'deny').length, 0);
+    assert.equal(wgMoves.length, 2);
+  } finally {
+    mt.getWalledGarden = origGet;
+    mt.createWalledGarden = origCreate;
+    mt.moveWalledGarden = origMove;
+  }
+});

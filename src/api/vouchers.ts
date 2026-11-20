@@ -662,13 +662,10 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
         const code = prefix ? `${prefix}-${generateCode(codeLen)}` : generateCode(codeLen);
         const username = code;
 
-        let expiresAt: string | null = null;
-        if (durationMinutes) {
-          const expiry = new Date();
-          expiry.setMinutes(expiry.getMinutes() + durationMinutes);
-          expiresAt = expiry.toISOString().replace('T', ' ').slice(0, 19);
-        }
-
+        // Voucher validity is NOT the session length: a 60-min voucher must
+        // stay redeemable until it is used, not expire 60 min after it was
+        // generated (expires_at = created + duration made every voucher
+        // "expired" before a customer could ever enter it).
         insertStmt.run(
           routerId,
           code,
@@ -677,7 +674,7 @@ router.post('/router/:routerId/generate', async (req: Request, res: Response) =>
           isRadius ? radiusProfileName : (profile || 'default'),
           durationMinutes || null,
           dataLimitMb || null,
-          expiresAt,
+          null,
           isRadius ? rProfileId : null
         );
 

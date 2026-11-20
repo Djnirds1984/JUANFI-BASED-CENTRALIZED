@@ -414,6 +414,83 @@ test('first login cannot overwrite an admin top-up with profile validity', async
   assert.equal(account(mac).expiry_at, expiry);
 });
 
+test('generated vouchers do not self-expire: an old unused voucher still redeems', async () => {
+  const express = require('express');
+  const jwt = require('jsonwebtoken');
+  const app = express();
+  app.use(express.json());
+  app.use('/api/vouchers', require('../src/api/vouchers').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const token = jwt.sign({ userId: 1, username: 'admin', role: 'admin' }, process.env.JWT_SECRET);
+  const post = (path, body, auth) => fetch(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) },
+    body: JSON.stringify(body),
+  }).then(async r => ({ status: r.status, body: await r.json() }));
+  try {
+    db.exec('DELETE FROM hotspot_users; DELETE FROM vouchers;');
+    const gen = await post('/api/vouchers/router/1/generate', { count: 1, durationMinutes: 60 }, token);
+    assert.equal(gen.status, 201);
+    const code = gen.body.vouchers[0].code;
+    const v = db.prepare('SELECT * FROM vouchers WHERE code = ?').get(code);
+    assert.equal(v.expires_at, null, 'voucher must not expire on its own session length');
+
+    // Simulate a voucher printed days ago: still redeemable onto the MAC.
+    db.prepare("UPDATE vouchers SET created_at = datetime('now', '-3 days') WHERE id = ?").run(v.id);
+    const redeemMac = 'AA:BB:CC:DD:EE:31';
+    const res = await post('/api/vouchers/redeem', { mac: redeemMac, code, routerId: 1 });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.remainingSeconds >= 3595 && res.body.remainingSeconds <= 3600);
+    assert.equal(db.prepare('SELECT is_used FROM vouchers WHERE id = ?').get(v.id).is_used, 1);
+  } finally {
+    db.exec('DELETE FROM hotspot_users; DELETE FROM vouchers;');
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('voucher account first login gets the voucher duration, not days of profile validity', async () => {
+  const profile = db.prepare("INSERT INTO radius_profiles (router_id, name, validity_period) VALUES (1, 'Two days', 172800)").run();
+  db.prepare("INSERT INTO hotspot_users (router_id, username, password, comment, radius_profile_id, disabled) VALUES (1, 'TESTVACC', '', 'Voucher: TESTVACC', ?, 0)")
+    .run(profile.lastInsertRowid);
+  db.prepare("INSERT INTO vouchers (router_id, code, username, profile, duration_minutes, radius_profile_id) VALUES (1, 'TESTVACC', 'TESTVACC', 'Two days', 30, ?)")
+    .run(profile.lastInsertRowid);
+  db.prepare("INSERT INTO radius_clients (router_id, shared_secret) VALUES (1, 'test-only')").run();
+  radius.startRadiusServer();
+  const accept = radiusRequest('TESTVACC', 'AA:BB:CC:DD:EE:32');
+  assert.equal(accept[0], 2);
+  assert.equal(radiusSessionTimeout(accept), 1800);
+  const expiryMs = new Date(account('TESTVACC').expiry_at.replace(' ', 'T') + 'Z').getTime();
+  assert.ok(Math.abs(expiryMs - (Date.now() + 1800000)) < 5000, 'expiry must be voucher duration, not profile validity');
+  assert.equal(db.prepare("SELECT is_used FROM vouchers WHERE code = 'TESTVACC'").get().is_used, 1);
+});
+
+test('full-RADIUS cleanup strips trial login so devices cannot bypass RADIUS', async () => {
+  db.prepare("INSERT INTO routers (id, name, host, username, password, auth_mode) VALUES (77, 'Trial', '127.0.0.77', 'test', '', 'radius')").run();
+  const updates = [];
+  const origUsers = mt.getHotspotUsers, origProfiles = mt.getHotspotProfiles, origUpdate = mt.updateHotspotProfile;
+  mt.getHotspotUsers = async () => [];
+  mt.getHotspotProfiles = async () => [
+    { '.id': '*1', name: 'hsprof1', 'login-by': 'http-chap,https,http-pap,trial' },
+    { '.id': '*2', name: 'default', 'login-by': 'cookie,http-chap' },
+    { '.id': '*3', name: 'trialonly', 'login-by': 'trial' },
+  ];
+  mt.updateHotspotProfile = async (routerId, id, data) => { updates.push({ routerId, id, data }); };
+  try {
+    await devices.ensureRadiusOnlyLocalUsers(77);
+    assert.equal(updates.length, 2);
+    assert.deepEqual(updates[0], { routerId: 77, id: '*1', data: { 'login-by': 'http-chap,https,http-pap' } });
+    assert.deepEqual(updates[1], { routerId: 77, id: '*3', data: { 'login-by': 'http-chap' } });
+  } finally {
+    mt.getHotspotUsers = origUsers;
+    mt.getHotspotProfiles = origProfiles;
+    mt.updateHotspotProfile = origUpdate;
+    db.prepare('DELETE FROM routers WHERE id = 77').run();
+  }
+});
+
 test('live time requests CoA but does not claim acknowledgment', async () => {
   const d = newDevice(); connected = true;
   live = [{ '.id': '*A', mac, user: mac, address: '192.0.2.10', 'session-time-left': '2m' }];

@@ -554,14 +554,23 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         db.prepare('UPDATE hotspot_users SET first_login_at = ? WHERE id = ?').run(now, user.id);
 
         if (user.radius_profile_id && !user.expiry_at) {
-          const profile = db.prepare('SELECT validity_period, validity_fixed_expiry FROM radius_profiles WHERE id = ?')
-            .get(user.radius_profile_id) as any;
-          if (profile?.validity_fixed_expiry) {
-            db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(profile.validity_fixed_expiry, user.id);
-          } else if (profile?.validity_period && profile.validity_period > 0) {
-            const expiryMs = Date.now() + profile.validity_period * 1000;
-            const expiryStr = new Date(expiryMs).toISOString().replace('T', ' ').slice(0, 19);
+          if (voucher?.duration_minutes) {
+            // Voucher account: the paid time is the VOUCHER's duration. The
+            // profile validity (often days) would otherwise let the same code
+            // re-login for free long after the voucher was consumed.
+            const expiryStr = new Date(Date.now() + voucher.duration_minutes * 60 * 1000)
+              .toISOString().replace('T', ' ').slice(0, 19);
             db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(expiryStr, user.id);
+          } else {
+            const profile = db.prepare('SELECT validity_period, validity_fixed_expiry FROM radius_profiles WHERE id = ?')
+              .get(user.radius_profile_id) as any;
+            if (profile?.validity_fixed_expiry) {
+              db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(profile.validity_fixed_expiry, user.id);
+            } else if (profile?.validity_period && profile.validity_period > 0) {
+              const expiryMs = Date.now() + profile.validity_period * 1000;
+              const expiryStr = new Date(expiryMs).toISOString().replace('T', ' ').slice(0, 19);
+              db.prepare('UPDATE hotspot_users SET expiry_at = ? WHERE id = ?').run(expiryStr, user.id);
+            }
           }
         }
       }

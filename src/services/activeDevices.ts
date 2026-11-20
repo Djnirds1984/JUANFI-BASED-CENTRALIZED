@@ -584,9 +584,33 @@ export async function ensureRadiusOnlyLocalUsers(routerId: number): Promise<void
   radiusOnlyChecked.add(routerId);
   try {
     await purgeLocalDeviceUsers(routerId);
+    await disableTrialLogin(routerId);
   } catch (err) {
     radiusOnlyChecked.delete(routerId);
     console.error(`[RADIUS] local-user cleanup failed for router ${routerId}:`, (err as Error).message);
+  }
+}
+
+/*
+ * FULL RADIUS: `trial` in a hotspot profile's login-by lets MikroTik accept a
+ * device WITHOUT ever asking RADIUS (free daily trial). The captive popup then
+ * closes on a "connected" device the panel knows nothing about (no session
+ * time shown) - and once the daily trial allowance is spent, the login is
+ * still accepted with ZERO time left: connected, but no internet. Strip trial
+ * from every profile so RADIUS stays the only authentication path.
+ */
+async function disableTrialLogin(routerId: number): Promise<void> {
+  const profiles = await mikroTikService.getHotspotProfiles(routerId);
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    const methods = String(p['login-by'] || '').split(',').map((m: string) => m.trim()).filter(Boolean);
+    if (!methods.includes('trial')) continue;
+    const kept = methods.filter((m: string) => m !== 'trial').join(',') || 'http-chap';
+    try {
+      await mikroTikService.updateHotspotProfile(routerId, p['.id'], { 'login-by': kept });
+      console.log(`[RADIUS] full-RADIUS: disabled trial login on profile "${p.name}" (router ${routerId})`);
+    } catch (err) {
+      console.error(`[RADIUS] trial-disable failed for profile "${p.name}" on router ${routerId}:`, (err as Error).message);
+    }
   }
 }
 

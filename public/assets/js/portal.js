@@ -339,6 +339,15 @@ function tryRoamingRestore() {
 				showPausedState(res.remaining);
 				return true;
 			}
+			// Same MAC already live on the router: do NOT re-login (it would
+			// race the working session). Show the balance; live sync keeps it
+			// fresh and confirms the connected state.
+			if (res && res.reason === 'already-online' && res.remaining > 0) {
+				tokenBound = true;
+				showConnectedState(res.remaining);
+				setTimeout(function() { syncSessionTime(); }, 3000);
+				return true;
+			}
 			if (!res || res.restore !== true || !res.username) return null;
 			tokenBound = true;
 			doLogin(res.username);
@@ -539,8 +548,21 @@ function doLogin(loginAs) {
 	document.sendin.target = 'loginFrame';
 	document.sendin.submit();
 
-	// Keep the roaming token bound to this identity so a later roam restores it.
-	setTimeout(function() { bindRoamingToken(vc); }, 2500);
+	// Keep the roaming token bound to the RESOLVED account identity so a later
+	// roam restores it. Binding the submitted name (usually the current MAC)
+	// would overwrite the session's original identity after a roam / voucher
+	// redeem and make check-session report "no time" while the device is online.
+	setTimeout(function() {
+		if (!mac || !routerId || !juanFiSessionAvailable()) return;
+		fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+			.then(function(r) { return r.json(); })
+			.then(function(data) {
+				if (data && data.username && data.hasSession) {
+					bindRoamingToken(data.username, data.remainingSeconds);
+				}
+			})
+			.catch(function() {});
+	}, 2500);
 	return false;
 }
 

@@ -273,7 +273,28 @@ export async function restoreSession(params: {
   ).get(session.router_id, session.username, nameKey.length === 12 ? nameKey : '', nameKey) as any;
   const paused = !!acctChk && Number(acctChk.paused) === 1;
 
-  if (!paused && mikroTikService.isConnected(routerId)) {
+  // Same-MAC restore: the session may still be LIVE on the router (the portal
+  // reloads while connected). Kicking it here disconnects a working session
+  // and the re-login then races the router — the user sees the time vanish
+  // seconds after starting. Only a real roam (new MAC) frees the old slot;
+  // when the same MAC is already online, just report the live balance.
+  let liveSameMac = false;
+  if (!rebind && !paused && mikroTikService.isConnected(routerId)) {
+    try {
+      const live = await mikroTikService.getActiveConnections(routerId);
+      const oldKey = String(oldMac || '').replace(/[^0-9a-f]/g, '');
+      const nameU = String(session.username).toUpperCase();
+      liveSameMac = (Array.isArray(live) ? live : []).some((c: any) => {
+        const cMac = String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+        const cUser = String(c.user || '').toUpperCase();
+        return (!!oldKey && cMac === oldKey) || (!!cUser && cUser === nameU);
+      });
+    } catch (err) {
+      console.error(`restoreSession live check failed for session ${session.id}:`, (err as Error).message);
+    }
+  }
+
+  if (!paused && !liveSameMac && mikroTikService.isConnected(routerId)) {
     // 1) free the shared-users slot - the old session may still be live on SSID-A
     try {
       await mikroTikService.kickActiveSession(routerId, { mac: oldMac, username: session.username });
@@ -327,6 +348,13 @@ export async function restoreSession(params: {
 
   if (paused) {
     return { restore: false, reason: 'paused', username: session.username, remaining, rebind, token: session.session_token };
+  }
+
+  // The same MAC is already live on the router: nothing to restore — a
+  // re-login here would only race the working session. The portal shows the
+  // balance and lets the live sync keep it fresh.
+  if (liveSameMac) {
+    return { restore: false, reason: 'already-online', username: session.username, remaining, rebind, token: session.session_token };
   }
 
   return {
@@ -393,7 +421,32 @@ export function bindSession(params: {
     put('mac_address', mac);
   }
   if (macChanged) put('previous_mac', session.mac_address);
-  if (username) put('username', username);
+  // Identity guard: the portal's post-login bind submits the name it logged in
+  // with — usually the CURRENT MAC. When this session already tracks a paid
+  // account under a DIFFERENT (original) identity (roam / voucher redeem onto
+  // an older account), a MAC-like username must not clobber it: check-session
+  // and the next roam restore would lose the paid account and the portal would
+  // show "no time" while the device is online. Keep the original identity
+  // unless the incoming MAC name has its own enabled account.
+  let bindUsername = username;
+  if (username && session.username && username.toUpperCase() !== String(session.username).toUpperCase()) {
+    const incomingKey = username.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    const currentKey = String(session.username).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    if (incomingKey.length === 12 && incomingKey !== currentKey) {
+      const acctByName = (name: string, key: string): any =>
+        db.prepare(
+          `SELECT id FROM hotspot_users
+           WHERE router_id = ? AND disabled = 0
+             AND (LOWER(username) = LOWER(?)
+                  OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+           ORDER BY id DESC LIMIT 1`
+        ).get(routerId, name, key.length === 12 ? key : '', key);
+      const originalAcct = acctByName(String(session.username), currentKey);
+      const incomingAcct = acctByName(username, incomingKey);
+      if (originalAcct && !incomingAcct) bindUsername = String(session.username);
+    }
+  }
+  if (bindUsername) put('username', bindUsername);
   if (creds.password && !session.password) put('password', creds.password);
   if (creds.profile && !session.profile) put('profile', creds.profile);
   if (params.server) put('hotspot_server', params.server);

@@ -93,10 +93,19 @@ router.get('/check-session', async (req: Request, res: Response) => {
     // ORIGINAL identity (restoreSession rebinds the token, not the account).
     // Resolve the original identity via the token-bound session so the portal
     // still sees the restored time instead of "no session".
-    const accountFor = (username: string): any =>
-      db.prepare(
-        'SELECT id, username, expiry_at FROM hotspot_users WHERE router_id = ? AND username = ? AND disabled = 0'
-      ).get(routerId, username);
+    // Match case/separator-insensitively (mirrors RADIUS findHotspotUser): an
+    // exact `username = ?` missed colon-form MAC accounts (`da:e4:...`) and
+    // lower-case variants, reporting "no session" while the device was online.
+    const accountFor = (username: string): any => {
+      const key = String(username || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+      return db.prepare(
+        `SELECT id, username, expiry_at FROM hotspot_users
+         WHERE router_id = ? AND disabled = 0
+           AND (LOWER(username) = LOWER(?)
+                OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+         ORDER BY id DESC LIMIT 1`
+      ).get(routerId, username, key.length === 12 ? key : '', key);
+    };
 
     let effectiveUsername = macNoColons;
     let hotspotUser = accountFor(macNoColons);
@@ -108,6 +117,18 @@ router.get('/check-session', async (req: Request, res: Response) => {
       ).get(routerId, macWithColons) as any;
       if (bound && bound.username) {
         effectiveUsername = String(bound.username).trim().toUpperCase();
+        hotspotUser = accountFor(effectiveUsername);
+      }
+    }
+    if (!hotspotUser) {
+      // RADIUS records MAC -> account aliases (device_macs). Use the same
+      // mapping so the portal resolves the paid account exactly like RADIUS
+      // does when the device logs in under its current MAC.
+      const alias = db.prepare(
+        'SELECT username FROM device_macs WHERE mac_address = ?'
+      ).get(macWithColons) as any;
+      if (alias && alias.username) {
+        effectiveUsername = String(alias.username).trim().toUpperCase();
         hotspotUser = accountFor(effectiveUsername);
       }
     }

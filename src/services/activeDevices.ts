@@ -325,7 +325,11 @@ function findDeviceAccount(device: any): any {
       ORDER BY CASE WHEN router_id = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`
     ).get(name, userMac, userMac, device.router_id) as any;
   };
-  return find(username) || (alias?.username ? find(alias.username) : null);
+  const byMacKey = mac ? db.prepare(`SELECT * FROM hotspot_users
+      WHERE UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?
+      ORDER BY CASE WHEN router_id = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`
+    ).get(mac.toUpperCase(), device.router_id) as any : null;
+  return find(username) || (alias?.username ? find(alias.username) : null) || byMacKey;
 }
 
 export function createActiveDevice(routerId: number, data: any): any {

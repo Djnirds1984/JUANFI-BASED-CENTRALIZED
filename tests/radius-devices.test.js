@@ -820,3 +820,121 @@ test('offline-sync paused status does not trap a device whose account is not pau
     db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
   }
 });
+
+test('post-login bind keeps the original paid identity when the portal submits the current MAC', () => {
+  const { bindSession } = require('../src/services/deviceSessions');
+  const originalUser = '507B9D3C0AD2';
+  const currentMac = '4c:34:88:a4:31:ed';
+  const currentUser = '4C3488A431ED';
+  const token = 'd'.repeat(48);
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    // Roamed/redeemed device: the session tracks the ORIGINAL account while
+    // the portal's delayed bind submits the CURRENT MAC as the username.
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(originalUser, expiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'active', 3600, 3000, 1, datetime('now'), datetime('now'))`
+    ).run(token, currentMac, originalUser);
+
+    bindSession({ token, mac: currentMac, username: currentUser, routerId: 1 });
+    let sess = db.prepare('SELECT username FROM device_sessions WHERE session_token = ?').get(token);
+    assert.equal(sess.username, originalUser, 'MAC bind must not clobber the paid account identity');
+
+    // Once the current MAC has its OWN enabled account (e.g. a fresh redeem),
+    // binding it is legitimate and switches the tracked identity.
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(currentUser, expiry);
+    bindSession({ token, mac: currentMac, username: currentUser, routerId: 1 });
+    sess = db.prepare('SELECT username FROM device_sessions WHERE session_token = ?').get(token);
+    assert.equal(sess.username, currentUser);
+  } finally {
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username IN (?, ?)').run(originalUser, currentUser);
+  }
+});
+
+test('same-MAC restore does not kick a live session; a real roam still does', async () => {
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const mac = 'aa:bb:cc:dd:ee:30';
+  const roamMac = 'aa:bb:cc:dd:ee:31';
+  const username = 'AABBCCDDEE30';
+  const token = 'e'.repeat(48);
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(username, expiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'active', 3600, 3000, 1, datetime('now'), datetime('now'))`
+    ).run(token, mac, username);
+    connected = true;
+    live = [{ '.id': '*L1', mac, user: username, 'session-time-left': '50m', server: 'hotspot1' }];
+
+    // Portal reload while connected: restore must NOT disconnect the working
+    // session (the old kick + re-login race made the paid time "vanish").
+    const res = await restoreSession({ token, mac, routerId: 1 });
+    assert.equal(res.restore, false);
+    assert.equal(res.reason, 'already-online');
+    assert.equal(res.username, username);
+    assert.ok(res.remaining > 0);
+    assert.deepEqual(kicks, []);
+
+    // A genuine roam (new MAC) still frees the old slot and restores.
+    const res2 = await restoreSession({ token, mac: roamMac, routerId: 1 });
+    assert.equal(res2.restore, true);
+    assert.equal(res2.rebind, true);
+    assert.deepEqual(kicks, ['*L1']);
+  } finally {
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});
+
+test('check-session resolves colon-form MAC accounts and the RADIUS MAC alias', async () => {
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use('/portal', require('../src/api/portal').default);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/portal`;
+  const check = m => fetch(`${base}/check-session?mac=${encodeURIComponent(m)}&routerId=1`).then(r => r.json());
+  const colonUser = 'da:e4:5a:ce:76:6c';
+  const aliasUser = '065F5CFB0DF1';
+  const aliasMac = '11:22:33:44:55:66';
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    connected = false;
+    // Account stored WITH colons / lower case: the exact `username = ?` lookup
+    // missed it and reported "no session" while the device had paid time.
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(colonUser, expiry);
+    let res = await check(colonUser);
+    assert.equal(res.hasSession, true);
+    assert.ok(res.remainingSeconds > 3500);
+
+    // No account under the current MAC and no session row: the RADIUS
+    // device_macs alias resolves the ORIGINAL paid account (roam identity).
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(aliasUser, expiry);
+    db.prepare('INSERT INTO device_macs (mac_address, username, router_id) VALUES (?, ?, 1)').run(aliasMac, aliasUser);
+    res = await check(aliasMac);
+    assert.equal(res.hasSession, true);
+    assert.equal(res.username, aliasUser);
+    assert.ok(res.remainingSeconds > 3500);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username IN (?, ?)').run(colonUser, aliasUser);
+    db.prepare('DELETE FROM device_macs WHERE mac_address = ?').run(aliasMac);
+  }
+});

@@ -481,6 +481,12 @@ export function initializeDatabase(): void {
   if (!hotspotUserCols.some((c: any) => c.name === 'paused')) {
     db.exec("ALTER TABLE hotspot_users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
   }
+  // One-shot expired grace: marks when the 60s "reach the portal" grace was
+  // granted for the CURRENT expiry cycle, so re-auth/refresh cannot farm free
+  // time. A top-up pushes expiry_at past this stamp, re-arming the next cycle.
+  if (!hotspotUserCols.some((c: any) => c.name === 'grace_used_at')) {
+    db.exec("ALTER TABLE hotspot_users ADD COLUMN grace_used_at TEXT");
+  }
 
   const voucherCols2 = db.prepare("PRAGMA table_info('vouchers')").all() as any[];
   if (!voucherCols2.some((c: any) => c.name === 'radius_profile_id')) {

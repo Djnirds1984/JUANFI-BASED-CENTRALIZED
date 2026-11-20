@@ -432,7 +432,7 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         .get(routerId, deviceMac.replace(/:/g, ''));
       if (blocked) return { accept: false, replyAttributes: [], reason: 'device-blocked' };
     }
-    const cols = 'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users';
+    const cols = 'id, username, password, profile, uptime_limit, bytes_in_quota, bytes_out_quota, disabled, radius_profile_id, first_login_at, expiry_at, shared_users, grace_used_at';
     let user = findHotspotUser(routerId, username, cols);
 
     // No account for this username: if the router told us the device MAC
@@ -452,9 +452,13 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
     console.log(`[RADIUS-auth] User lookup result:`, user ? `Found id=${user.id}, disabled=${user.disabled}` : 'NOT FOUND');
 
     if (user) {
-      // Expired account: accept for a short grace so the device can connect and
-      // reach the portal to buy time (the session then expires). Configurable;
-      // RADIUS_EXPIRED_GRACE_SEC=0 rejects expired accounts.
+      // Expired account: accept ONCE for a short grace so the device can connect
+      // and reach the portal to buy time (the session then expires).
+      // Configurable; RADIUS_EXPIRED_GRACE_SEC=0 rejects expired accounts.
+      // ONE-SHOT per expiry cycle: without this, every re-auth (browser refresh,
+      // reconnect) granted another 60s — unlimited free internet in 1-minute
+      // chunks. grace_used_at >= expiry_at means the grace for THIS cycle was
+      // already spent; a top-up pushes expiry_at past the stamp and re-arms it.
       let expiredGrace = 0;
       if (user.expiry_at) {
         // Compare as timestamps, NOT strings. `expiry_at` is stored as
@@ -464,8 +468,18 @@ function authenticateUser(routerId: number, username: string, callingMac?: strin
         // applied in RADIUS mode).
         const expiryMs = new Date(String(user.expiry_at).replace(' ', 'T') + 'Z').getTime();
         if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) {
-          if (config.radiusExpiredGraceSec > 0) expiredGrace = config.radiusExpiredGraceSec;
-          else return { accept: false, replyAttributes: [], reason: 'expired' };
+          const graceUsedMs = user.grace_used_at
+            ? new Date(String(user.grace_used_at).replace(' ', 'T') + 'Z').getTime()
+            : 0;
+          if (config.radiusExpiredGraceSec > 0 && graceUsedMs < expiryMs) {
+            expiredGrace = config.radiusExpiredGraceSec;
+            // Spend the one-shot NOW (before the accept is built) so a refresh
+            // or reconnect cannot race another grace out of the same cycle.
+            const graceStamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+            db.prepare('UPDATE hotspot_users SET grace_used_at = ? WHERE id = ?').run(graceStamp, user.id);
+          } else {
+            return { accept: false, replyAttributes: [], reason: 'expired' };
+          }
         }
       }
 

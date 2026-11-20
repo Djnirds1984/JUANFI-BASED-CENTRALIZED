@@ -307,6 +307,38 @@ test('RADIUS rejects a blocked MAC before account fallback or expired grace; nor
   assert.equal(radiusRequest(mac, mac)[0], 2);
 });
 
+test('expired grace is one-shot: refresh cannot farm free 60s sessions; top-up re-arms it', async () => {
+  const d = newDevice();
+  await devices.addActiveDeviceTime(1, d.id, 10);
+  db.prepare("UPDATE hotspot_users SET expiry_at = datetime('now', '-1 hour')").run();
+  db.prepare("INSERT INTO radius_clients (router_id, shared_secret) VALUES (1, 'test-only')").run();
+  radius.startRadiusServer();
+
+  // First auth after expiry: a SINGLE short grace to reach the portal.
+  const first = radiusRequest(mac, mac);
+  assert.equal(first[0], 2);
+  assert.equal(radiusSessionTimeout(first), config.radiusExpiredGraceSec);
+  assert.ok(account(mac).grace_used_at);
+
+  // Refresh / reconnect must NOT grant another free minute.
+  assert.equal(radiusRequest(mac, mac)[0], 3);
+  assert.equal(radiusRequest(mac, mac.toLowerCase())[0], 3);
+
+  // A top-up restores paid time (and re-arms the next cycle's grace).
+  await devices.addActiveDeviceTime(1, d.id, 10);
+  const paid = radiusRequest(mac, mac);
+  assert.equal(paid[0], 2);
+  assert.ok(radiusSessionTimeout(paid) > config.radiusExpiredGraceSec);
+
+  // Next expiry cycle (previous grace stamp older than the new expiry):
+  // exactly ONE new grace, then reject again.
+  db.prepare("UPDATE hotspot_users SET expiry_at = datetime('now', '-1 minute'), grace_used_at = datetime('now', '-1 hour')").run();
+  const again = radiusRequest(mac, mac);
+  assert.equal(again[0], 2);
+  assert.equal(radiusSessionTimeout(again), config.radiusExpiredGraceSec);
+  assert.equal(radiusRequest(mac, mac)[0], 3);
+});
+
 test('first login cannot overwrite an admin top-up with profile validity', async () => {
   const d = newDevice();
   await devices.addActiveDeviceTime(1, d.id, 60);

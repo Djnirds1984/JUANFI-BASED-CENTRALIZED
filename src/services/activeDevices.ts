@@ -538,9 +538,19 @@ let syncInFlight = false;
  * Pre-login the portal pages call the controller (POST /api/session/*), so the
  * controller IP must be allowed in each router's IP > Hotspot > Walled Garden
  * before authentication. This makes that idempotent - it only adds the entry
- * when it is missing, and is done at most once per router per process run.
+ * when it is missing.
+ *
+ * It is also SELF-THROTTLED: the device sync calls this every few seconds, so a
+ * pass that succeeded is not repeated for minutes, and a failed pass waits a
+ * minute instead of retrying on every tick. The old once-per-process flag plus
+ * "clear the flag on any error" turned one permanent-but-harmless router answer
+ * into a maintenance storm (900+ failing calls per hour observed), which steals
+ * router REST API capacity from the exact operation that needs it most: a
+ * roaming device waiting for its session to be restored.
  */
-const walledGardenChecked = new Set<number>();
+const walledGardenRuns = new Map<number, { at: number; ok: boolean }>();
+const WG_OK_TTL_MS = 5 * 60_000;
+const WG_FAIL_TTL_MS = 60_000;
 
 const radiusOnlyChecked = new Set<number>();
 
@@ -620,21 +630,22 @@ async function disableTrialLogin(routerId: number): Promise<void> {
 
 
 export async function ensureWalledGardenForController(routerId: number): Promise<void> {
-  if (walledGardenChecked.has(routerId)) return;
-  walledGardenChecked.add(routerId);
+  const last = walledGardenRuns.get(routerId);
+  if (last && Date.now() - last.at < (last.ok ? WG_OK_TTL_MS : WG_FAIL_TTL_MS)) return;
 
   const lanIp = config.controllerLanIp;
   if (!lanIp) return;
 
   try {
     const entries = await mikroTikService.getWalledGarden(routerId);
-    const exists = (Array.isArray(entries) ? entries : []).some((entry: any) => {
+    const list = Array.isArray(entries) ? entries : [];
+    const existing = list.find((entry: any) => {
       const dstHost = String(entry['dst-host'] || '');
       const dstAddr = String(entry['dst-address'] || '');
       return dstHost === lanIp || dstAddr.split('/')[0] === lanIp;
     });
 
-    if (!exists) {
+    if (!existing) {
       await mikroTikService.createWalledGarden(routerId, {
         'dst-host': lanIp,
         action: 'accept',
@@ -643,11 +654,13 @@ export async function ensureWalledGardenForController(routerId: number): Promise
       console.log(`Walled garden entry added for controller ${lanIp} on router ${routerId}`);
     }
 
-    await ensureCaptiveProbeHostsDenied(routerId);
+    await ensureCaptiveProbeHostsDenied(routerId, list);
+    walledGardenRuns.set(routerId, { at: Date.now(), ok: true });
   } catch (err) {
     // Non-fatal: the token restore simply won't work until the entry is added
-    // manually; log once so it can be diagnosed.
-    walledGardenChecked.delete(routerId);
+    // manually; retry after a cooldown so one stubborn router answer cannot
+    // make this loop busy.
+    walledGardenRuns.set(routerId, { at: Date.now(), ok: false });
     console.error(`Walled garden check failed for router ${routerId}:`, (err as Error).message);
   }
 }
@@ -667,36 +680,83 @@ const CAPTIVE_PROBE_HOSTS = [
   'www.googleapis.com',
 ];
 
-async function ensureCaptiveProbeHostsDenied(routerId: number): Promise<void> {
-  const entries = await mikroTikService.getWalledGarden(routerId);
+async function ensureCaptiveProbeHostsDenied(routerId: number, entries: any[]): Promise<void> {
   let list = Array.isArray(entries) ? entries : [];
   for (const host of CAPTIVE_PROBE_HOSTS) {
-    const existing = list.find((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
-    if (existing) {
-      if (String(existing.action) === 'deny') {
-        // Keep an existing deny ahead of any wildcard allow.
-        await mikroTikService.moveWalledGarden(routerId, String(existing['.id']), 0);
-      } else {
-        console.warn(`Walled garden: probe host ${host} is explicitly ALLOWED on router ${routerId}; Samsung devices may skip the captive portal`);
+    // One bad host must not abandon the rest of the list: the previous version
+    // threw out of the first iteration and never maintained the others.
+    try {
+      const idx = list.findIndex((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
+      if (idx >= 0) {
+        const row = list[idx];
+        if (String(row.action) !== 'deny') {
+          console.warn(`Walled garden: probe host ${host} is explicitly ALLOWED on router ${routerId}; devices may skip the captive portal`);
+          continue;
+        }
+        // Already first-match-proof: no allow ahead of it can match this probe,
+        // so moving it again only asks RouterOS to move it before itself.
+        if (!shadowedByAllow(list, idx, host)) continue;
+        await moveProbeDenyToFront(routerId, String(row['.id']));
+        continue;
       }
-      continue;
+      const created = await mikroTikService.createWalledGarden(routerId, {
+        'dst-host': host,
+        action: 'deny',
+        comment: 'captive-portal probe - must stay captive',
+      });
+      const item = Array.isArray(created) ? created[0] : created;
+      let id = item && (item['.id'] || item.id);
+      if (!id) {
+        // Some firmwares return no body on add: look the new entry up instead.
+        const refreshed = await mikroTikService.getWalledGarden(routerId);
+        list = Array.isArray(refreshed) ? refreshed : [];
+        const row = list.find((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
+        id = row && row['.id'];
+      }
+      if (id) await moveProbeDenyToFront(routerId, String(id));
+      console.log(`Walled garden: denied captive-probe host ${host} on router ${routerId}`);
+    } catch (err) {
+      console.error(`Walled garden: could not maintain probe host ${host} on router ${routerId}:`, (err as Error).message);
     }
-    const created = await mikroTikService.createWalledGarden(routerId, {
-      'dst-host': host,
-      action: 'deny',
-      comment: 'captive-portal probe - must stay captive',
-    });
-    const item = Array.isArray(created) ? created[0] : created;
-    let id = item && (item['.id'] || item.id);
-    if (!id) {
-      // Some firmwares return no body on add: look the new entry up instead.
-      const refreshed = await mikroTikService.getWalledGarden(routerId);
-      list = Array.isArray(refreshed) ? refreshed : [];
-      const row = list.find((e: any) => String(e['dst-host'] || '').toLowerCase() === host);
-      id = row && row['.id'];
-    }
-    if (id) await mikroTikService.moveWalledGarden(routerId, String(id), 0);
-    console.log(`Walled garden: denied captive-probe host ${host} on router ${routerId}`);
+  }
+}
+
+/*
+ * True when an `allow` rule ahead of the deny at `idx` actually covers this
+ * host, i.e. would win the first-match evaluation and let the probe through
+ * unauthenticated. Matching on anything weaker ("any allow above me") would
+ * re-order rules forever and keep hitting the router API for nothing.
+ */
+function shadowedByAllow(list: any[], idx: number, host: string): boolean {
+  return list.slice(0, idx).some((entry: any) => allowsHost(entry, host));
+}
+
+function allowsHost(entry: any, host: string): boolean {
+  if (String(entry.action) !== 'allow') return false;
+  const pattern = String(entry['dst-host'] || '').trim().toLowerCase();
+  const address = String(entry['dst-address'] || '').trim();
+  // A rule with no destination at all matches everything (RouterOS also uses
+  // such a placeholder for its "place hotspot rules here" marker).
+  if (!pattern && !address) return true;
+  if (!pattern) return false;                       // IP-scoped: cannot match a name
+  if (pattern === host) return true;
+  if (pattern.startsWith('*.')) return host.endsWith(pattern.slice(1));
+  return false;
+}
+
+/*
+ * A rule that is already on top answers the move with
+ *   400 "failure: can not move object before itself"
+ * which is the outcome we wanted, not an error. Treating it as one used to fail
+ * the whole walled-garden pass on every healthy router, forever.
+ */
+async function moveProbeDenyToFront(routerId: number, id: string): Promise<void> {
+  try {
+    await mikroTikService.moveWalledGarden(routerId, id, 0);
+  } catch (err) {
+    const msg = (err as Error).message || '';
+    if (msg.includes('before itself')) return;
+    throw err;
   }
 }
 

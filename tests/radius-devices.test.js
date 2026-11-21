@@ -987,6 +987,43 @@ test('roam restore kicks the old session and re-arms the account in parallel', a
   }
 });
 
+test('roam restore clears every ghost session so the router accepts the login', async () => {
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const oldMac = 'aa:bb:cc:dd:ee:64';
+  const roamMac = 'aa:bb:cc:dd:ee:65';
+  const username = 'AABBCCDDEE64';
+  const token = '2'.repeat(48);
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(username, expiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'active', 3600, 1800, 0, datetime('now'), datetime('now'))`
+    ).run(token, oldMac, username);
+    connected = true;
+    // Two live rows for the SAME account: the session the phone left behind on
+    // the old hotspot server plus the one it made before roaming. Dropping only
+    // the first keeps shared-users full, RouterOS refuses the auto-login and the
+    // captive portal stays open on the phone.
+    live = [
+      { '.id': '*G1', mac: oldMac, user: username, server: 'hotspot1' },
+      { '.id': '*G2', mac: oldMac, user: username, server: 'hs-VLAN100' },
+      { '.id': '*G3', mac: 'aa:bb:cc:dd:ee:99', user: 'OTHERACCOUNT', server: 'hotspot1' },
+    ];
+
+    const res = await restoreSession({ token, mac: roamMac, routerId: 1 });
+    assert.equal(res.restore, true);
+    assert.deepEqual(kicks, ['*G1', '*G2']);
+    assert.deepEqual(live.map(c => c['.id']), ['*G3'], 'another account must not be disconnected');
+  } finally {
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});
+
 test('check-session resolves colon-form MAC accounts and the RADIUS MAC alias', async () => {
   const express = require('express');
   const app = express();
@@ -1160,11 +1197,78 @@ test('walled garden denies captive-portal probe hosts ahead of wildcard allows',
     assert.ok(idxProbe >= 0 && idxProbe < idxWildcard, 'probe deny must precede the wildcard allow');
     assert.ok(wgMoves.every(m => m.destination === 0));
 
-    // Idempotent: existing denies are only re-positioned, never duplicated.
+    // Idempotent AND quiet: a deny that is already ahead of every allow must not
+    // be moved again. RouterOS answers such a move with
+    // 400 "can not move object before itself", and the retry-on-error loop used
+    // to hammer the router REST API on every sync tick (~900 failing calls per
+    // hour observed) - the same API a roaming device needs to restore fast.
     wgCreates = []; wgMoves = [];
     await devices.ensureWalledGardenForController(78);
     assert.equal(wgCreates.filter(c => c.action === 'deny').length, 0);
-    assert.equal(wgMoves.length, 2);
+    assert.equal(wgMoves.length, 0, `already-correct rules must not be moved: ${JSON.stringify(wgMoves)}`);
+    const stillOrdered = wgEntries.findIndex(e => e['dst-host'] === 'connectivitycheck.gstatic.com')
+      < wgEntries.findIndex(e => String(e['dst-host']) === '*.gstatic.com');
+    assert.ok(stillOrdered, 'probe deny stays ahead of the wildcard allow');
+
+    // A successful pass is not repeated for minutes even though the device sync
+    // calls it every few seconds.
+    wgCreates = []; wgMoves = [];
+    await devices.ensureWalledGardenForController(77);
+    assert.equal(wgCreates.length, 0);
+    assert.equal(wgMoves.length, 0);
+  } finally {
+    mt.getWalledGarden = origGet;
+    mt.createWalledGarden = origCreate;
+    mt.moveWalledGarden = origMove;
+  }
+});
+
+test('walled garden re-positions a shadowed probe deny and survives a move refusal', async () => {
+  const origGet = mt.getWalledGarden, origCreate = mt.createWalledGarden, origMove = mt.moveWalledGarden;
+  let wgEntries = [], wgMoves = [];
+  mt.getWalledGarden = async () => wgEntries;
+  mt.createWalledGarden = async (routerId, data) => {
+    const row = { '.id': `*N${wgEntries.length + 1}`, ...data };
+    wgEntries.push(row);
+    return row;
+  };
+  try {
+    // Someone inserted a wildcard allow ABOVE the deny: first-match would let
+    // the probe through again, so the deny has to be pushed back to the top.
+    // The other deny is already first-match-proof and must not be touched.
+    wgEntries = [
+      { '.id': '*A', 'dst-host': '*.gstatic.com', action: 'allow' },
+      { '.id': '*P', 'dst-host': 'connectivitycheck.gstatic.com', action: 'deny' },
+      { '.id': '*G', 'dst-host': 'www.googleapis.com', action: 'deny' },
+      { '.id': '*C', 'dst-host': config.controllerLanIp, action: 'accept' },
+    ];
+    wgMoves = [];
+    mt.moveWalledGarden = async (routerId, id, destination) => {
+      wgMoves.push(id);
+      const idx = wgEntries.findIndex(e => e['.id'] === id);
+      const [row] = wgEntries.splice(idx, 1);
+      wgEntries.splice(destination, 0, row);
+    };
+    await devices.ensureWalledGardenForController(79);
+    assert.deepEqual(wgMoves, ['*P']);
+    assert.equal(wgEntries[0]['dst-host'], 'connectivitycheck.gstatic.com');
+
+    // A router that refuses the move ("can not move object before itself") is
+    // already in the wanted shape: the pass must not fail, and every remaining
+    // probe host must still be maintained.
+    wgEntries = [
+      { '.id': '*M', 'dst-host': '', 'dst-address': '', action: 'allow', comment: 'place hotspot rules here' },
+      { '.id': '*P', 'dst-host': 'connectivitycheck.gstatic.com', action: 'deny' },
+      { '.id': '*G', 'dst-host': 'www.googleapis.com', action: 'deny' },
+      { '.id': '*C', 'dst-host': config.controllerLanIp, action: 'accept' },
+    ];
+    wgMoves = [];
+    mt.moveWalledGarden = async (routerId, id) => {
+      wgMoves.push(id);
+      throw new Error('REST API error: 400 Bad Request - {"detail":"failure: can not move object before itself"}');
+    };
+    await devices.ensureWalledGardenForController(80);
+    assert.deepEqual(wgMoves, ['*P', '*G']);
   } finally {
     mt.getWalledGarden = origGet;
     mt.createWalledGarden = origCreate;

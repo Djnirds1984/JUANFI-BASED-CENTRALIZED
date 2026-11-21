@@ -53,15 +53,17 @@ document.addEventListener('DOMContentLoaded', function() {
 	setupEventListeners();
 	loadVendoConfig();
 	loadPaymentConfig();
-	checkSessionState();
 
-	// Fast roam: we already hold a token from a previous SSID, so start the
-	// restore NOW in parallel with the check-session call instead of waiting a
-	// full router round trip for its "not online" answer. The device then
-	// leaves the captive portal roughly one request earlier.
-	if (juanFiSessionAvailable() && window.JuanFiSession.getToken()) {
+	// Fast roam FIRST: a browser that already owns a token (it came from another
+	// SSID with another MAC) does not need to ask the router anything to know it
+	// must restore. The captive webview reloads this page every few seconds, so
+	// the restore has to be the first request out - running it only after
+	// check-session answered cost a whole extra round trip per reload and the
+	// device stayed captive for seconds on end.
+	if (mac && juanFiSessionAvailable() && window.JuanFiSession.getToken()) {
 		tryRoamingRestore(null, true);
 	}
+	checkSessionState();
 
 	// Returned from PayMongo (GCash).
 	var pay = params.get('pay');
@@ -356,7 +358,27 @@ function tryRoamingRestore(sessionData, force) {
 	if (!force && now - lastRestoreAt < 8000) return;
 	lastRestoreAt = now;
 	restoreInFlight = true;
+	// Watchdog: a request that never settles must not lock restores for the
+	// lifetime of this page load (that is how devices ended up parked in the
+	// portal with the panel saying nothing).
+	setTimeout(function() { restoreInFlight = false; }, 12000);
 	roamingRestoreAttempt(sessionData, 2).then(function() { restoreInFlight = false; });
+}
+
+// The CHAP response depends on the router's loginOption (username-only hashes
+// an EMPTY password, voucher mode hashes the code). Guessing it produces a
+// rejected login and another captive cycle, so give the config fetch a brief
+// chance to land before submitting.
+function withVendoConfig(cb) {
+	if (vendoConfig) { cb(); return; }
+	var waited = 0;
+	var timer = setInterval(function() {
+		waited += 100;
+		if (vendoConfig || waited >= 1500) {
+			clearInterval(timer);
+			cb();
+		}
+	}, 100);
 }
 
 function roamingRestoreAttempt(sessionData, attemptsLeft) {
@@ -391,7 +413,7 @@ function roamingRestoreAttempt(sessionData, attemptsLeft) {
 			}
 			if (res && res.restore === true && res.username) {
 				tokenBound = true;
-				doLogin(res.username);
+				withVendoConfig(function() { doLogin(res.username); });
 				// Show the restored time right away (the login submits into a hidden
 				// iframe, so nothing else would switch the panel to connected), then
 				// let the live sync confirm/adjust it once the router session is up.
@@ -438,7 +460,7 @@ function directRescueLogin(sessionData) {
 	if (!chapId || !chapChallenge || !linkLoginOnly) return false;
 	if (Date.now() - lastRescueAt < 20000) return false;
 	lastRescueAt = Date.now();
-	doLogin(sessionData.username);
+	withVendoConfig(function() { doLogin(sessionData.username); });
 	showConnectedState(sessionData.remainingSeconds);
 	setTimeout(function() { syncSessionTime(); }, 3000);
 	setTimeout(function() { syncSessionTime(); }, 8000);

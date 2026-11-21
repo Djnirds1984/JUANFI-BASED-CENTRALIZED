@@ -27,6 +27,10 @@
 
   var TOKEN_RE = /^[a-f0-9]{48}$/;
   var IFRAME_TIMEOUT = 3000;
+  // Hard cap for the hidden-iframe token handshake. Captive-portal webviews
+  // reload the sign-in page every few seconds, so anything slower than this is
+  // thrown away before the roam restore can even be sent.
+  var TOKEN_HANDSHAKE_MS = 1200;
 
   function currentRouterId() {
     var id = window.controllerRouterId;
@@ -80,14 +84,23 @@
 
   function requestTokenFromIframe(mac, ip, server) {
     return new Promise(function (resolve) {
-      tokenResolver = resolve;
+      var settle = function (tok) {
+        if (tokenResolver === settle) tokenResolver = null;
+        resolve(tok);
+      };
+      tokenResolver = settle;
+      // Without this timer a postMessage that lands in a not-yet-listening
+      // iframe never gets an answer and ensureToken() hangs forever - the
+      // restore never runs and the device stays in the captive portal.
+      var timer = setTimeout(function () { settle(null); }, TOKEN_HANDSHAKE_MS);
       function send() {
         if (iframe && iframe.contentWindow) {
           iframe.contentWindow.postMessage(
             { type: 'get-token', mac: mac, ip: ip, server: server, routerId: currentRouterId() }, '*'
           );
         } else {
-          resolve(null);
+          clearTimeout(timer);
+          settle(null);
         }
       }
       if (iframeReady) send();
@@ -134,6 +147,17 @@
 
   function ensureToken(mac, ip, server) {
     if (!configured()) return Promise.resolve(null);
+    // A returning device already owns the permanent token in localStorage. The
+    // panel is one stable origin (the controller), so the token survives an
+    // SSID/MAC change - use it straight away instead of waiting on the iframe
+    // cookie bridge. That handshake cost seconds per page load, and captive
+    // webviews reload every few seconds, so the roam restore often never made
+    // it out before the page was thrown away: the device sat in the portal.
+    var cached = localGetToken();
+    if (cached) {
+      mirrorTokenToIframe(cached);
+      return Promise.resolve(cached);
+    }
     if (iframe !== undefined) {
       initIframe();
       return requestTokenFromIframe(mac, ip, server).then(function (tok) {
@@ -142,6 +166,15 @@
       });
     }
     return directEnsureToken(mac, ip, server);
+  }
+
+  // Best-effort cookie refresh: never block the caller on the iframe.
+  function mirrorTokenToIframe(token) {
+    try {
+      initIframe();
+      if (iframeReady) sendTokenToIframe(token);
+      else pendingQueue.push(function () { sendTokenToIframe(token); });
+    } catch (e) {}
   }
 
   function directEnsureToken(mac, ip, server) {

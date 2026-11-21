@@ -754,21 +754,29 @@ class MikroTikService {
     const connections = await this.getActiveConnections(routerId);
     const mac = (opts.mac || '').toLowerCase();
     const username = opts.username || '';
+    let removed = 0;
 
-    for (const conn of connections) {
+    // Every match has to go, not just the first one. A device that roams leaves
+    // ghosts behind (previous AP, previous hotspot server, a reconnect that the
+    // idle-timeout has not aged out yet), and a single surviving session with
+    // this username makes RouterOS refuse the new login - which is exactly how
+    // a roaming phone ends up stuck in the captive portal.
+    for (const conn of Array.isArray(connections) ? connections : []) {
       const connMac = String(conn.mac || '').toLowerCase();
       const connUser = String(conn.user || '');
       if ((mac && connMac === mac) || (username && connUser === username)) {
         try {
           await this.removeActiveConnection(routerId, conn['.id']);
+          removed++;
           console.log(`kickActiveSession: removed ${connUser || connMac} on router ${routerId}`);
-          return true;
         } catch (err) {
-          console.error(`kickActiveSession failed for router ${routerId}:`, (err as Error).message);
+          // Keep going: one session the router refuses to drop must not leave
+          // the others alive either.
+          console.error(`kickActiveSession failed for ${connUser || connMac} on router ${routerId}:`, (err as Error).message);
         }
       }
     }
-    return false;
+    return removed > 0;
   }
 
   private formatRate(bitsPerSecond: number): string {

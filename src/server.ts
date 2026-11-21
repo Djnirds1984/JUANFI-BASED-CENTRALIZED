@@ -48,6 +48,20 @@ app.use(express.json({ verify: (req: any, _res, buf) => { req.rawBody = buf ? bu
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined'));
 
+// The captive-portal webview on a phone caches the sign-in page and its
+// scripts hard, and it is exactly the client that must pick up a new
+// roam-restore behaviour the moment it roams. A stale cached portal.js/session.js
+// silently replays the old (slow) login flow and the popup never closes, so
+// force revalidation of the portal documents and the portal logic - the ETag
+// still answers with a cheap 304 when nothing changed.
+const PORTAL_NO_CACHE = /^\/(|portal\.html|assets\/js\/(portal|session)\.js)$/;
+app.use((req, res, next) => {
+  if (PORTAL_NO_CACHE.test(req.path)) {
+    res.set('Cache-Control', 'no-cache, must-revalidate');
+  }
+  next();
+});
+
 // index:false so GET / falls through to the portal route below instead of
 // serving the admin SPA's index.html (admin is served at /admin).
 app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));

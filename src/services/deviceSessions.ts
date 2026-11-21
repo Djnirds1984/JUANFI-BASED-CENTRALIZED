@@ -355,7 +355,12 @@ export async function restoreSession(params: {
           session.username,
           secondsToLimitUptime(remaining)
         );
-        if (!applied) console.warn(`restoreSession: user ${session.username} not found on router ${routerId}`);
+        if (!applied) {
+          // Normal on a full-RADIUS router: local device users are purged, so
+          // there is nothing to clamp and RADIUS sends Session-Timeout on the
+          // next accept. Not a failure - do not log it as one.
+          console.log(`restoreSession: no local user ${session.username} on router ${routerId} (RADIUS supplies the timeout)`);
+        }
       } catch (err) {
         console.error(`restoreSession limit-uptime failed for session ${session.id}:`, (err as Error).message);
       }

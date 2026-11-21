@@ -6149,7 +6149,6 @@ const App = {
 
   async renderPortal() {
     const content = document.getElementById('page-content');
-    const routers = (await api.getRouters()).filter((r) => r.connected);
 
     if (this.portalDirty && !confirm('You have unsaved changes. Reloading will discard them. Continue?')) {
       return;
@@ -6162,6 +6161,15 @@ const App = {
     }
 
     const activeTab = this.portalActiveTab;
+
+    // The Sounds tab owns its own layout - no file tree, no code editor, and no
+    // router to push to, so it must not depend on either request.
+    if (activeTab === 'sounds') {
+      await this.renderPortalSounds(content);
+      return;
+    }
+
+    const routers = (await api.getRouters()).filter((r) => r.connected);
     const folder = activeTab === 'stub' ? 'stub' : (activeTab === 'panel-page' ? 'panel-page' : 'hotspot');
 
     let filesData = [];
@@ -6210,11 +6218,7 @@ const App = {
             ` : (activeTab === 'panel-page' ? '<span class="status-badge connected">Panel-hosted portal — served directly by this panel</span>' : '<span class="status-badge disconnected">No connected routers — connect one on the Routers page</span>')}
           </div>
         </div>
-        <div class="tabs portal-tabs">
-          <button class="tab portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')">${uiIcon('file-text')} MikroTik Portal</button>
-          <button class="tab portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')">${uiIcon('link')} Stub Portal</button>
-          <button class="tab portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')">${uiIcon('monitor')} Panel Portal</button>
-        </div>
+        ${this._portalTabs(activeTab)}
         ${activeTab === 'stub' && routers.length > 0 ? (() => {
           const selectedRouter = routers.find(r => r.id === this.selectedRouterId);
           const panelUrl = selectedRouter?.panel_url || '';
@@ -6323,6 +6327,130 @@ const App = {
     this.portalActiveTab = tab;
     this.portalCurrentFile = null;
     this.renderPortal();
+  },
+
+  _portalTabs(activeTab) {
+    return `
+      <div class="tabs portal-tabs">
+        <button class="tab portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')">${uiIcon('file-text')} MikroTik Portal</button>
+        <button class="tab portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')">${uiIcon('link')} Stub Portal</button>
+        <button class="tab portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')">${uiIcon('monitor')} Panel Portal</button>
+        <button class="tab portal-tab ${activeTab === 'sounds' ? 'active' : ''}" onclick="App.switchPortalTab('sounds')">${uiIcon('music')} Sounds</button>
+      </div>
+    `;
+  },
+
+  // Portal > Sounds. The two coin sounds are stored on this server and served
+  // from the same origin as the portal page itself, so a phone that is still
+  // captive - the walled garden only opens the controller's address - reaches
+  // them exactly like it reaches the portal HTML.
+  async renderPortalSounds(content) {
+    let sounds = { insert_coin: '', coin_drop: '', defaults: {} };
+    try {
+      sounds = await api.getPortalSounds();
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+      return;
+    }
+
+    const slots = [
+      {
+        kind: 'insert-coin',
+        key: 'insert_coin',
+        title: 'Insert coin sound',
+        hint: 'Starts the moment the customer presses INSERT COIN / ADD TIME, then loops while the coin slot is open.',
+        builtin: 'insertcoinbg.mp3',
+      },
+      {
+        kind: 'coin-drop',
+        key: 'coin_drop',
+        title: 'Coin drop sound',
+        hint: 'Plays once for every coin the machine reports, on top of the insert-coin loop.',
+        builtin: 'coin-received.mp3',
+      },
+    ];
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Portal Coin Sounds</h3>
+          <span class="status-badge connected">Panel-hosted portal - nothing to push to a router</span>
+        </div>
+        ${this._portalTabs('sounds')}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;padding:1rem">
+          ${slots.map((slot) => {
+            const custom = sounds[slot.key] || '';
+            const src = custom || (sounds.defaults ? sounds.defaults[slot.key] : '') || '';
+            return `
+              <div style="border:1px solid var(--border);border-radius:8px;padding:1rem">
+                <div class="dash-card-title" style="display:flex;align-items:center;gap:0.4rem">
+                  ${uiIcon('music')} ${slot.title}
+                  <span class="status-badge ${custom ? 'connected' : 'disconnected'}">${custom ? 'Custom' : 'Built-in'}</span>
+                </div>
+                <p style="color:var(--text-muted);font-size:0.8rem;margin:0.5rem 0">${slot.hint}</p>
+                ${src ? `<audio controls preload="none" src="${src}" style="width:100%;margin-bottom:0.75rem"></audio>` : ''}
+                <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                  <input type="file" id="sound-file-${slot.kind}" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+                    style="flex:1;min-width:170px;font-size:0.8rem">
+                  <button class="btn btn-sm btn-primary" id="sound-upload-${slot.kind}" onclick="App.uploadPortalSound('${slot.kind}')">${uiIcon('upload')} Upload</button>
+                  <button class="btn btn-sm btn-outline" onclick="App.removePortalSound('${slot.kind}')" ${custom ? '' : 'disabled'}>${uiIcon('trash')} Built-in</button>
+                </div>
+                <small style="color:var(--text-muted);display:block;margin-top:0.5rem">
+                  Now playing: ${this.escapeHtml(custom ? custom.split('/').pop() : slot.builtin)}
+                </small>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div style="padding:0 1rem 1rem;color:var(--text-muted);font-size:0.8rem">
+          MP3, WAV, OGG, M4A or AAC, up to 10 MB. Keep the insert-coin sound short - it repeats until the slot
+          closes. A customer hears a change on their very next coin press, no portal update needed.
+        </div>
+      </div>
+    `;
+  },
+
+  async uploadPortalSound(kind) {
+    const input = document.getElementById(`sound-file-${kind}`);
+    const file = input && input.files && input.files[0];
+    if (!file) {
+      this.toast('Choose an audio file first', 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      this.toast('Audio must be 10 MB or smaller', 'error');
+      return;
+    }
+
+    const button = document.getElementById(`sound-upload-${kind}`);
+    const buttonHtml = button ? button.innerHTML : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Uploading...';
+    }
+
+    try {
+      await api.uploadPortalSound(kind, file);
+      this.toast('Sound saved', 'success');
+      await this.renderPortal();
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = buttonHtml;
+      }
+    }
+  },
+
+  async removePortalSound(kind) {
+    if (!confirm('Remove this sound and play the built-in one again?')) return;
+    try {
+      await api.deletePortalSound(kind);
+      this.toast('Sound removed', 'success');
+      await this.renderPortal();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   async saveStubPanelUrl() {

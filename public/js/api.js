@@ -636,6 +636,37 @@ class ApiClient {
 
   async deleteCompanyLogo() { return this.request('DELETE', '/settings/logo'); }
 
+  // --- Portal coin sounds ---
+  async getPortalSounds() { return this.get('/settings/sounds'); }
+
+  // Audio travels as a plain byte stream on purpose: the server identifies the
+  // container from its magic bytes, so whatever the browser labels the File
+  // cannot change what gets accepted or how it is stored.
+  async uploadPortalSound(kind, file) {
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${this.baseUrl}/settings/sounds/${encodeURIComponent(kind)}`, {
+      method: 'POST',
+      headers,
+      body: file,
+    });
+
+    if (response.status === 401) {
+      this.setToken(null);
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Sound upload failed');
+    }
+    return data;
+  }
+
+  async deletePortalSound(kind) { return this.request('DELETE', `/settings/sounds/${encodeURIComponent(kind)}`); }
+
   // --- Chat ---
   async getChatThreads() { return this.get('/chat/threads'); }
   async getChatMessages(threadId, before = 0) {

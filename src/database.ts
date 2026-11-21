@@ -390,6 +390,14 @@ export function initializeDatabase(): void {
   if (!sysCols.some((c: any) => c.name === 'logo_path')) {
     db.exec("ALTER TABLE system_settings ADD COLUMN logo_path TEXT NOT NULL DEFAULT ''");
   }
+  // Coin sounds for the customer portal, uploaded on Portal > Sounds. Empty
+  // means "use the sound shipped in hotspot/assets", never "play nothing".
+  if (!sysCols.some((c: any) => c.name === 'insert_coin_sound')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN insert_coin_sound TEXT NOT NULL DEFAULT ''");
+  }
+  if (!sysCols.some((c: any) => c.name === 'coin_drop_sound')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN coin_drop_sound TEXT NOT NULL DEFAULT ''");
+  }
 
   const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];
   if (!deviceCols.some((c: any) => c.name === 'custom_hostname')) {

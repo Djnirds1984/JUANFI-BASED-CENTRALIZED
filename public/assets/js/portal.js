@@ -44,6 +44,72 @@ var tokenBound = false;
 var payRates = [];
 var payCurrency = 'PHP';
 
+// ---- Coin sounds ----
+// Uploaded on the admin Portal > Sounds page. Both come from this same origin,
+// which matters: a customer who is still captive has the controller address
+// open in the walled garden and nothing else, so the sound arrives exactly like
+// the portal page does. An empty slot falls back to the shipped file.
+var coinSounds = { insert_coin: '', coin_drop: '' };
+var coinSoundDefaults = {
+	insert_coin: '/hotspot-assets/assets/insertcoinbg.mp3',
+	coin_drop: '/hotspot-assets/assets/coin-received.mp3',
+};
+var insertCoinSound = null;
+var coinDropSound = null;
+
+function armCoinSounds() {
+	// Re-arming must not interrupt a slot that is already listening for coins.
+	var looping = insertCoinSound && !insertCoinSound.paused;
+	insertCoinSound = new Audio(coinSounds.insert_coin || coinSoundDefaults.insert_coin);
+	insertCoinSound.loop = true;
+	coinDropSound = new Audio(coinSounds.coin_drop || coinSoundDefaults.coin_drop);
+	// preload 'none' on purpose: a captive webview reloads this page every few
+	// seconds while it waits for the portal, and would re-download both sounds
+	// each time even when nobody touches the coin slot.
+	insertCoinSound.preload = 'none';
+	coinDropSound.preload = 'none';
+	if (looping) playCoinSound(insertCoinSound, false);
+}
+
+function loadCoinSounds() {
+	// Ready to play even if the request never lands.
+	armCoinSounds();
+	fetch('/api/settings/sounds')
+		.then(function(r) { return r.ok ? r.json() : null; })
+		.then(function(s) {
+			if (!s) return;
+			coinSounds.insert_coin = s.insert_coin || '';
+			coinSounds.coin_drop = s.coin_drop || '';
+			if (s.defaults) {
+				coinSoundDefaults.insert_coin = s.defaults.insert_coin || coinSoundDefaults.insert_coin;
+				coinSoundDefaults.coin_drop = s.defaults.coin_drop || coinSoundDefaults.coin_drop;
+			}
+			armCoinSounds();
+		})
+		.catch(function() {});
+}
+
+// play() returns a promise that rejects when the browser has not been given
+// permission for audio yet; an unhandled rejection there can break the coin
+// polling loop in some webviews.
+function playCoinSound(sound, fromStart) {
+	if (!sound) return;
+	try {
+		if (fromStart) sound.currentTime = 0;
+		var p = sound.play();
+		if (p && p.catch) p.catch(function() {});
+	} catch (e) {}
+}
+
+function stopCoinLoop() {
+	if (!insertCoinSound) return;
+	try {
+		insertCoinSound.pause();
+		insertCoinSound.currentTime = 0;
+	} catch (e) {}
+}
+
+
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
 	document.getElementById('ip-display').textContent = ip || '-';
@@ -53,6 +119,7 @@ document.addEventListener('DOMContentLoaded', function() {
 	setupEventListeners();
 	loadVendoConfig();
 	loadPaymentConfig();
+	loadCoinSounds();
 
 	// Fast roam FIRST: a browser that already owns a token (it came from another
 	// SSID with another MAC) does not need to ask the router anything to know it
@@ -575,8 +642,17 @@ function secondsToDhms(seconds) {
 	return dD + (h < 10 ? '0' : '') + h + 'h : ' + (m < 10 ? '0' : '') + m + 'm : ' + (s < 10 ? '0' : '') + s + 's';
 }
 
-function showModal(id) { document.getElementById(id).style.display = 'flex'; }
-function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+function showModal(id) {
+	document.getElementById(id).style.display = 'flex';
+	// The coin modal only ever opens from the INSERT COIN / ADD TIME press, so
+	// this is still inside the customer's tap - the one moment the browser is
+	// guaranteed to allow audio.
+	if (id === 'coinModal') playCoinSound(insertCoinSound, true);
+}
+function hideModal(id) {
+	document.getElementById(id).style.display = 'none';
+	if (id === 'coinModal') stopCoinLoop();
+}
 
 function nodeMcuPost(apiPath, data) {
 	return fetch('http://' + vendorIpAddress + apiPath, {
@@ -862,6 +938,7 @@ function checkCoin() {
 
 			if (data.status === 'true') {
 				totalCoinReceived = parseInt(data.totalCoin) || 0;
+				playCoinSound(coinDropSound, true);
 				document.getElementById('modalTotalCoin').textContent = data.totalCoin;
 				document.getElementById('modalTotalTime').textContent = secondsToDhms(parseInt(data.timeAdded) || 0);
 				document.getElementById('coinCodeBlock').style.display = 'none';

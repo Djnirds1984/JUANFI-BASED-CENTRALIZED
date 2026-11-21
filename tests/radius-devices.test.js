@@ -61,6 +61,13 @@ mt.resetHotspotUserCounters = async () => true;
 mt.setUserUptimeLimit = async () => true;
 
 const sockets = [];
+// The walled-garden pass also opens the coin machines for pre-login clients.
+// Never read the developer's real data/nodemcu-devices.json here: the machine
+// list must not be able to change router-side assertions.
+const vendoService = require('../src/services/vendoConfig');
+const originalVendoList = vendoService.listVendoAddresses;
+let vendoAddresses = [];
+vendoService.listVendoAddresses = () => vendoAddresses;
 const dgram = require('node:dgram');
 const originalCreateSocket = dgram.createSocket;
 dgram.createSocket = () => {
@@ -94,6 +101,7 @@ beforeEach(() => {
 });
 
 after(() => {
+  vendoService.listVendoAddresses = originalVendoList;
   if (radius.isRadiusRunning()) radius.stopRadiusServer();
   dgram.createSocket = originalCreateSocket;
   db.close();
@@ -1166,6 +1174,7 @@ test('walled garden denies captive-portal probe hosts ahead of wildcard allows',
   // the portal popup and reported "connected" with zero time. The exact probe
   // hosts must be denied BEFORE any wildcard allow (first match wins).
   const origGet = mt.getWalledGarden, origCreate = mt.createWalledGarden, origMove = mt.moveWalledGarden;
+  const origGetIp = mt.getWalledGardenIp, origCreateIp = mt.createWalledGardenIp;
   let wgEntries = [], wgCreates = [], wgMoves = [];
   mt.getWalledGarden = async () => wgEntries;
   mt.createWalledGarden = async (routerId, data) => {
@@ -1174,6 +1183,10 @@ test('walled garden denies captive-portal probe hosts ahead of wildcard allows',
     wgCreates.push(data);
     return row;
   };
+  // These tests maintain the hostname menu; the address menu is stubbed so an
+  // unconnected test router cannot abort the whole pass.
+  mt.getWalledGardenIp = async () => [];
+  mt.createWalledGardenIp = async () => ({});
   mt.moveWalledGarden = async (routerId, id, destination) => {
     wgMoves.push({ id, destination });
     const idx = wgEntries.findIndex(e => e['.id'] === id);
@@ -1220,11 +1233,14 @@ test('walled garden denies captive-portal probe hosts ahead of wildcard allows',
     mt.getWalledGarden = origGet;
     mt.createWalledGarden = origCreate;
     mt.moveWalledGarden = origMove;
+    mt.getWalledGardenIp = origGetIp;
+    mt.createWalledGardenIp = origCreateIp;
   }
 });
 
 test('walled garden re-positions a shadowed probe deny and survives a move refusal', async () => {
   const origGet = mt.getWalledGarden, origCreate = mt.createWalledGarden, origMove = mt.moveWalledGarden;
+  const origGetIp = mt.getWalledGardenIp, origCreateIp = mt.createWalledGardenIp;
   let wgEntries = [], wgMoves = [];
   mt.getWalledGarden = async () => wgEntries;
   mt.createWalledGarden = async (routerId, data) => {
@@ -1232,6 +1248,11 @@ test('walled garden re-positions a shadowed probe deny and survives a move refus
     wgEntries.push(row);
     return row;
   };
+  // Address rules are another menu's business here; only *C (an old hand-made
+  // controller rule still sitting in the hostname menu) has to be recognised so
+  // the pass does not go looking for more address work.
+  mt.getWalledGardenIp = async () => [];
+  mt.createWalledGardenIp = async () => ({});
   try {
     // Someone inserted a wildcard allow ABOVE the deny: first-match would let
     // the probe through again, so the deny has to be pushed back to the top.
@@ -1273,6 +1294,220 @@ test('walled garden re-positions a shadowed probe deny and survives a move refus
     mt.getWalledGarden = origGet;
     mt.createWalledGarden = origCreate;
     mt.moveWalledGarden = origMove;
+    mt.getWalledGardenIp = origGetIp;
+    mt.createWalledGardenIp = origCreateIp;
+  }
+});
+
+test('a sub-vendo default that is not in the machine list is repaired to a real machine', () => {
+  const { resolveVendorIp } = require('../src/services/vendoConfig');
+  // The admin UI edits the default machine separately from the list, so after a
+  // sub-vendo changes IP the portal keeps POSTing /topUp to the dead address and
+  // reports "coin slot is not available" while the panel shows the machine online.
+  const listed = { isMultiVendo: true, vendorIpAddress: '10.0.0.243', multiVendoAddresses: [{ vendoIp: '10.0.0.141' }] };
+  assert.equal(resolveVendorIp(listed).vendorIpAddress, '10.0.0.141');
+  const matching = { isMultiVendo: true, vendorIpAddress: '10.0.0.141', multiVendoAddresses: [{ vendoIp: '10.0.0.141' }] };
+  assert.equal(resolveVendorIp(matching).vendorIpAddress, '10.0.0.141');
+  // Single-machine setups have no list to be wrong about - leave them alone.
+  const single = { isMultiVendo: false, vendorIpAddress: '10.0.0.243', multiVendoAddresses: [{ vendoIp: '10.0.0.141' }] };
+  assert.equal(resolveVendorIp(single).vendorIpAddress, '10.0.0.243');
+  const empty = { isMultiVendo: true, vendorIpAddress: '10.0.0.243', multiVendoAddresses: [] };
+  assert.equal(resolveVendorIp(empty).vendorIpAddress, '10.0.0.243');
+  // The rest of the config must survive the rewrite untouched.
+  const full = { isMultiVendo: true, vendorIpAddress: '', loginOption: 1, multiVendoAddresses: [{ vendoIp: '10.0.0.9' }] };
+  assert.equal(resolveVendorIp(full).loginOption, 1);
+  assert.equal(resolveVendorIp(full).vendorIpAddress, '10.0.0.9');
+});
+
+test('walled garden opens the coin machine in the IP menu so a phone can pay before login', async () => {
+  const origGet = mt.getWalledGarden, origCreate = mt.createWalledGarden, origMove = mt.moveWalledGarden;
+  const origGetIp = mt.getWalledGardenIp, origCreateIp = mt.createWalledGardenIp;
+  const origDelete = mt.deleteWalledGarden;
+  let wgEntries = [], wgIpEntries = [], wgIpCreates = [], wgDeletes = [];
+  mt.getWalledGarden = async () => wgEntries;
+  mt.createWalledGarden = async (routerId, data) => {
+    const row = { '.id': `*H${wgEntries.length + 1}`, ...data };
+    wgEntries.push(row);
+    return row;
+  };
+  mt.deleteWalledGarden = async (routerId, id) => {
+    wgDeletes.push(id);
+    wgEntries = wgEntries.filter(e => e['.id'] !== id);
+  };
+  mt.getWalledGardenIp = async () => wgIpEntries;
+  mt.createWalledGardenIp = async (routerId, data) => {
+    const row = { '.id': `*I${wgIpEntries.length + 1}`, ...data };
+    wgIpEntries.push(row);
+    wgIpCreates.push(data);
+    return row;
+  };
+  mt.moveWalledGarden = async () => {};
+  vendoAddresses = ['10.0.0.141'];
+  try {
+    // INSERT COIN is posted by the phone straight to the machine while it is
+    // still unauthenticated. RouterOS sends every other destination to the login
+    // page, so without this allow the portal gets HTML back and the customer is
+    // told the coin slot is broken.
+    //
+    // It has to be the walled-garden IP sub-menu: on RouterOS 7.25 a general
+    // entry with an address in dst-host is accepted but installs no firewall
+    // rule, while the ip/ entry creates chain=hs-unauth action=return and is
+    // exactly how the controller's own pre-login access works.
+    wgEntries = [{ '.id': '*1', 'dst-host': '*.gstatic.com', action: 'allow' }];
+    wgIpEntries = [];
+    wgIpCreates = [];
+    await devices.ensureWalledGardenForController(81);
+    const coinAllow = wgIpCreates.find(c => c['dst-address'] === '10.0.0.141');
+    assert.ok(coinAllow, `coin machine must be reachable pre-login, created: ${JSON.stringify(wgIpCreates)}`);
+    assert.equal(coinAllow.action, 'accept');
+    assert.ok(wgIpCreates.some(c => c['dst-address'] === config.controllerLanIp),
+      'the controller address belongs in the IP menu too');
+    assert.equal(wgEntries.filter(e => String(e['dst-host'] || '').includes('10.0.0')).length, 0,
+      'an address in the hostname menu passes no traffic');
+
+    // Already open, written by Winbox with a /32: no duplicate, so a healthy
+    // router stays quiet instead of growing a rule per sync tick.
+    wgEntries = [];
+    wgIpEntries = [
+      { '.id': '*C', 'dst-address': config.controllerLanIp, action: 'accept' },
+      { '.id': '*V', 'dst-address': '10.0.0.141/32', action: 'accept' },
+    ];
+    wgIpCreates = [];
+    await devices.ensureWalledGardenForController(82);
+    assert.deepEqual(wgIpCreates, []);
+    assert.deepEqual(wgDeletes, [], 'a rule that works is never removed');
+
+    // The router this was first deployed on still carried the previous build's
+    // rule: the address written into the hostname menu, which RouterOS accepted
+    // and then ignored. It has to be replaced, not treated as proof that the
+    // coin machine is already reachable - that lie is what kept the coin slot
+    // "not available" while every check said the rule existed.
+    wgEntries = [
+      { '.id': '*A', 'dst-host': '10.0.0.141', action: 'allow', comment: 'sub-vendo coin machine (insert coin before login)' },
+      { '.id': '*E', 'dst-host': '', action: 'allow', comment: 'sub-vendo coin machine (insert coin before login)' },
+      { '.id': '*B', 'dst-host': '10.0.0.200', action: 'allow', comment: 'vendor added by hand' },
+      { '.id': '*P', 'dst-host': '', action: 'allow', comment: 'place hotspot rules here' },
+      { '.id': '*H', 'dst-host': '*.paymongo.com', action: 'allow', comment: 'JuanFi payment gateway' },
+    ];
+    wgIpEntries = [{ '.id': '*C', 'dst-address': config.controllerLanIp, action: 'accept' }];
+    wgIpCreates = []; wgDeletes = [];
+    await devices.ensureWalledGardenForController(83);
+    assert.ok(wgIpCreates.some(c => c['dst-address'] === '10.0.0.141'),
+      `dead hostname rule must not replace the IP-menu one, created: ${JSON.stringify(wgIpCreates)}`);
+    assert.deepEqual(wgDeletes, ['*A', '*E'],
+      'only controller-written address rules go, never a hostname rule or an operator placeholder');
+  } finally {
+    vendoAddresses = [];
+    mt.getWalledGarden = origGet;
+    mt.createWalledGarden = origCreate;
+    mt.moveWalledGarden = origMove;
+    mt.getWalledGardenIp = origGetIp;
+    mt.createWalledGardenIp = origCreateIp;
+    mt.deleteWalledGarden = origDelete;
+  }
+});
+
+test('registering a sub-vendo makes it static, bypasses its login and opens it for payment', async () => {
+  const { provisionSubVendo } = require('../src/services/vendoProvision');
+  const vendoConfigService = require('../src/services/vendoConfig');
+  const orig = {
+    register: vendoConfigService.registerVendoMachine,
+    isConnected: mt.isConnected,
+    getDhcpLeases: mt.getDhcpLeases, makeDhcpLeaseStatic: mt.makeDhcpLeaseStatic, createDhcpLease: mt.createDhcpLease,
+    getDhcpServers: mt.getDhcpServers, getArpEntries: mt.getArpEntries,
+    getIpBindings: mt.getIpBindings, createIpBinding: mt.createIpBinding, updateIpBinding: mt.updateIpBinding,
+    deleteIpBinding: mt.deleteIpBinding, deleteWalledGarden: mt.deleteWalledGarden,
+    getWalledGarden: mt.getWalledGarden, getWalledGardenIp: mt.getWalledGardenIp, createWalledGardenIp: mt.createWalledGardenIp,
+  };
+  const calls = { static: [], leaseAdd: [], bindingCreate: [], bindingUpdate: [], bindingDelete: [], wgDelete: [], wgIpCreate: [] };
+  const vendo = '10.0.0.141';
+  const mac = '8C:AA:B5:70:3C:53';
+  try {
+    vendoConfigService.registerVendoMachine = () => ({ added: true, renamed: false, defaultSet: true });
+    mt.isConnected = () => true;
+    // A dynamic lease carries the MAC even when nobody typed it into the panel.
+    mt.getDhcpLeases = async () => [{ '.id': '*9D', address: vendo, 'mac-address': mac, server: 'dhcp1', dynamic: 'true' }];
+    mt.getDhcpServers = async () => [{ '.id': '*1', name: 'dhcp1', interface: 'bridge-HS', disabled: 'false' }];
+    mt.getArpEntries = async () => [{ '.id': '*3', address: vendo, 'mac-address': mac, interface: 'bridge-HS' }];
+    mt.makeDhcpLeaseStatic = async (routerId, id) => { calls.static.push(id); };
+    mt.createDhcpLease = async (routerId, data) => { calls.leaseAdd.push(data); };
+    // The MAC is already bypassed by an operator rule that has no address, so it
+    // must be corrected instead of a second rule being added for the same client
+    // (RouterOS refuses that one with 400 "such client already exists").
+    mt.getIpBindings = async () => [
+      { '.id': '*5', 'mac-address': mac, type: 'bypassed', server: 'all' },
+      { '.id': '*6', address: vendo, 'mac-address': mac, type: 'bypassed', server: 'all', comment: 'JuanFi sub-vendo old' },
+    ];
+    mt.createIpBinding = async (routerId, data) => { calls.bindingCreate.push(data); };
+    mt.updateIpBinding = async (routerId, id, data) => { calls.bindingUpdate.push([id, data]); };
+    mt.deleteIpBinding = async (routerId, id) => { calls.bindingDelete.push(id); };
+    mt.deleteWalledGarden = async (routerId, id) => { calls.wgDelete.push(id); };
+    // A previous build wrote the address into the hostname menu, where RouterOS
+    // accepts it and installs no firewall rule - it must be replaced, not trusted.
+    mt.getWalledGarden = async () => [
+      { '.id': '*A', 'dst-host': vendo, action: 'allow', comment: 'sub-vendo coin machine (insert coin before login)' },
+    ];
+    mt.getWalledGardenIp = async () => [{ '.id': '*C', 'dst-address': config.controllerLanIp, action: 'accept' }];
+    mt.createWalledGardenIp = async (routerId, data) => { calls.wgIpCreate.push(data); };
+
+    const res = await provisionSubVendo(7, { name: 'AJC1', ip: vendo });
+    const byStep = {};
+    res.steps.forEach(s => { byStep[s.step] = s; });
+
+    assert.equal(res.mac, mac, 'MAC resolved from the router, not typed by hand');
+    assert.deepEqual(calls.static, ['*9D']);
+    assert.deepEqual(calls.leaseAdd, [], 'an existing lease is made static, never duplicated');
+    assert.ok(byStep.static.ok, byStep.static.detail);
+
+    assert.deepEqual(calls.bindingUpdate.map(b => b[0]), ['*5']);
+    assert.equal(calls.bindingUpdate[0][1].type, 'bypassed');
+    assert.equal(calls.bindingUpdate[0][1].address, vendo);
+    assert.equal(calls.bindingCreate.length, 0);
+    assert.deepEqual(calls.bindingDelete, ['*6'],
+      'the duplicate is pruned first, or RouterOS refuses the corrected row with "such client already exists"');
+    assert.ok(byStep.bypass.ok, byStep.bypass.detail);
+
+    assert.deepEqual(calls.wgIpCreate, [{
+      'dst-address': vendo,
+      action: 'accept',
+      comment: 'sub-vendo coin machine (insert coin before login)',
+    }]);
+    assert.deepEqual(calls.wgDelete, ['*A']);
+    assert.ok(byStep.walledGarden.ok, byStep.walledGarden.detail);
+    assert.ok(byStep.portalList.ok, byStep.portalList.detail);
+    assert.equal(res.ok, true);
+
+    // A machine nobody has ever powered on: no MAC, so nothing can be pinned, but
+    // the portal must still list it and the report must say why the rest failed.
+    mt.getDhcpLeases = async () => [];
+    mt.getArpEntries = async () => [];
+    const cold = await provisionSubVendo(7, { name: 'AJC2', ip: '10.0.0.199' });
+    const coldSteps = {};
+    cold.steps.forEach(s => { coldSteps[s.step] = s; });
+    assert.equal(cold.ok, false);
+    assert.equal(cold.mac, '');
+    assert.equal(coldSteps.mac.ok, false);
+    assert.equal(coldSteps.static.ok, false);
+    assert.equal(coldSteps.bypass.ok, false);
+    assert.equal(coldSteps.portalList.ok, true);
+
+    // Offline router: the portal side still happens, the router side reports it.
+    mt.isConnected = () => false;
+    const off = await provisionSubVendo(7, { name: 'AJC3', ip: vendo });
+    assert.equal(off.steps.find(s => s.step === 'portalList').ok, true);
+    assert.equal(off.steps.find(s => s.step === 'walledGarden').ok, false);
+    assert.match(off.steps.find(s => s.step === 'walledGarden').detail, /not connected/);
+  } finally {
+    Object.assign(vendoConfigService, { registerVendoMachine: orig.register });
+    Object.assign(mt, {
+      isConnected: orig.isConnected, getDhcpLeases: orig.getDhcpLeases,
+      makeDhcpLeaseStatic: orig.makeDhcpLeaseStatic, createDhcpLease: orig.createDhcpLease,
+      getDhcpServers: orig.getDhcpServers, getArpEntries: orig.getArpEntries,
+      getIpBindings: orig.getIpBindings, createIpBinding: orig.createIpBinding,
+      updateIpBinding: orig.updateIpBinding, deleteIpBinding: orig.deleteIpBinding,
+      deleteWalledGarden: orig.deleteWalledGarden, getWalledGarden: orig.getWalledGarden,
+      getWalledGardenIp: orig.getWalledGardenIp, createWalledGardenIp: orig.createWalledGardenIp,
+    });
   }
 });
 

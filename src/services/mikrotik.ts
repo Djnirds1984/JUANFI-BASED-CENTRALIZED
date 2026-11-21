@@ -979,6 +979,84 @@ class MikroTikService {
     }
   }
 
+  /**
+   * The DHCP servers themselves (name / interface / pool). Needed to find which
+   * server owns an address when no lease exists for it yet.
+   */
+  async getDhcpServers(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const servers = await this.restApiCall(config, 'GET', '/ip/dhcp-server');
+      return Array.isArray(servers) ? servers : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/dhcp-server/print');
+    } catch (err) {
+      console.error(`getDhcpServers failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async createDhcpLease(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    // PUT on the collection adds (verified on RouterOS 7.25 REST); POST /add
+    // answers 400 "such client already exists" for a MAC that is already leased.
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'PUT', '/ip/dhcp-server/lease', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/dhcp-server/lease/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createDhcpLease failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async makeDhcpLeaseStatic(routerId: number, id: string): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/dhcp-server/lease/make-static', { numbers: id });
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write(['/ip/dhcp-server/lease/make-static', `=.id=${id}`]);
+    } catch (err) {
+      console.error(`makeDhcpLeaseStatic failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  async getArpEntries(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const entries = await this.restApiCall(config, 'GET', '/ip/arp');
+      return Array.isArray(entries) ? entries : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      return await client.write('/ip/arp/print');
+    } catch (err) {
+      console.error(`getArpEntries failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
   async getHotspotServers(routerId: number): Promise<any[]> {
     const config = this.routerConfigs.get(routerId);
 
@@ -1349,6 +1427,54 @@ class MikroTikService {
       return await client.write(command);
     } catch (err) {
       console.error(`createWalledGarden failed for router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  /*
+   * The walled-garden IP sub-menu (`/ip/hotspot/walled-garden/ip`). Only a rule
+   * created HERE opens an address for an UNAUTHENTICATED hotspot client, because
+   * only this menu takes dst-address and installs the real `hs-unauth return`
+   * filter/NAT rules. The general menu matches hostnames (`dst-host`); giving it
+   * a bare IP creates a rule that passes nothing. Its action word is `accept`,
+   * not the general menu's `allow`.
+   */
+  async getWalledGardenIp(routerId: number): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const entries = await this.restApiCall(config, 'GET', '/ip/hotspot/walled-garden/ip');
+      return Array.isArray(entries) ? entries : [];
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const result = await client.write('/ip/hotspot/walled-garden/ip/print');
+      return Array.isArray(result) ? result : [];
+    } catch (err) {
+      console.log(`Walled garden IP query failed for router ${routerId}, returning empty array`);
+      return [];
+    }
+  }
+
+  async createWalledGardenIp(routerId: number, data: any): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return await this.restApiCall(config, 'POST', '/ip/hotspot/walled-garden/ip/add', data);
+    }
+
+    const client = this.getClient(routerId);
+    try {
+      const command = ['/ip/hotspot/walled-garden/ip/add'];
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null && value !== '') {
+          command.push(`=${key}=${value}`);
+        }
+      }
+      return await client.write(command);
+    } catch (err) {
+      console.error(`createWalledGardenIp failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
   }

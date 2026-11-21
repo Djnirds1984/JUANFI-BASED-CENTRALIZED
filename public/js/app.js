@@ -8457,6 +8457,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
               ${devices.map(d => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
             </select>
             <button class="btn btn-sm btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
+            <button class="btn btn-sm btn-outline" onclick="App.provisionSelectedNodeMcuDevice()">Register on Router</button>
             <button class="btn btn-sm btn-outline" onclick="App.showEditNodeMcuDevice()">Edit</button>
             <button class="btn btn-sm btn-danger" onclick="App.deleteNodeMcuDevice()">Delete</button>
           </div>
@@ -8834,43 +8835,151 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     } catch (err) { container.innerHTML = `<div style="color:#f44336">${this.escapeHtml(err.message)}</div>`; }
   },
 
-  showAddNodeMcuDevice() {
+  async showAddNodeMcuDevice() {
     const modal = document.getElementById('modal-overlay');
     const body = document.getElementById('modal-body');
     const title = document.getElementById('modal-title');
-    title.textContent = 'Add NodeMCU Device';
-    body.innerHTML = `
+    const footer = document.getElementById('modal-footer');
+    const routers = await api.getRouters();
+    const connected = routers.filter((r) => r.connected);
+
+    title.textContent = 'Add Sub-Vendo (NodeMCU)';
+    const formHtml = `
+      <p style="font-size:.85rem;opacity:.8;margin-top:0">
+        The machine is registered on the router as well: static address, hotspot
+        login bypassed and allowed in the Walled Garden, so a customer can insert
+        a coin before being logged in.
+      </p>
       <div class="form-row"><label>Device Name</label><input id="nd-name" class="form-control" placeholder="e.g. Vendo 1"></div>
       <div class="form-row"><label>IP Address</label><input id="nd-ip" class="form-control" placeholder="10.0.0.243"></div>
+      <div class="form-row">
+        <label>Router</label>
+        <select id="nd-router" class="form-control">
+          ${connected.length
+            ? connected.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')
+            : '<option value="">No connected router</option>'}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>MAC Address (optional)</label>
+        <input id="nd-mac" class="form-control" placeholder="8C:AA:B5:00:00:00 - leave blank to detect on the router">
+      </div>
       <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="admin"></div>
       <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password"></div>
     `;
+
+    const showForm = () => {
+      body.innerHTML = formHtml;
+      footer.innerHTML = '';
+      [
+        { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
+        { label: 'Add Device', cls: 'btn-primary', action: async () => {
+          const ip = document.getElementById('nd-ip').value.trim();
+          if (!document.getElementById('nd-name').value.trim() || !ip) {
+            this.toast('Device name and IP are required', 'error');
+            return;
+          }
+          const btn = footer.querySelector('.btn-primary');
+          if (btn) { btn.disabled = true; btn.textContent = 'Registering...'; }
+          try {
+            const res = await api.nodemcuAddDevice({
+              name: document.getElementById('nd-name').value,
+              ip,
+              username: document.getElementById('nd-user').value,
+              password: document.getElementById('nd-pass').value,
+              mac: document.getElementById('nd-mac').value.trim(),
+              routerId: parseInt(document.getElementById('nd-router').value) || undefined,
+            });
+            this.renderNodeMcu(document.getElementById('subvendo-tab-content'));
+            this.showProvisionResult(`Added ${res.device ? res.device.name : ip}`, res.provision, showForm);
+          } catch (err) {
+            this.toast('Failed: ' + err.message, 'error');
+            if (btn) { btn.disabled = false; btn.textContent = 'Add Device'; }
+          }
+        }},
+      ].forEach(btn => {
+        const el = document.createElement('button');
+        el.className = `btn ${btn.cls}`;
+        el.textContent = btn.label;
+        el.addEventListener('click', btn.action);
+        footer.appendChild(el);
+      });
+    };
+
+    showForm();
+    modal.classList.add('active');
+  },
+
+  /*
+   * The four setup steps, one line each. A half-registered machine is the thing
+   * that produces "coin slot is not available" on a device the panel calls
+   * online, so show what the router accepted and what still needs attention.
+   */
+  showProvisionResult(heading, provision, onBack) {
+    const body = document.getElementById('modal-body');
+    const title = document.getElementById('modal-title');
     const footer = document.getElementById('modal-footer');
+    title.textContent = 'Sub-Vendo Registration';
+
+    let detail = '';
+    if (!provision) {
+      detail = '<p style="font-size:.85rem;opacity:.8">Saved without router setup.</p>';
+    } else if (provision.error) {
+      detail = `<p style="color:#f44336;font-size:.85rem">Router setup could not run: ${this.escapeHtml(provision.error)}</p>`;
+    } else {
+      detail = (provision.steps || []).map((s) => `
+        <div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.5rem">
+          <span style="color:${s.ok ? '#4caf50' : '#ff9800'};font-weight:700">${s.ok ? '\u2713' : '!'}</span>
+          <div>
+            <div style="font-size:.9rem">${this.escapeHtml(s.label)}</div>
+            <div style="font-size:.78rem;opacity:.75">${this.escapeHtml(s.detail)}</div>
+          </div>
+        </div>`).join('');
+    }
+
+    body.innerHTML = `
+      <h4 style="margin-top:0">${this.escapeHtml(heading)}</h4>
+      ${detail}
+      <p style="font-size:.8rem;opacity:.7;margin-bottom:0">
+        ${provision && provision.ok
+          ? 'The machine can take coins now. Push the portal config to the router if this vendo must also appear on portals it serves itself.'
+          : 'Fix what is listed above and run "Register on Router" again.'}
+      </p>
+    `;
+
     footer.innerHTML = '';
-    const btns = [
-      { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
-      { label: 'Add', cls: 'btn-primary', action: async () => {
-        try {
-          await api.nodemcuAddDevice({
-            name: document.getElementById('nd-name').value,
-            ip: document.getElementById('nd-ip').value,
-            username: document.getElementById('nd-user').value,
-            password: document.getElementById('nd-pass').value,
-          });
-          this.closeModal();
-          this.toast('Device added', 'success');
-          this.renderNodeMcu();
-        } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
-      }},
-    ];
-    btns.forEach(btn => {
+    const actions = [];
+    // showForm() rebuilds both the body and the footer of the modal.
+    if (onBack) actions.push({ label: 'Add another', cls: 'btn-outline', action: onBack });
+    actions.push({ label: 'Done', cls: 'btn-primary', action: () => this.closeModal() });
+    actions.forEach((a) => {
       const el = document.createElement('button');
-      el.className = `btn ${btn.cls}`;
-      el.textContent = btn.label;
-      el.addEventListener('click', btn.action);
+      el.className = `btn ${a.cls}`;
+      el.textContent = a.label;
+      el.addEventListener('click', a.action);
       footer.appendChild(el);
     });
+  },
+
+  async provisionSelectedNodeMcuDevice() {
+    const devices = this._nodemcuDevices || [];
+    const device = devices.find(d => d.id === this._nodemcuSelectedId);
+    if (!device) return;
+
+    const modal = document.getElementById('modal-overlay');
+    const body = document.getElementById('modal-body');
+    const title = document.getElementById('modal-title');
+    title.textContent = 'Sub-Vendo Registration';
+    body.innerHTML = '<div class="empty-state"><p>Applying router setup...</p></div>';
     modal.classList.add('active');
+
+    try {
+      const res = await api.nodemcuProvisionDevice(device.id, { routerId: device.routerId });
+      this.showProvisionResult(`${device.name} (${device.ip})`, res.provision);
+      this.renderNodeMcu(document.getElementById('subvendo-tab-content'));
+    } catch (err) {
+      body.innerHTML = `<p style="color:#f44336">Failed: ${this.escapeHtml(err.message)}</p>`;
+    }
   },
 
   showEditNodeMcuDevice() {

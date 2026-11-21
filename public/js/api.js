@@ -353,6 +353,10 @@ class ApiClient {
     return this.post('/nodemcu/devices', data);
   }
 
+  async nodemcuProvisionDevice(id, data) {
+    return this.post(`/nodemcu/devices/${id}/provision`, data || {});
+  }
+
   async nodemcuUpdateDevice(id, data) {
     return this.put(`/nodemcu/devices/${id}`, data);
   }

@@ -6,6 +6,8 @@ import { getDb } from '../database';
 import { nodeMcuService, NodeMcuDevice } from '../services/nodemcu';
 import { authMiddleware } from '../middleware/auth';
 import { initSession } from '../services/deviceSessions';
+import { mikroTikService } from '../services/mikrotik';
+import { provisionSubVendo } from '../services/vendoProvision';
 
 const router = Router();
 
@@ -81,13 +83,29 @@ function findDevice(id: number): NodeMcuDevice | undefined {
   return loadDevices().find((d) => d.id === id);
 }
 
+/**
+ * The router a coin machine belongs to: the one the operator picked when it is
+ * connected, otherwise the first connected router. Saving a device without a
+ * router still works, the provisioning steps just report it.
+ */
+function resolveVendoRouterId(requested?: any): number {
+  const rows = getDb().prepare('SELECT id FROM routers WHERE is_active = 1 ORDER BY id').all() as any[];
+  const ids = rows.map((r) => Number(r.id));
+  const wanted = parseInt(String(requested || ''), 10);
+  if (Number.isFinite(wanted) && wanted > 0) {
+    if (mikroTikService.isConnected(wanted)) return wanted;
+    if (ids.includes(wanted)) return wanted;
+  }
+  return ids.find((id) => mikroTikService.isConnected(id)) || (Number.isFinite(wanted) ? wanted : 0);
+}
+
 router.get('/devices', (_req: Request, res: Response) => {
   const devices = loadDevices();
   res.json({ devices });
 });
 
-router.post('/devices', (req: Request, res: Response) => {
-  const { name, ip, username, password } = req.body;
+router.post('/devices', async (req: Request, res: Response) => {
+  const { name, ip, username, password, mac } = req.body;
   if (!name || !ip) {
     res.status(400).json({ error: 'name and ip are required' });
     return;
@@ -95,16 +113,59 @@ router.post('/devices', (req: Request, res: Response) => {
 
   const devices = loadDevices();
   const id = devices.length > 0 ? Math.max(...devices.map((d) => d.id)) + 1 : 1;
+  const routerId = resolveVendoRouterId(req.body.routerId);
   const device: NodeMcuDevice = {
     id,
     name: name || 'NodeMCU',
     ip,
     username: username || 'admin',
     password: password || '',
+    ...(mac ? { mac } : {}),
+    ...(routerId ? { routerId } : {}),
   };
   devices.push(device);
   saveDevices(devices);
-  res.json({ device });
+
+  // Registering the machine is only half of it: the router has to keep its
+  // address, skip its login and let customers pay it before they log in.
+  // `provision: false` stores the device only.
+  if (req.body.provision === false) {
+    res.json({ device });
+    return;
+  }
+  try {
+    const result = await provisionSubVendo(routerId, { name: device.name, ip, mac });
+    if (result.mac && !device.mac) {
+      device.mac = result.mac;
+      device.routerId = routerId;
+      saveDevices(devices);
+    }
+    res.json({ device, provision: result });
+  } catch (err: any) {
+    // The device is saved; report what could not be applied instead of losing it.
+    res.json({ device, provision: { mac: '', ok: false, steps: [], error: err.message } });
+  }
+});
+
+// Re-run the router side of the registration (new address, replaced board, or a
+// machine that was added while the router was offline).
+router.post('/devices/:id/provision', async (req: Request, res: Response) => {
+  const device = findDevice(parseInt(req.params.id));
+  if (!device) {
+    res.status(404).json({ error: 'Device not found' });
+    return;
+  }
+  try {
+    const routerId = resolveVendoRouterId(req.body?.routerId || device.routerId);
+    const result = await provisionSubVendo(routerId, { name: device.name, ip: device.ip, mac: device.mac });
+    if (result.mac && !device.mac) {
+      device.mac = result.mac;
+      saveDevices(loadDevices().map((d) => (d.id === device.id ? { ...d, mac: result.mac, routerId } : d)));
+    }
+    res.json({ provision: result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.put('/devices/:id', (req: Request, res: Response) => {
@@ -116,11 +177,13 @@ router.put('/devices/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { name, ip, username, password } = req.body;
+  const { name, ip, username, password, mac, routerId } = req.body;
   if (name !== undefined) devices[idx].name = name;
   if (ip !== undefined) devices[idx].ip = ip;
   if (username !== undefined) devices[idx].username = username;
   if (password !== undefined) devices[idx].password = password;
+  if (mac !== undefined) devices[idx].mac = mac;
+  if (routerId !== undefined) devices[idx].routerId = routerId;
   saveDevices(devices);
   nodeMcuService.clearSession(id);
   res.json({ device: devices[idx] });

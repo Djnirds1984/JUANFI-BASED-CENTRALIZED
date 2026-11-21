@@ -2,6 +2,7 @@ import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
 import { syncSessionsWithDevices, mikrotikTimeToSeconds } from './deviceSessions';
 import { isRadiusRunning, sendCoASessionTimeout } from './radiusServer';
+import { listVendoAddresses } from './vendoConfig';
 import { isIP } from 'net';
 import { config } from '../config';
 import crypto from 'crypto';
@@ -639,21 +640,24 @@ export async function ensureWalledGardenForController(routerId: number): Promise
   try {
     const entries = await mikroTikService.getWalledGarden(routerId);
     const list = Array.isArray(entries) ? entries : [];
-    const existing = list.find((entry: any) => {
-      const dstHost = String(entry['dst-host'] || '');
-      const dstAddr = String(entry['dst-address'] || '');
-      return dstHost === lanIp || dstAddr.split('/')[0] === lanIp;
-    });
+    // Only the IP sub-menu decides whether an address still has to be opened:
+    // a hostname-menu row carrying an IP looks like a match but installs no
+    // firewall rule, so trusting a merged list would hide the missing rule.
+    const ipRules = await mikroTikService.getWalledGardenIp(routerId);
+    const addresses = Array.isArray(ipRules) ? ipRules : [];
+    const existing = addresses.find((entry: any) => hasAddress(entry, lanIp));
 
     if (!existing) {
-      await mikroTikService.createWalledGarden(routerId, {
-        'dst-host': lanIp,
+      await mikroTikService.createWalledGardenIp(routerId, {
+        'dst-address': lanIp,
         action: 'accept',
         comment: 'JuanFi controller (session tokens)',
       });
       console.log(`Walled garden entry added for controller ${lanIp} on router ${routerId}`);
     }
 
+    await dropDeadAddressRules(routerId, list);
+    await ensureVendoAddressesAllowed(routerId, addresses);
     await ensureCaptiveProbeHostsDenied(routerId, list);
     walledGardenRuns.set(routerId, { at: Date.now(), ok: true });
   } catch (err) {
@@ -662,6 +666,75 @@ export async function ensureWalledGardenForController(routerId: number): Promise
     // make this loop busy.
     walledGardenRuns.set(routerId, { at: Date.now(), ok: false });
     console.error(`Walled garden check failed for router ${routerId}:`, (err as Error).message);
+  }
+}
+
+/*
+ * INSERT COIN happens while the phone is still UNAUTHENTICATED: the portal posts
+ * /topUp and /checkCoin straight to the coin machine's IP, only the resulting
+ * credit goes through the controller. RouterOS answers every other destination
+ * of an unauthenticated client with the login page, so the portal receives HTML
+ * instead of JSON and tells the customer "coin slot is not available" - on a
+ * machine the panel shows as online, because the controller polls it over the
+ * LAN where no hotspot is involved. Allow each registered sub-vendo address, the
+ * same way the controller allows its own IP for the pre-login session calls.
+ *
+ * Goes through the IP sub-menu: a general walled-garden rule with the address in
+ * `dst-host` is accepted by RouterOS but installs no firewall rule, so the phone
+ * stays intercepted (verified on RouterOS 7.25 - only the ip/menu entry created
+ * chain=hs-unauth action=return dst=<vendo>).
+ */
+async function ensureVendoAddressesAllowed(routerId: number, entries: any[]): Promise<void> {
+  const list = Array.isArray(entries) ? entries : [];
+  for (const ip of listVendoAddresses()) {
+    // One unreachable machine must not stop the others from being allowed.
+    try {
+      if (list.some((entry: any) => hasAddress(entry, ip))) continue;
+      await mikroTikService.createWalledGardenIp(routerId, {
+        'dst-address': ip,
+        action: 'accept',
+        comment: 'sub-vendo coin machine (insert coin before login)',
+      });
+      console.log(`Walled garden: allowed sub-vendo ${ip} on router ${routerId}`);
+    } catch (err) {
+      console.error(`Walled garden: could not allow sub-vendo ${ip} on router ${routerId}:`, (err as Error).message);
+    }
+  }
+}
+
+/** Does this walled-garden IP rule point at exactly this address? */
+function hasAddress(entry: any, ip: string): boolean {
+  return String(entry['dst-address'] || '').trim().split('/')[0] === ip;
+}
+
+// Comments the controller writes on its own address rules. Only a rule with one
+// of these is ever deleted automatically - an operator's entry is left alone.
+const OUR_ADDRESS_COMMENTS = ['JuanFi controller', 'sub-vendo coin machine'];
+
+/*
+ * Earlier controller builds wrote coin-machine and controller addresses into the
+ * hostname menu, where RouterOS 7.25 accepts the rule and installs nothing: the
+ * phone stays intercepted, INSERT COIN answers "slot is not available", and the
+ * leftover row hides the real rule from any check that looks at both menus. Now
+ * that the address lives in the IP menu, those dead rows are removed - including
+ * the empty destination a rejected POST left behind with our comment on it.
+ */
+async function dropDeadAddressRules(routerId: number, entries: any[]): Promise<void> {
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const comment = String(entry.comment || '');
+    if (!OUR_ADDRESS_COMMENTS.some((prefix) => comment.startsWith(prefix))) continue;
+    const host = String(entry['dst-host'] || '').trim();
+    const address = String(entry['dst-address'] || '').trim();
+    const dead = (host !== '' && isIP(host) !== 0) || (host === '' && address === '');
+    if (!dead) continue;
+    const id = String(entry['.id'] || '');
+    if (!id) continue;
+    try {
+      await mikroTikService.deleteWalledGarden(routerId, id);
+      console.log(`Walled garden: removed dead hostname-menu rule for ${host || '(no destination)'} on router ${routerId}`);
+    } catch (err) {
+      console.error(`Walled garden: could not remove dead rule for ${host} on router ${routerId}:`, (err as Error).message);
+    }
   }
 }
 

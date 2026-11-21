@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { getPortalDefaultContent, listHotspotFiles, EDITABLE_EXTENSIONS } from '../database';
 import { mikroTikService } from '../services/mikrotik';
+import { resolveVendorIp } from '../services/vendoConfig';
 import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
@@ -57,7 +58,11 @@ router.get('/vendo-config', (req: Request, res: Response) => {
       }
     }
 
-    res.json({
+    // INSERT COIN is posted straight to vendorIpAddress, and the dropdown the
+    // portal shows is built from multiVendoAddresses. When those disagree the
+    // phone talks to a machine that is not there, so resolve the default against
+    // the list before the portal ever sees it.
+    res.json(resolveVendorIp({
       isMultiVendo: getBool('isMultiVendo'),
       multiVendoOption: getNum('multiVendoOption'),
       multiVendoAddresses: addresses,
@@ -67,7 +72,7 @@ router.get('/vendo-config', (req: Request, res: Response) => {
       loginOption: getNum('loginOption'),
       dataRateOption: getBool('dataRateOption'),
       macAsVoucherCode: getBool('macAsVoucherCode'),
-    });
+    }));
   } catch (error: any) {
     console.error('vendo-config error:', error);
     res.status(500).json({ error: error.message });

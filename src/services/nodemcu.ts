@@ -6,6 +6,10 @@ export interface NodeMcuDevice {
   ip: string;
   username: string;
   password: string;
+  /** Learned from the router when the machine was registered. */
+  mac?: string;
+  /** Router this coin machine is provisioned on. */
+  routerId?: number;
 }
 
 interface DeviceSession {

@@ -495,8 +495,20 @@ function populateVendoSelect(selectId, divId, cfg) {
 				opt.textContent = v.vendoName;
 				sel.appendChild(opt);
 			});
+			// The dropdown opens on the first listed machine, so the coin requests
+			// must go there too. This used to keep vendorIpAddress on the config
+			// default until the customer touched the select, and a stored choice from
+			// before a machine was replaced/renumbered was trusted blindly - either way
+			// the phone POSTs /topUp to an address that is not the one on screen and
+			// INSERT COIN reports "Coin slot is not available".
 			var stored = localStorage.getItem('selectedVendo');
-			if (stored) { sel.value = stored; vendorIpAddress = stored; }
+			var known = cfg.multiVendoAddresses.some(function(v) { return v && v.vendoIp === stored; });
+			var chosen = known ? stored : (cfg.multiVendoAddresses[0].vendoIp || cfg.vendorIpAddress || '');
+			if (chosen) {
+				sel.value = chosen;
+				vendorIpAddress = chosen;
+				if (!known) localStorage.setItem('selectedVendo', chosen);
+			}
 			sel.addEventListener('change', function() {
 				vendorIpAddress = sel.value;
 				localStorage.setItem('selectedVendo', vendorIpAddress);

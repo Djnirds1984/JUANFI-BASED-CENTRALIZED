@@ -48,6 +48,13 @@ export const config = {
   port,
   host: process.env.HOST || '0.0.0.0',
   jwtSecret: process.env.JWT_SECRET || 'default-secret-change-me',
+  // Customer wallet accounts are signed with a DIFFERENT secret than the admin
+  // panel: both sides verify with the same library, and sharing one secret would
+  // let a customer token be replayed against the admin API (and vice versa).
+  // Derived from JWT_SECRET by default so a single .env value still works.
+  clientJwtSecret: (process.env.CLIENT_JWT_SECRET || '').trim()
+    || `${process.env.JWT_SECRET || 'default-secret-change-me'}:client`,
+  clientTokenTtl: process.env.CLIENT_TOKEN_TTL || '720h',
   dbPath: process.env.DB_PATH || './data/mikrotik-controller.db',
   logLevel: process.env.LOG_LEVEL || 'info',
   activeDevicesSyncSec: Math.max(1, parseInt(process.env.ACTIVE_DEVICES_SYNC_SEC || '5', 10) || 5),

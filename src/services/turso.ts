@@ -56,6 +56,13 @@ export async function testConnection(): Promise<{ success: boolean; message: str
   }
 }
 
+/*
+ * Only the roaming identity tables go to the shared cloud: an account, voucher
+ * or session must follow the device to another router. The wallet tables are
+ * deliberately NOT here - customer balances are cash this panel is holding for
+ * a customer, and the cloud database is merged/upserted by several panels, so
+ * money rows must never be duplicated or overwritten between sites.
+ */
 const SYNC_TABLES = ['hotspot_users', 'vouchers', 'device_sessions', 'device_macs'];
 
 const TABLE_SCHEMAS: Record<string, string> = {

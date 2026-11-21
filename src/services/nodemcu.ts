@@ -267,6 +267,52 @@ class NodeMcuService {
     return adminPost(device, '/admin/api/generateVouchers', `amt=${amount}&qty=${qty}&pfx=${encodeURIComponent(prefix)}&sales=${addToSales ? 1 : 0}`);
   }
 
+  /**
+   * Settle a wallet coin session by calling the machine's own /useVoucher.
+   *
+   * This is the ONLY number the wallet trusts: the phone never reports how many
+   * coins went in. /useVoucher hands back the machine's accumulated total and
+   * clears it, so the same session can never be claimed twice - the machine
+   * itself refuses a code that is not its current one (coinslot.busy).
+   *
+   * `/useVoucher` is a customer-facing device endpoint (the portal calls it
+   * directly), so it needs no admin token - only the machine IP.
+   */
+  async settleCoinSession(ip: string, code: string): Promise<{
+    status: 'settled' | 'busy' | 'unreachable' | 'error';
+    coins: number;
+    timeAdded: number;
+    validity: number;
+    raw?: string;
+    error?: string;
+  }> {
+    let body = '';
+    try {
+      const res = await httpPost(ip, 80, '/useVoucher', `voucher=${encodeURIComponent(code)}`, {}, 12000);
+      body = res.body;
+    } catch (err: any) {
+      return { status: 'unreachable', coins: 0, timeAdded: 0, validity: 0, error: err.message };
+    }
+    let data: any;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return { status: 'error', coins: 0, timeAdded: 0, validity: 0, raw: body.slice(0, 200) };
+    }
+    if (data.status !== 'true') {
+      return {
+        status: data.errorCode === 'coinslot.busy' ? 'busy' : 'error',
+        coins: 0, timeAdded: 0, validity: 0, raw: body.slice(0, 200),
+      };
+    }
+    return {
+      status: 'settled',
+      coins: parseInt(data.totalCoin) || 0,
+      timeAdded: parseInt(data.timeAdded) || 0,
+      validity: parseInt(data.validity) || 0,
+    };
+  }
+
   clearSession(deviceId: number): void {
     sessions.delete(deviceId);
   }

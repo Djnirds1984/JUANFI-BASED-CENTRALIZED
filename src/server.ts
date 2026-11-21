@@ -32,6 +32,7 @@ import toolsRoutes from './api/tools';
 import settingsRoutes from './api/settings';
 import chatRoutes from './api/chat';
 import salesRoutes from './api/sales';
+import walletRoutes from './api/wallet';
 
 const app = express();
 const server = http.createServer(app);
@@ -54,7 +55,7 @@ app.use(morgan('combined'));
 // silently replays the old (slow) login flow and the popup never closes, so
 // force revalidation of the portal documents and the portal logic - the ETag
 // still answers with a cheap 304 when nothing changed.
-const PORTAL_NO_CACHE = /^\/(|portal\.html|assets\/js\/(portal|session)\.js)$/;
+const PORTAL_NO_CACHE = /^\/(|portal\.html|assets\/js\/(portal|session|wallet)\.js)$/;
 app.use((req, res, next) => {
   if (PORTAL_NO_CACHE.test(req.path)) {
     res.set('Cache-Control', 'no-cache, must-revalidate');
@@ -86,6 +87,7 @@ app.use('/api/tools', toolsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/sales', salesRoutes);
+app.use('/api/wallet', walletRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

@@ -8,6 +8,7 @@ import { authMiddleware } from '../middleware/auth';
 import { initSession } from '../services/deviceSessions';
 import { mikroTikService } from '../services/mikrotik';
 import { provisionSubVendo } from '../services/vendoProvision';
+import { loadDevices, saveDevices, findDevice } from '../services/deviceRegistry';
 
 const router = Router();
 
@@ -62,26 +63,6 @@ router.post('/coin-insert', (req: Request, res: Response) => {
 });
 
 router.use(authMiddleware);
-
-const DEVICES_FILE = path.join(__dirname, '..', '..', 'data', 'nodemcu-devices.json');
-
-function loadDevices(): NodeMcuDevice[] {
-  try {
-    const raw = fs.readFileSync(DEVICES_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-function saveDevices(devices: NodeMcuDevice[]): void {
-  fs.mkdirSync(path.dirname(DEVICES_FILE), { recursive: true });
-  fs.writeFileSync(DEVICES_FILE, JSON.stringify(devices, null, 2), 'utf8');
-}
-
-function findDevice(id: number): NodeMcuDevice | undefined {
-  return loadDevices().find((d) => d.id === id);
-}
 
 /**
  * The router a coin machine belongs to: the one the operator picked when it is

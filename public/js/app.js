@@ -186,6 +186,7 @@ const App = {
       portal: 'Portal',
       subvendo: 'SubVendo',
       sales: 'Sales Report',
+      wallet: 'Customers / Wallet',
       payments: 'Online Payment',
       appearance: 'Appearance',
       settings: 'System Settings',
@@ -214,6 +215,7 @@ const App = {
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
         case 'sales': await this.renderSalesReport(); break;
+        case 'wallet': await this.renderWallet(); break;
         case 'payments': await this.renderOnlinePayment(); break;
         case 'tools': await this.renderTools(); break;
         case 'appearance': await this.renderAppearance(); break;
@@ -8550,6 +8552,335 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     a.click();
     a.remove();
     URL.revokeObjectURL(a.href);
+  },
+
+  // ---- Customer Wallet (staff side) ----
+  // Money here is real: the only way it enters a wallet is coins the controller
+  // counted itself, and the only way it leaves is time handed to a device. Staff
+  // can also move it by hand, which is why every such move needs a reason and
+  // lands in the same append-only ledger the customer sees.
+  _walletTab: 'customers',
+  _walletSearch: '',
+  _walletNeedsCleanup: true,
+
+  async renderWallet() {
+    const content = document.getElementById('page-content');
+    const tab = ['customers', 'topups', 'settings'].includes(this._walletTab) ? this._walletTab : 'customers';
+
+    let s = { accounts: 0, total_balance: 0, credited_today: 0, spent_today: 0, minutes_sold_today: 0, router_cleanup_pending: 0 };
+    try {
+      s = await api.getWalletSummary();
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><h3>Wallet unavailable</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+      return;
+    }
+    const fmt = (v) => this.formatMoney(v);
+
+    content.innerHTML = `
+      <div class="overview-grid">
+        <div class="dash-card">
+          <div class="dash-card-title">Wallet Accounts</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${s.accounts}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${s.router_cleanup_pending ? s.router_cleanup_pending + ' machine account(s) to clean' : 'no router cleanup pending'}</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Cash Held for Customers</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(s.total_balance)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">total unpaid balance across all wallets</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Coins Loaded Today</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(s.credited_today)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">credited into wallets (UTC day)</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-title">Spent on Time Today</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(s.spent_today)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${s.minutes_sold_today} minute(s) sold from balances</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header"><h3>${uiIcon('user')} Customers</h3></div>
+        <div class="tabs">
+          <button class="tab ${tab === 'customers' ? 'active' : ''}" data-wtab="customers">Wallets</button>
+          <button class="tab ${tab === 'topups' ? 'active' : ''}" data-wtab="topups">Coin Sessions</button>
+          <button class="tab ${tab === 'settings' ? 'active' : ''}" data-wtab="settings">Settings</button>
+        </div>
+        <div id="wallet-tab-content">Loading...</div>
+      </div>
+    `;
+
+    document.querySelectorAll('[data-wtab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this._walletTab = btn.dataset.wtab;
+        document.querySelectorAll('[data-wtab]').forEach((t) => t.classList.remove('active'));
+        btn.classList.add('active');
+        this.loadWalletTab();
+      });
+    });
+    await this.loadWalletTab();
+  },
+
+  async loadWalletTab() {
+    const box = document.getElementById('wallet-tab-content');
+    if (!box) return;
+    box.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    try {
+      if (this._walletTab === 'topups') await this.loadWalletTopups(box);
+      else if (this._walletTab === 'settings') await this.loadWalletSettings(box);
+      else await this.loadWalletCustomers(box);
+    } catch (err) {
+      box.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+    }
+  },
+
+  async loadWalletCustomers(box) {
+    const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+    const fmt = (v) => this.formatMoney(v);
+    const data = await api.getWalletAccounts(this._walletSearch);
+    const rows = data.accounts || [];
+    box.innerHTML = `
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+        <input id="wallet-search" class="form-control" style="max-width:320px" placeholder="name, email, mobile or MAC" value="${esc(this._walletSearch)}">
+        <button class="btn btn-primary btn-sm" onclick="App.searchWallets()">${uiIcon('search')} Search</button>
+      </div>
+      ${rows.length ? `
+      <table class="table">
+        <thead><tr><th>Customer</th><th>Contact</th><th>Balance</th><th>Entries</th><th>Status</th><th>Last Seen</th><th></th></tr></thead>
+        <tbody>${rows.map((a) => `
+          <tr>
+            <td><strong>${esc(a.full_name) || '<span style="color:var(--text-muted)">(no name)</span>'}</strong><div style="font-size:0.8125rem;color:var(--text-muted)">${esc(a.email)}</div></td>
+            <td style="font-size:0.8125rem">${esc(a.mobile) || '—'}<div style="color:var(--text-muted)">${esc(a.last_mac || a.registered_mac || '')}</div></td>
+            <td><strong>${fmt(a.balance)}</strong></td>
+            <td>${a.tx_count}</td>
+            <td><span class="status-badge ${a.status === 'active' ? 'connected' : 'disconnected'}">${esc(a.status)}</span>${a.verified ? '' : ' <span class="status-badge disconnected">unverified</span>'}</td>
+            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(a.last_login_at || a.created_at)}</td>
+            <td><button class="btn btn-outline btn-sm" onclick="App.openWalletAccount(${a.id})">Open</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : '<div class="empty-state"><p>No wallet accounts yet. Customers create their own on the portal, or register one for them there.</p></div>'}
+    `;
+  },
+
+  searchWallets() {
+    this._walletSearch = ((document.getElementById('wallet-search') || {}).value || '').trim();
+    this.loadWalletTab();
+  },
+
+  async openWalletAccount(id) {
+    const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+    const fmt = (v) => this.formatMoney(v);
+    let d;
+    try {
+      d = await api.getWalletAccount(id);
+    } catch (err) {
+      this.toast(err.message, 'error');
+      return;
+    }
+    const a = d.account;
+    const kinds = {
+      coin_topup: 'Coins loaded', time_purchase: 'Time purchased',
+      admin_credit: 'Added by staff', admin_debit: 'Removed by staff',
+    };
+
+    const txRows = (d.transactions || []).slice(0, 40).map((t) => `
+      <tr>
+        <td style="font-size:0.8125rem">${esc(t.created_at)}</td>
+        <td>${esc(kinds[t.kind] || t.kind)}</td>
+        <td style="text-align:right;color:${t.amount_centavos >= 0 ? 'var(--success)' : 'var(--danger)'}">${t.amount_centavos >= 0 ? '+' : '−'}${fmt(Math.abs(t.amount))}</td>
+        <td style="text-align:right">${fmt(t.balance)}</td>
+        <td style="font-size:0.8125rem">${t.minutes ? t.minutes + ' min' : ''} ${t.created_by !== 'portal' ? '<span style="color:var(--text-muted)">by ' + esc(t.created_by) + '</span>' : ''}</td>
+      </tr>`).join('');
+
+    const deviceRows = (d.devices || []).map((v) => `
+      <tr><td><code>${esc(v.mac)}</code></td><td>${esc(v.router_id)}</td><td style="font-size:0.8125rem;color:var(--text-muted)">${esc(v.first_seen)} → ${esc(v.last_seen)}</td></tr>`).join('');
+
+    const topupRows = (d.topups || []).slice(0, 12).map((t) => `
+      <tr>
+        <td><code>${esc(t.code)}</code></td>
+        <td>${esc(t.device_name || t.device_ip)}</td>
+        <td>${t.coins}</td>
+        <td><span class="status-badge ${t.status === 'credited' ? 'connected' : (t.status === 'failed' ? 'disconnected' : '')}">${esc(t.status)}</span></td>
+        <td>${t.cleanup_needed ? `<button class="btn btn-outline btn-sm" onclick="App.retryWalletCleanup(${t.id})">${uiIcon('refresh')} Clean router</button>` : ''}${t.cleanup_error ? `<div style="font-size:0.75rem;color:var(--danger)">${esc(t.cleanup_error)}</div>` : ''}</td>
+      </tr>`).join('');
+
+    this.openModal(`${a.full_name || a.email} — ${fmt(a.balance)}`, `
+      <div style="font-size:0.875rem">
+        <p style="margin:0 0 0.25rem"><strong>${esc(a.email)}</strong> · ${esc(a.mobile) || 'no mobile'} · PIN ${a.has_pin ? 'set' : 'not set'}</p>
+        <p style="margin:0 0 0.25rem;color:var(--text-muted)">registered ${esc(a.created_at)} · last login ${esc(a.last_login_at || 'never')} · status ${esc(a.status)}</p>
+
+        <div class="form-row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:end;margin:0.75rem 0;padding:0.75rem;background:var(--bg-secondary, #f8fafc);border-radius:8px">
+          <div style="flex:1;min-width:120px">
+            <label style="font-size:0.75rem">Amount</label>
+            <input id="wadj-amount" type="number" step="0.01" min="0" class="form-control" placeholder="0.00">
+          </div>
+          <div style="flex:2;min-width:180px">
+            <label style="font-size:0.75rem">Reason (required, goes on the customer ledger)</label>
+            <input id="wadj-reason" class="form-control" placeholder="e.g. change returned from machine">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="App.walletAdjust(${a.id}, 'credit')">+ Add</button>
+          <button class="btn btn-outline btn-sm" onclick="App.walletAdjust(${a.id}, 'debit')">− Deduct</button>
+        </div>
+
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+          <button class="btn btn-outline btn-sm" onclick="App.walletSetStatus(${a.id}, '${a.status === 'active' ? 'frozen' : 'active'}')">${a.status === 'active' ? uiIcon('lock') + ' Freeze' : uiIcon('power') + ' Activate'}</button>
+          <button class="btn btn-outline btn-sm" onclick="App.walletResetPassword(${a.id})">${uiIcon('key')} New Password</button>
+        </div>
+
+        ${d.open_code ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8125rem">
+          Pending restore/verification code <strong>${esc(d.open_code.purpose)}</strong> for ${esc(d.open_code.device_mac || 'any device')} — expires ${esc(d.open_code.expires_at)}. Give it to the customer over the counter.
+        </div>` : ''}
+
+        <h4 style="margin:0.75rem 0 0.25rem">Ledger</h4>
+        ${txRows ? `<table class="table"><thead><tr><th>When (UTC)</th><th>Kind</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th><th></th></tr></thead><tbody>${txRows}</tbody></table>` : '<p style="color:var(--text-muted)">No wallet activity.</p>'}
+
+        <h4 style="margin:0.75rem 0 0.25rem">Coin Sessions</h4>
+        ${topupRows ? `<table class="table"><thead><tr><th>Code</th><th>Machine</th><th>Coins</th><th>Status</th><th></th></tr></thead><tbody>${topupRows}</tbody></table>` : '<p style="color:var(--text-muted)">This customer has not loaded a wallet from a machine yet.</p>'}
+
+        <h4 style="margin:0.75rem 0 0.25rem">Devices</h4>
+        ${deviceRows ? `<table class="table"><thead><tr><th>MAC</th><th>Router</th><th>Seen</th></tr></thead><tbody>${deviceRows}</tbody></table>` : '<p style="color:var(--text-muted)">No linked devices.</p>'}
+      </div>
+    `, [{ label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() }]);
+  },
+
+  async walletAdjust(id, action) {
+    const amount = ((document.getElementById('wadj-amount') || {}).value || '').trim();
+    const reason = ((document.getElementById('wadj-reason') || {}).value || '').trim();
+    if (!amount || Number(amount) <= 0) { this.toast('Enter an amount greater than 0', 'error'); return; }
+    if (reason.length < 3) { this.toast('A reason is required', 'error'); return; }
+    if (!confirm(`${action === 'credit' ? 'Add' : 'Remove'} ${this.formatMoney(amount)} ${action === 'credit' ? 'to' : 'from'} this wallet?`)) return;
+    try {
+      const r = await api.adjustWallet(id, { action, amount: Number(amount), reason });
+      this.toast(`${action === 'credit' ? 'Added' : 'Removed'} ${this.formatMoney(amount)} — balance ${this.formatMoney(r.balance)}`, 'success');
+      this.openWalletAccount(id);
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async walletSetStatus(id, status) {
+    try {
+      await api.setWalletAccountStatus(id, status);
+      this.toast(status === 'frozen' ? 'Account frozen and signed out' : 'Account activated', 'success');
+      this.renderWallet();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  // The temporary password is generated server-side and shown once: the agent
+  // reads it to the customer, nobody stores it.
+  async walletResetPassword(id) {
+    if (!confirm('Set a new temporary password for this account? Their current password stops working immediately.')) return;
+    try {
+      const r = await api.resetWalletPassword(id, '');
+      this.openModal('Temporary password', `
+        <p style="font-size:0.875rem">Hand this to the customer and tell them to change it after signing in:</p>
+        <div style="font-size:1.5rem;letter-spacing:2px;font-weight:700;text-align:center;padding:0.75rem;background:var(--bg-secondary,#f8fafc);border-radius:8px"><code id="w-temp-pass">${this.escapeHtml(r.temporary_password)}</code></div>
+        <button class="btn btn-outline btn-sm" style="margin-top:0.5rem" onclick="App.copyText(document.getElementById('w-temp-pass').textContent)">${uiIcon('copy')} Copy</button>
+      `, [{ label: 'Done', class: 'btn btn-primary', action: () => this.closeModal() }]);
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  async loadWalletTopups(box) {
+    const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+    const data = await api.getWalletTopups(this._walletNeedsCleanup);
+    const rows = data.topups || [];
+    box.innerHTML = `
+      <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem">
+        <label style="font-size:0.8125rem;display:flex;gap:0.4rem;align-items:center">
+          <input type="checkbox" id="wallet-cleanup-only" ${this._walletNeedsCleanup ? 'checked' : ''} onchange="App.setWalletCleanupFilter(this.checked)">
+          only sessions whose router account is still on the router
+        </label>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.8125rem;margin:0 0 0.75rem">
+        A wallet load settles the machine with /useVoucher, and that also makes the machine create a hotspot user named after the session code. That user is free internet nobody bought, so it is removed right after the credit. If the router was unreachable at that moment, clean it here.
+      </p>
+      ${rows.length ? `
+      <table class="table">
+        <thead><tr><th>Code</th><th>Customer</th><th>Machine</th><th>Coins</th><th>Status</th><th>Started (UTC)</th><th></th></tr></thead>
+        <tbody>${rows.map((t) => `
+          <tr>
+            <td><code>${esc(t.code)}</code></td>
+            <td style="font-size:0.8125rem">${esc(t.email || 'deleted account')}<div style="color:var(--text-muted)">${esc(t.client_mac || '')}</div></td>
+            <td>${esc(t.device_name || t.device_ip)}</td>
+            <td>${t.coins}</td>
+            <td><span class="status-badge ${t.status === 'credited' ? 'connected' : (t.status === 'failed' ? 'disconnected' : '')}">${esc(t.status)}</span>${t.cleanup_needed ? ' <span class="status-badge disconnected">cleanup</span>' : ''}</td>
+            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(t.created_at)}</td>
+            <td>${t.cleanup_needed ? `<button class="btn btn-outline btn-sm" onclick="App.retryWalletCleanup(${t.id})">${uiIcon('refresh')} Clean</button>` : ''}${t.cleanup_error ? `<div style="font-size:0.75rem;color:var(--danger)">${esc(t.cleanup_error)}</div>` : ''}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : '<div class="empty-state"><p>No coin sessions' + (this._walletNeedsCleanup ? ' need cleaning.' : ' yet.') + '</p></div>'}
+    `;
+  },
+
+  setWalletCleanupFilter(checked) {
+    this._walletNeedsCleanup = !!checked;
+    this.loadWalletTab();
+  },
+
+  async retryWalletCleanup(id) {
+    try {
+      const r = await api.retryWalletTopupCleanup(id);
+      if (r.ok) this.toast('Router account removed', 'success');
+      else this.toast('Router still unreachable: ' + (r.error || 'unknown'), 'error');
+    } catch (err) {
+      this.toast(err.message, 'error');
+      return;
+    }
+    // Refresh whatever list the button was on.
+    if (this._walletTab === 'topups') this.loadWalletTab();
+    else this.renderWallet();
+  },
+
+  async loadWalletSettings(box) {
+    const s = await api.getWalletSettings();
+    box.innerHTML = `
+      <p style="color:var(--text-muted);font-size:0.8125rem;margin:0 0 0.75rem">
+        A coin counts as its peso value because the machine already prices coins against its own rate table. Time packages come from Online Payment → Payment Rates, so wallet prices always match the GCash prices.
+      </p>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;max-width:760px">
+        <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.875rem;margin-bottom:0.75rem">
+          <input type="checkbox" id="ws-enabled" ${s.enabled ? 'checked' : ''}> Wallet enabled on the portal
+        </label>
+        <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.875rem;margin-bottom:0.75rem">
+          <input type="checkbox" id="ws-verify" ${s.require_verification ? 'checked' : ''}> require an agent to confirm new accounts
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0.75rem;max-width:760px">
+        <div><label style="font-size:0.75rem">Peso value of 1 coin</label><input id="ws-coin" type="number" step="0.01" min="0.01" class="form-control" value="${s.coin_value}"></div>
+        <div><label style="font-size:0.75rem">Smallest load (peso)</label><input id="ws-min-topup" type="number" step="1" min="0" class="form-control" value="${s.min_topup}"></div>
+        <div><label style="font-size:0.75rem">Largest load (peso)</label><input id="ws-max-topup" type="number" step="1" min="1" class="form-control" value="${s.max_topup}"></div>
+        <div><label style="font-size:0.75rem">Smallest package to buy (peso)</label><input id="ws-min-convert" type="number" step="1" min="0" class="form-control" value="${s.min_convert}"></div>
+        <div><label style="font-size:0.75rem">Daily spend limit per customer (0 = none)</label><input id="ws-daily" type="number" step="1" min="0" class="form-control" value="${s.daily_convert}"></div>
+        <div><label style="font-size:0.75rem">Coin session length (minutes)</label><input id="ws-validity" type="number" step="1" min="1" max="240" class="form-control" value="${s.topup_validity_min}"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:1rem" onclick="App.saveWalletSettings()">${uiIcon('save')} Save Wallet Settings</button>
+    `;
+  },
+
+  async saveWalletSettings() {
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    const body = {
+      enabled: !!(document.getElementById('ws-enabled') || {}).checked,
+      require_verification: !!(document.getElementById('ws-verify') || {}).checked,
+      coin_value: Number(val('ws-coin')),
+      min_topup: Number(val('ws-min-topup')),
+      max_topup: Number(val('ws-max-topup')),
+      min_convert: Number(val('ws-min-convert')),
+      daily_convert: Number(val('ws-daily')),
+      topup_validity_min: Number(val('ws-validity')),
+    };
+    try {
+      await api.updateWalletSettings(body);
+      this.toast('Wallet settings saved', 'success');
+      this.renderWallet();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
   },
 
   _nodemcuRefreshInterval: null,

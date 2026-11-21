@@ -352,6 +352,128 @@ export function initializeDatabase(): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, id);
+
+    /*
+     * ---- Customer wallet -----------------------------------------------------
+     * Money is stored as INTEGER centavos (1 peso = 100) everywhere in the
+     * database: REAL pesos drift once they are added and subtracted, and a
+     * wallet holds real money. Only the API speaks pesos.
+     */
+    CREATE TABLE IF NOT EXISTS wallet_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      pin_hash TEXT NOT NULL DEFAULT '',
+      full_name TEXT NOT NULL DEFAULT '',
+      mobile TEXT NOT NULL DEFAULT '',
+      balance_centavos INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      verified INTEGER NOT NULL DEFAULT 1,
+      token_epoch INTEGER NOT NULL DEFAULT 0,
+      registered_mac TEXT NOT NULL DEFAULT '',
+      registered_router_id INTEGER NOT NULL DEFAULT 0,
+      last_mac TEXT NOT NULL DEFAULT '',
+      failed_logins INTEGER NOT NULL DEFAULT 0,
+      locked_until TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_login_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Append-only ledger: a row is never edited or deleted, corrections are new
+    -- rows, so balance_centavos can always be re-derived by summing the ledger.
+    -- reference is UNIQUE, which is what makes a retried coin claim idempotent.
+    CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      amount_centavos INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      mac_address TEXT NOT NULL DEFAULT '',
+      device_id INTEGER,
+      device_name TEXT NOT NULL DEFAULT '',
+      reference TEXT NOT NULL UNIQUE,
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT 'portal',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES wallet_accounts(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_tx_account ON wallet_transactions(account_id, id DESC);
+
+    -- A coin top-up in flight. The code doubles as the coin machine's active
+    -- voucher key, so the machine itself only ever settles a session once.
+    -- open -> settled (coins read from the machine) -> credited (ledger row).
+    -- A crash between settled and credited is recovered by re-reading the
+    -- stored coins instead of asking the machine again (its counter is gone).
+    CREATE TABLE IF NOT EXISTS wallet_topup_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      account_id INTEGER NOT NULL,
+      device_id INTEGER NOT NULL,
+      device_ip TEXT NOT NULL,
+      device_name TEXT NOT NULL DEFAULT '',
+      router_id INTEGER NOT NULL DEFAULT 0,
+      client_mac TEXT NOT NULL DEFAULT '',
+      coins INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      cleanup_needed INTEGER NOT NULL DEFAULT 0,
+      cleanup_error TEXT NOT NULL DEFAULT '',
+      tx_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      settled_at TEXT,
+      FOREIGN KEY (account_id) REFERENCES wallet_accounts(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_topup_account ON wallet_topup_sessions(account_id, status);
+
+    -- Devices an account has signed in on. Password restore is only honoured
+    -- from one of these, because the code is delivered into that device's own
+    -- portal chat - a stranger typing someone's email gets nothing.
+    CREATE TABLE IF NOT EXISTS wallet_devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      mac TEXT NOT NULL,
+      router_id INTEGER NOT NULL DEFAULT 0,
+      hostname TEXT NOT NULL DEFAULT '',
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(account_id, mac),
+      FOREIGN KEY (account_id) REFERENCES wallet_accounts(id) ON DELETE CASCADE
+    );
+
+    -- One-shot restore codes. Only the SHA-256 is stored, so a database dump
+    -- cannot be used to take over an account.
+    CREATE TABLE IF NOT EXISTS wallet_auth_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'reset',
+      code_hash TEXT NOT NULL,
+      device_mac TEXT NOT NULL DEFAULT '',
+      used_at TEXT,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES wallet_accounts(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_codes_account ON wallet_auth_codes(account_id, purpose);
+
+    CREATE TABLE IF NOT EXISTS wallet_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      -- A coin machine counts pulses; its rate table is priced in pesos, so the
+      -- number it reports as totalCoin is a peso figure. Kept configurable for
+      -- machines wired to a different denomination.
+      coin_value_centavos INTEGER NOT NULL DEFAULT 100,
+      min_topup_centavos INTEGER NOT NULL DEFAULT 100,
+      max_topup_centavos INTEGER NOT NULL DEFAULT 500000,
+      min_convert_centavos INTEGER NOT NULL DEFAULT 100,
+      daily_convert_centavos INTEGER NOT NULL DEFAULT 0,
+      require_verification INTEGER NOT NULL DEFAULT 0,
+      topup_validity_min INTEGER NOT NULL DEFAULT 15,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

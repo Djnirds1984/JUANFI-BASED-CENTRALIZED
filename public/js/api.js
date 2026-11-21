@@ -606,6 +606,25 @@ class ApiClient {
     return this.get(`/sales/report?${params.toString()}`);
   }
 
+  // --- Customer wallet (staff side) ---
+  async getWalletSummary() { return this.get('/wallet/admin/summary'); }
+  async getWalletSettings() { return this.get('/wallet/admin/settings'); }
+  async updateWalletSettings(data) { return this.put('/wallet/admin/settings', data); }
+  async getWalletAccounts(search) {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    params.set('limit', '200');
+    return this.get(`/wallet/admin/accounts?${params.toString()}`);
+  }
+  async getWalletAccount(id) { return this.get(`/wallet/admin/accounts/${id}`); }
+  async adjustWallet(id, data) { return this.post(`/wallet/admin/accounts/${id}/adjust`, data); }
+  async setWalletAccountStatus(id, status) { return this.post(`/wallet/admin/accounts/${id}/status`, { status }); }
+  async resetWalletPassword(id, password) { return this.post(`/wallet/admin/accounts/${id}/password`, { password }); }
+  async getWalletTopups(cleanupOnly) {
+    return this.get(`/wallet/admin/topups?limit=200${cleanupOnly ? '&cleanup=1' : ''}`);
+  }
+  async retryWalletTopupCleanup(id) { return this.post(`/wallet/admin/topups/${id}/cleanup`, {}); }
+
   // --- System settings ---
   async getSystemSettings() { return this.get('/settings'); }
   async updateSystemSettings(data) { return this.put('/settings', data); }

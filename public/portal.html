@@ -289,6 +289,7 @@ body#loginBody {
 								<button type="button" id="insertBtn" class="btn btn-success btn-block">INSERT COIN</button>
 								<div class="mt-3"></div>
 
+								<button type="button" id="walletBtn" class="btn portal-btn mb-3" style="display:none;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;">MY WALLET</button>
 								<button type="button" id="promoRateBtn" class="btn portal-btn mb-3">PROMO RATES</button>
 								<button type="button" id="chargingBtn" class="btn portal-btn mb-3">CHARGING STATION</button>
 								<button type="button" id="eloadBtn" class="btn portal-btn mb-3">E-LOAD</button>
@@ -325,6 +326,7 @@ body#loginBody {
 								<div class="mt-3"></div>
 
 								<button type="button" id="payGcashBtnConnected" class="btn portal-btn mb-3" style="display:none;">PAY GCASH</button>
+								<button type="button" id="walletBtnConnected" class="btn portal-btn mb-3" style="display:none;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;">MY WALLET</button>
 								<div id="payRatesPanelConnected" style="display:none;background:#f5f5f5;border-radius:10px;padding:12px;margin-bottom:8px;"></div>
 								<button type="button" id="connectedPromoRateBtn" class="btn portal-btn mb-3">PROMO RATES</button>
 								<button type="button" id="pauseTimeBtn" class="btn portal-btn mb-3" style="background:linear-gradient(135deg, #f59e0b, #d97706);color:white;">PAUSE TIME</button>
@@ -403,6 +405,173 @@ body#loginBody {
 			</div>
 		</div>
 
+		<!-- Wallet Modal (customer account: sign in, load with coins, buy time) -->
+		<div id="walletModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:2000;justify-content:center;align-items:center;">
+			<div style="background:#fff;border-radius:20px;max-width:430px;width:92%;max-height:88vh;overflow-y:auto;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+				<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+					<h4 style="color:#5b21b6;font-weight:bold;margin:0;">MY WALLET</h4>
+					<button id="wCloseBtn" style="background:none;border:none;font-size:24px;color:#999;cursor:pointer;line-height:1;">&times;</button>
+				</div>
+				<div id="wStatus" style="font-size:12px;min-height:16px;margin-bottom:8px;color:#475569;"></div>
+
+				<!-- SIGN IN -->
+				<div id="wViewSignin">
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">EMAIL</label>
+						<input type="email" id="wSigninEmail" class="form-control" autocomplete="username" placeholder="you@example.com">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">PASSWORD</label>
+						<input type="password" id="wSigninPass" class="form-control" autocomplete="current-password" placeholder="Password">
+					</div>
+					<button type="button" id="wSigninBtn" class="btn portal-btn" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;">SIGN IN</button>
+					<div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13px;">
+						<a href="#" id="wToRegister" style="color:#5b21b6;font-weight:600;">CREATE ACCOUNT</a>
+						<a href="#" id="wToForgot" style="color:#64748b;">FORGOT PASSWORD</a>
+					</div>
+					<div style="margin-top:12px;background:#f8fafc;border-radius:10px;padding:10px;font-size:12px;color:#64748b;">
+						Insert coins on your wallet instead of buying time each visit - then spend the balance on any package, on this device.
+					</div>
+				</div>
+
+				<!-- REGISTER -->
+				<div id="wViewRegister" style="display:none;">
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">FULL NAME</label>
+						<input type="text" id="wRegName" class="form-control" placeholder="Juan Dela Cruz">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">MOBILE NUMBER</label>
+						<input type="tel" id="wRegMobile" class="form-control" placeholder="09XXXXXXXXX">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">EMAIL (your account)</label>
+						<input type="email" id="wRegEmail" class="form-control" autocomplete="username" placeholder="you@example.com">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">PASSWORD</label>
+						<input type="password" id="wRegPass" class="form-control" autocomplete="new-password" placeholder="at least 6 characters">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">CONFIRM PASSWORD</label>
+						<input type="password" id="wRegPass2" class="form-control" autocomplete="new-password" placeholder="repeat password">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">4-DIGIT WALLET PIN (optional)</label>
+						<input type="password" inputmode="numeric" maxlength="4" id="wRegPin" class="form-control" placeholder="****">
+						<small class="form-text text-muted">Asks for this PIN whenever balance is spent.</small>
+					</div>
+					<button type="button" id="wRegisterBtn" class="btn portal-btn" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;">CREATE ACCOUNT</button>
+					<div style="text-align:center;margin-top:12px;font-size:13px;">
+						<a href="#" id="wToSignin" style="color:#64748b;font-weight:600;">BACK TO SIGN IN</a>
+					</div>
+				</div>
+
+				<!-- FORGOT -->
+				<div id="wViewForgot" style="display:none;">
+					<div style="background:#f8fafc;border-radius:10px;padding:10px;font-size:12px;color:#64748b;margin-bottom:12px;">
+						The restore code is sent to the CHAT of this device, and it only works on a device that already used this wallet. Otherwise please see an agent with a valid ID.
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">EMAIL</label>
+						<input type="email" id="wForgotEmail" class="form-control" placeholder="you@example.com">
+					</div>
+					<button type="button" id="wForgotBtn" class="btn portal-btn" style="background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;">SEND RESTORE CODE</button>
+					<div style="text-align:center;margin-top:12px;font-size:13px;">
+						<a href="#" id="wToSignin2" style="color:#64748b;font-weight:600;">BACK TO SIGN IN</a>
+					</div>
+				</div>
+
+				<!-- RESET -->
+				<div id="wViewReset" style="display:none;">
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">EMAIL</label>
+						<input type="email" id="wResetEmail" class="form-control">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">CODE FROM THE CHAT</label>
+						<input type="text" inputmode="numeric" maxlength="6" id="wResetCode" class="form-control" placeholder="6 digits">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">NEW PASSWORD</label>
+						<input type="password" id="wResetPass" class="form-control" autocomplete="new-password" placeholder="at least 6 characters">
+					</div>
+					<div class="form-group">
+						<label style="font-size:12px;font-weight:600;color:#475569;">CONFIRM NEW PASSWORD</label>
+						<input type="password" id="wResetPass2" class="form-control" autocomplete="new-password" placeholder="repeat password">
+					</div>
+					<button type="button" id="wResetBtn" class="btn portal-btn" style="background:linear-gradient(135deg,#10b981,#059669);color:#fff;">CHANGE PASSWORD</button>
+					<div style="text-align:center;margin-top:12px;font-size:13px;">
+						<a href="#" id="wToReset" style="color:#64748b;font-weight:600;">SEND A NEW CODE</a>
+					</div>
+				</div>
+
+				<!-- HOME (signed in) -->
+				<div id="wViewHome" style="display:none;">
+					<div style="background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:16px;padding:16px;color:#fff;margin-bottom:12px;">
+						<div style="font-size:12px;opacity:0.9;" id="wName">-</div>
+						<div style="font-size:11px;opacity:0.75;" id="wEmail">-</div>
+						<div style="font-size:12px;opacity:0.9;margin-top:10px;">Wallet Balance</div>
+						<div id="wBalance" style="font-size:30px;font-weight:bold;">&#8369;0.00</div>
+					</div>
+					<div id="wWarn" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px 10px;font-size:12px;color:#b91c1c;margin-bottom:10px;"></div>
+
+					<button type="button" id="wLoadBtn" class="btn portal-btn mb-3" style="background:linear-gradient(135deg,#f43f5e,#e11d48);color:#fff;">LOAD WALLET WITH COINS</button>
+
+					<div id="wPending" style="display:none;margin-bottom:10px;"></div>
+
+					<div style="font-size:12px;font-weight:700;color:#475569;letter-spacing:0.5px;margin-bottom:6px;">USE BALANCE FOR INTERNET TIME</div>
+					<div class="form-group" style="margin-bottom:8px;">
+						<input type="password" inputmode="numeric" maxlength="4" id="wBuyPin" class="form-control" placeholder="Wallet PIN (if set)" style="padding:10px 14px;font-size:14px;">
+					</div>
+					<div id="wPackages" style="max-height:230px;overflow-y:auto;margin-bottom:10px;"></div>
+
+					<button type="button" id="wHistoryBtn" class="btn portal-btn mb-3" style="background:#f1f5f9;color:#334155;">TRANSACTION HISTORY</button>
+					<div id="wHistoryPanel" style="display:none;background:#f8fafc;border-radius:12px;padding:10px;margin-bottom:10px;max-height:220px;overflow-y:auto;">
+						<div id="wHistoryList"></div>
+					</div>
+
+					<div style="border-top:1px solid #e2e8f0;padding-top:10px;">
+						<div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:6px;">WALLET PIN</div>
+						<div id="wPinHelp" style="font-size:11px;color:#94a3b8;margin-bottom:6px;"></div>
+						<div style="display:flex;gap:8px;">
+							<input type="password" id="wPinCurrent" class="form-control" placeholder="Password" style="padding:9px 12px;font-size:13px;">
+							<input type="password" inputmode="numeric" maxlength="4" id="wPinNew" class="form-control" placeholder="New PIN" style="padding:9px 12px;font-size:13px;">
+							<button type="button" id="wPinBtn" class="btn" style="background:#e2e8f0;color:#334155;font-weight:700;font-size:12px;border-radius:10px;padding:0 12px;">SAVE</button>
+						</div>
+					</div>
+
+					<div style="text-align:center;margin-top:12px;">
+						<a href="#" id="wSignoutBtn" style="color:#94a3b8;font-size:12px;font-weight:600;">SIGN OUT OF WALLET</a>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Wallet Coin Modal (coins counted by the machine, credited by the controller) -->
+		<div id="walletCoinModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:2100;justify-content:center;align-items:center;">
+			<div style="background:#fff;border-radius:20px;max-width:400px;width:90%;padding:22px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+				<h4 style="color:#5b21b6;font-weight:bold;margin-bottom:10px;">LOAD WALLET</h4>
+				<div class="form-group" style="text-align:left;">
+					<label style="font-size:12px;font-weight:600;color:#475569;">COIN MACHINE</label>
+					<select id="wcMachine" class="form-control" style="padding:9px 12px;font-size:14px;"></select>
+				</div>
+				<div id="wcHint" style="font-size:11px;color:#94a3b8;margin-bottom:10px;text-align:left;"></div>
+				<div style="background:#f5f3ff;border-radius:12px;padding:14px;margin-bottom:10px;">
+					<div style="font-size:12px;color:#6d28d9;">Coins Inserted</div>
+					<div id="wcTotal" style="font-size:32px;font-weight:bold;color:#5b21b6;">0</div>
+					<div id="wcValue" style="font-size:14px;color:#6d28d9;font-weight:600;">&#8369;0.00</div>
+				</div>
+				<div style="font-size:11px;color:#94a3b8;">Session code <span id="wcCode" style="font-weight:700;letter-spacing:1px;color:#6d28d9;">-</span></div>
+				<div id="wcRemain" style="font-size:12px;color:#b45309;font-weight:600;min-height:16px;margin-top:4px;"></div>
+				<div id="wcStatus" style="font-size:12px;min-height:32px;margin:8px 0;color:#475569;"></div>
+				<div style="display:flex;gap:10px;">
+					<button id="wcDoneBtn" disabled style="flex:1;padding:12px;border-radius:10px;border:none;background:#5b21b6;color:#fff;font-weight:bold;font-size:14px;cursor:pointer;">DONE PAYING</button>
+					<button id="wcCancelBtn" style="flex:1;padding:12px;border-radius:10px;border:2px solid #94a3b8;background:transparent;color:#64748b;font-weight:bold;font-size:14px;cursor:pointer;">CANCEL</button>
+				</div>
+			</div>
+		</div>
+
 		<style>
 		@keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
 		</style>
@@ -414,6 +583,7 @@ body#loginBody {
 	<script src="/assets/js/md5.js" defer></script>
 	<script src="/assets/js/session.js" defer></script>
 	<script src="/assets/js/portal.js" defer></script>
+	<script src="/assets/js/wallet.js" defer></script>
 	<script src="/assets/js/chat-widget.js" defer></script>
 </body>
 

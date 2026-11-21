@@ -327,28 +327,41 @@ export async function restoreSession(params: {
   }
 
   if (!paused && !liveSameMac && mikroTikService.isConnected(routerId)) {
+    // Fast roam: run the two independent router jobs CONCURRENTLY instead of
+    // sequentially. Kicking the old SSID's live session and re-arming the
+    // account for the next login used to cost 4-6 serial round trips; now the
+    // kick overlaps the counter reset + limit-uptime wave, so the portal gets
+    // its credentials back ~2 waves sooner and the device leaves the captive
+    // portal faster.
+    //
     // 1) free the shared-users slot - the old session may still be live on SSID-A
-    try {
-      await mikroTikService.kickActiveSession(routerId, { mac: oldMac, username: session.username });
-    } catch (err) {
-      console.error(`restoreSession kick failed for session ${session.id}:`, (err as Error).message);
-    }
+    const kickOld = (async () => {
+      try {
+        await mikroTikService.kickActiveSession(routerId, { mac: oldMac, username: session.username });
+      } catch (err) {
+        console.error(`restoreSession kick failed for session ${session.id}:`, (err as Error).message);
+      }
+    })();
 
     // 2) the next login must start with the remaining time. IMPORTANT:
     // `limit-uptime` is measured against the user's *accumulated* uptime, so
     // reset the counters first — otherwise the already-used time is subtracted
     // AGAIN from the new limit and the user loses time on every roam.
-    try {
-      await mikroTikService.resetHotspotUserCounters(routerId, session.username);
-      const applied = await mikroTikService.setUserUptimeLimit(
-        routerId,
-        session.username,
-        secondsToLimitUptime(remaining)
-      );
-      if (!applied) console.warn(`restoreSession: user ${session.username} not found on router ${routerId}`);
-    } catch (err) {
-      console.error(`restoreSession limit-uptime failed for session ${session.id}:`, (err as Error).message);
-    }
+    const rearmAccount = (async () => {
+      try {
+        await mikroTikService.resetHotspotUserCounters(routerId, session.username);
+        const applied = await mikroTikService.setUserUptimeLimit(
+          routerId,
+          session.username,
+          secondsToLimitUptime(remaining)
+        );
+        if (!applied) console.warn(`restoreSession: user ${session.username} not found on router ${routerId}`);
+      } catch (err) {
+        console.error(`restoreSession limit-uptime failed for session ${session.id}:`, (err as Error).message);
+      }
+    })();
+
+    await Promise.all([kickOld, rearmAccount]);
   }
 
   const db = getDb();

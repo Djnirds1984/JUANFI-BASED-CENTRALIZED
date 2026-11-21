@@ -934,6 +934,59 @@ test('same-MAC restore does not kick a live session; a real roam still does', as
   }
 });
 
+test('roam restore kicks the old session and re-arms the account in parallel', async () => {
+  const { restoreSession } = require('../src/services/deviceSessions');
+  const oldMac = 'aa:bb:cc:dd:ee:62';
+  const roamMac = 'aa:bb:cc:dd:ee:63';
+  const username = 'AABBCCDDEE62';
+  const token = '1'.repeat(48);
+  const expiry = new Date(Date.now() + 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const events = [];
+  const origKick = mt.kickActiveSession;
+  const origReset = mt.resetHotspotUserCounters;
+  const origSet = mt.setUserUptimeLimit;
+  try {
+    db.prepare(
+      "INSERT INTO hotspot_users (router_id, username, password, profile, disabled, expiry_at) VALUES (1, ?, '', 'default', 0, ?)"
+    ).run(username, expiry);
+    db.prepare(
+      `INSERT INTO device_sessions (session_token, mac_address, username, router_id, status,
+         total_seconds, remaining_seconds, is_online, first_seen, last_seen)
+       VALUES (?, ?, ?, 1, 'active', 3600, 1800, 0, datetime('now'), datetime('now'))`
+    ).run(token, oldMac, username);
+    connected = true;
+    live = [{ '.id': '*R1', mac: oldMac, user: username, 'session-time-left': '30m' }];
+
+    // A slow kick: if the kick and the re-arm ran sequentially the reset would
+    // only start after 'kick-end'. Running them concurrently is what makes the
+    // roam leave the captive portal faster (one wave instead of two).
+    mt.kickActiveSession = async () => {
+      events.push('kick-start');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      events.push('kick-end');
+      return true;
+    };
+    mt.resetHotspotUserCounters = async () => { events.push('reset'); return true; };
+    mt.setUserUptimeLimit = async (routerId, user, limit) => { events.push('set:' + limit); return true; };
+
+    const res = await restoreSession({ token, mac: roamMac, routerId: 1 });
+    assert.equal(res.restore, true);
+    assert.equal(res.rebind, true);
+    assert.equal(res.remaining, 1800);
+    assert.ok(events.includes('set:00:30:00'), events.join(','));
+    assert.ok(events.indexOf('reset') < events.indexOf('kick-end'),
+      `reset must overlap the kick, got: ${events.join(',')}`);
+    assert.ok(events.indexOf('reset') < events.indexOf('set:00:30:00'),
+      `counters must reset before the new limit, got: ${events.join(',')}`);
+  } finally {
+    mt.kickActiveSession = origKick;
+    mt.resetHotspotUserCounters = origReset;
+    mt.setUserUptimeLimit = origSet;
+    db.prepare('DELETE FROM device_sessions WHERE session_token = ?').run(token);
+    db.prepare('DELETE FROM hotspot_users WHERE router_id = 1 AND username = ?').run(username);
+  }
+});
+
 test('check-session resolves colon-form MAC accounts and the RADIUS MAC alias', async () => {
   const express = require('express');
   const app = express();

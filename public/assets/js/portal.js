@@ -55,6 +55,14 @@ document.addEventListener('DOMContentLoaded', function() {
 	loadPaymentConfig();
 	checkSessionState();
 
+	// Fast roam: we already hold a token from a previous SSID, so start the
+	// restore NOW in parallel with the check-session call instead of waiting a
+	// full router round trip for its "not online" answer. The device then
+	// leaves the captive portal roughly one request earlier.
+	if (juanFiSessionAvailable() && window.JuanFiSession.getToken()) {
+		tryRoamingRestore(null, true);
+	}
+
 	// Returned from PayMongo (GCash).
 	var pay = params.get('pay');
 	if (pay === 'success') {
@@ -230,8 +238,12 @@ function syncSessionTime() {
 				} else {
 					updateCountdownDisplay();
 				}
-			} else if (isConnected || isPaused) {
-				showDisconnectedState();
+			} else {
+				if (isConnected || isPaused) showDisconnectedState();
+				// Roamed off this SSID, or the live session died: kick a restore right
+				// away so the device does not sit in the captive portal until the user
+				// taps something. Restores are throttled, so this is safe at 5s polls.
+				tryRoamingRestore(data);
 			}
 		})
 		.catch(function() {});
@@ -289,12 +301,12 @@ function checkSessionState() {
 				}
 			} else {
 				showDisconnectedState();
-				tryRoamingRestore();
+				tryRoamingRestore(data);
 			}
 		})
 		.catch(function(e) {
 			showDisconnectedState();
-			tryRoamingRestore();
+			tryRoamingRestore(null);
 		});
 }
 
@@ -326,10 +338,39 @@ function bindRoamingToken(username, remainingSecs) {
 // Roam: this browser already owns a token (possibly from another SSID with a
 // different MAC). If the panel restores it, re-login with the ORIGINAL username
 // so the account + remaining time follow the device.
-function tryRoamingRestore() {
-	if (!mac || !juanFiSessionAvailable()) return;
-	window.JuanFiSession.ensureToken(mac, ip, '').then(function(token) {
-		if (!token) return null;
+//
+// "Almost perfect" is not enough for a captive portal: a single lost/failed
+// attempt used to park the device in the captive portal until the user tapped
+// something. The restore is therefore throttled (never a request storm), it
+// retries transient failures, it rescues a lost token by logging in directly
+// with the identity from check-session, and it self-heals when the re-login did
+// not stick.
+var restoreInFlight = false;
+var lastRestoreAt = 0;
+var lastRescueAt = 0;
+
+function tryRoamingRestore(sessionData, force) {
+	if (!mac) return;
+	if (restoreInFlight) return;
+	var now = Date.now();
+	if (!force && now - lastRestoreAt < 8000) return;
+	lastRestoreAt = now;
+	restoreInFlight = true;
+	roamingRestoreAttempt(sessionData, 2).then(function() { restoreInFlight = false; });
+}
+
+function roamingRestoreAttempt(sessionData, attemptsLeft) {
+	if (!juanFiSessionAvailable() || !window.JuanFiSession.getToken()) {
+		// No token (cleared storage, different browser): fall back to a direct
+		// login with the account identity the panel knows for this MAC.
+		directRescueLogin(sessionData);
+		return Promise.resolve();
+	}
+	return window.JuanFiSession.ensureToken(mac, ip, '').then(function(token) {
+		if (!token) {
+			directRescueLogin(sessionData);
+			return;
+		}
 		return window.JuanFiSession.restore(mac, ip, '').then(function(res) {
 			// Paused on another SSID: stay paused here too — show the frozen
 			// balance with RESUME instead of re-logging in (RADIUS would reject
@@ -337,7 +378,7 @@ function tryRoamingRestore() {
 			if (res && res.reason === 'paused' && res.remaining > 0) {
 				tokenBound = true;
 				showPausedState(res.remaining);
-				return true;
+				return;
 			}
 			// Same MAC already live on the router: do NOT re-login (it would
 			// race the working session). Show the balance; live sync keeps it
@@ -346,22 +387,62 @@ function tryRoamingRestore() {
 				tokenBound = true;
 				showConnectedState(res.remaining);
 				setTimeout(function() { syncSessionTime(); }, 3000);
-				return true;
+				return;
 			}
-			if (!res || res.restore !== true || !res.username) return null;
-			tokenBound = true;
-			doLogin(res.username);
-			// Show the restored time right away (the login submits into a hidden
-			// iframe, so nothing else would switch the panel to connected), then
-			// let the live sync confirm/adjust it once the router session is up.
-			if (res.remaining > 0 && chapId && chapChallenge && linkLoginOnly) {
-				showConnectedState(res.remaining);
+			if (res && res.restore === true && res.username) {
+				tokenBound = true;
+				doLogin(res.username);
+				// Show the restored time right away (the login submits into a hidden
+				// iframe, so nothing else would switch the panel to connected), then
+				// let the live sync confirm/adjust it once the router session is up.
+				if (res.remaining > 0 && chapId && chapChallenge && linkLoginOnly) {
+					showConnectedState(res.remaining);
+				}
+				setTimeout(function() { syncSessionTime(); }, 3000);
+				setTimeout(function() { syncSessionTime(); }, 8000);
+				// Self-heal: the CHAP login is fire-and-forget into the iframe. If the
+				// device is still not online 5s later (shared-users race, router busy)
+				// try the whole restore once more instead of sitting in captive.
+				setTimeout(function() {
+					fetch('/api/portal/check-session?mac=' + encodeURIComponent(mac) + '&routerId=' + encodeURIComponent(routerId))
+						.then(function(r) { return r.json(); })
+						.then(function(data) {
+							if (!sessionIsOnline(data) && attemptsLeft > 0) tryRoamingRestore(data, true);
+						})
+						.catch(function() {});
+				}, 5000);
+				return;
 			}
-			setTimeout(function() { syncSessionTime(); }, 3000);
-			setTimeout(function() { syncSessionTime(); }, 8000);
-			return true;
+			if (res && (res.reason === 'never-logged-in' || res.reason === 'unknown-token')) {
+				// Token lost server-side: log in directly as the known account.
+				directRescueLogin(sessionData);
+				return;
+			}
+			// Transient failure (router unreachable, timeout): retry shortly.
+			if (!res && attemptsLeft > 0) {
+				setTimeout(function() { tryRoamingRestore(sessionData, true); }, 1500);
+			}
 		});
-	}).catch(function() {});
+	}).catch(function() {
+		if (attemptsLeft > 0) setTimeout(function() { tryRoamingRestore(sessionData, true); }, 1500);
+	});
+}
+
+// Last resort: check-session already told us this MAC owns a paid account that
+// is simply offline (roamed / kicked). Submit the CHAP login with that identity
+// directly — RADIUS accepts it through the device_macs alias — without waiting
+// for a token round trip.
+function directRescueLogin(sessionData) {
+	if (!sessionData || !sessionData.hasSession || sessionData.paused || sessionData.online) return false;
+	if (!(sessionData.remainingSeconds > 0) || !sessionData.username) return false;
+	if (!chapId || !chapChallenge || !linkLoginOnly) return false;
+	if (Date.now() - lastRescueAt < 20000) return false;
+	lastRescueAt = Date.now();
+	doLogin(sessionData.username);
+	showConnectedState(sessionData.remainingSeconds);
+	setTimeout(function() { syncSessionTime(); }, 3000);
+	setTimeout(function() { syncSessionTime(); }, 8000);
+	return true;
 }
 
 // ---- Vendo Config ----

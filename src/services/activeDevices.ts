@@ -505,11 +505,19 @@ export async function addActiveDeviceTime(routerId: number, deviceId: number, mi
     const warnings: string[] = [];
     try {
       const client = db.prepare('SELECT id FROM radius_clients WHERE router_id = ? AND is_active = 1').get(routerId);
+      const nasIp = String(router.host || '').split(':')[0];
       if (isRadiusRunning() && client && mikroTikService.isConnected(routerId)) {
         for (const conn of live) {
           if (!mac || deviceMacKey(conn.mac) !== mac) continue;
-          sendCoASessionTimeout(routerId, '', router.host, result.remainingSeconds, conn.user || user.username, cleanIp(conn.address));
-          coa = 'requested';
+          // MikroTik matches a CoA by the client IP and keeps counting from the
+          // session's current uptime, so both travel with the request.
+          const sent = sendCoASessionTimeout(routerId, nasIp, {
+            remainingSeconds: result.remainingSeconds,
+            framedIp: cleanIp(conn.address),
+            username: conn.user || user.username,
+            uptimeSeconds: Math.max(0, Math.floor(mikrotikTimeToSeconds((conn as any).uptime) || 0)),
+          });
+          if (sent) coa = 'requested';
         }
       }
     } catch {

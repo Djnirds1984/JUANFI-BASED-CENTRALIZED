@@ -546,3 +546,53 @@ test('a daily conversion limit caps what one customer can spend in a day', async
 
   await call('/api/wallet/admin/settings', { method: 'PUT', token: ADMIN_TOKEN, body: { daily_convert: 0 } });
 });
+
+test('a purchase while the device is online extends that live session', async () => {
+  // The customer's complaint this guards: the money left the wallet but the
+  // countdown never moved. In RADIUS mode the only way to hand time to a device
+  // that stays connected is a CoA-Request, and RouterOS matches it BY THE
+  // CLIENT IP alone (anything keyed on Acct-Session-Id / User-Name is NAKed).
+  // The new Session-Timeout also replaces the session's TOTAL, so the minutes
+  // already used must be added back or the customer pays for them twice.
+  await call('/api/wallet/admin/settings', {
+    method: 'PUT', token: ADMIN_TOKEN, body: { enabled: true, daily_convert: 0, min_convert: 1 },
+  });
+  db.prepare("UPDATE routers SET auth_mode = 'radius' WHERE id = ?").run(ROUTER_ID);
+
+  const radiusServer = require('../src/services/radiusServer');
+  const realCoA = radiusServer.sendCoASessionTimeout;
+  const coa = [];
+  radiusServer.sendCoASessionTimeout = (_routerId, nasIp, params) => { coa.push({ nasIp, params }); return true; };
+  routerConnected = true;
+  mt.getActiveConnections = async () => ([{
+    mac: 'AA:BB:CC:DD:EE:01', user: 'AABBCCDDEE01', address: '10.0.0.77/24',
+    uptime: '10m0s', 'session-time-left': '00:05:00',
+  }]);
+
+  try {
+    const { account, token } = await makeAccount('online@example.com');
+    const funded = await call(`/api/wallet/admin/accounts/${account.id}/adjust`, {
+      method: 'POST', token: ADMIN_TOKEN, body: { action: 'credit', amount: 20, reason: 'test float' },
+    });
+    assert.equal(funded.status, 200);
+
+    const buy = await call('/api/wallet/convert', {
+      method: 'POST', token, body: { rateId: RATE_ID, mac: MAC_A, routerId: ROUTER_ID },
+    });
+    assert.equal(buy.status, 200, JSON.stringify(buy.body));
+    assert.equal(coa.length, 1, 'the live session is told about the time it just paid for');
+    assert.equal(coa[0].nasIp, '10.9.9.1');
+    assert.equal(coa[0].params.framedIp, '10.0.0.77', 'addressed by the client IP, not by session id');
+    assert.equal(coa[0].params.username, 'AABBCCDDEE01');
+    assert.equal(coa[0].params.uptimeSeconds, 600, 'the ten minutes already used are added back');
+    assert.ok(coa[0].params.remainingSeconds >= 3590, 'the device keeps the whole hour it bought');
+
+    assert.equal(accountBalance(account.id), 1000, 'and exactly one package was debited');
+  } finally {
+    radiusServer.sendCoASessionTimeout = realCoA;
+    delete mt.getActiveConnections;
+    routerConnected = false;
+    db.prepare("UPDATE routers SET auth_mode = 'api' WHERE id = ?").run(ROUTER_ID);
+    await call('/api/wallet/admin/settings', { method: 'PUT', token: ADMIN_TOKEN, body: { min_convert: 10 } });
+  }
+});

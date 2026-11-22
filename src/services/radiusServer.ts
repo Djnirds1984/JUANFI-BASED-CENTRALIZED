@@ -38,6 +38,7 @@ const RADIUS_ATTR = {
   ACCT_OUTPUT_PACKETS: 47,
   ACCT_SESSION_TIME: 48,
   ACCT_TERMINATE_CAUSE: 49,
+  ERROR_CAUSE: 101,
   CALLING_STATION_ID: 31,
   NAS_PORT_TYPE: 61,
   NAS_IDENTIFIER: 87,
@@ -205,6 +206,7 @@ function decodeAttributes(buf: Buffer, offset: number): RadiusAttribute[] {
         type === RADIUS_ATTR.NAS_PORT ||
         type === RADIUS_ATTR.SERVICE_TYPE ||
         type === RADIUS_ATTR.NAS_PORT_TYPE ||
+        type === RADIUS_ATTR.ERROR_CAUSE ||
         type === RADIUS_ATTR.ACCT_AUTHENTIC ||
         type === RADIUS_ATTR.ACCT_DELAY_TIME ||
         type === RADIUS_ATTR.ACCT_SESSION_TIME ||
@@ -699,6 +701,10 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
   const outputPackets = getAttr(packet.attributes, RADIUS_ATTR.ACCT_OUTPUT_PACKETS);
   const sessionTime = getAttr(packet.attributes, RADIUS_ATTR.ACCT_SESSION_TIME);
   const nasIp = getAttr(packet.attributes, RADIUS_ATTR.NAS_IP_ADDRESS);
+  // The client's IP as the NAS sees it. RouterOS identifies a live session in a
+  // CoA/Disconnect by this address, so it is the one thing the panel cannot
+  // guess on its own when the API is not connected.
+  const framedIpAttr = getAttr(packet.attributes, RADIUS_ATTR.FRAMED_IP_ADDRESS);
 
   const status = typeof statusType?.value === 'number' ? statusType.value : 0;
   const session = typeof sessionId?.value === 'string' ? sessionId.value : '';
@@ -709,6 +715,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
   const pktsOut = typeof outputPackets?.value === 'number' ? outputPackets.value : 0;
   const sessTime = typeof sessionTime?.value === 'number' ? sessionTime.value : 0;
   const nasIpStr = typeof nasIp?.value === 'string' ? nasIp.value : rinfo.address;
+  const clientIp = typeof framedIpAttr?.value === 'string' ? framedIpAttr.value : '';
 
   const acctCallingAttr = getAttr(packet.attributes, RADIUS_ATTR.CALLING_STATION_ID);
   const acctMac = normalizeMacAttr(typeof acctCallingAttr?.value === 'string' ? acctCallingAttr.value : '');
@@ -778,7 +785,7 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
       // the portal countdown stay in sync without any disconnect.
       try {
         const paid = findHotspotUser(client.router_id, user, 'expiry_at');
-        if (paid?.expiry_at) {
+        if (paid?.expiry_at && clientIp) {
           const remainingPaid = Math.floor((new Date(String(paid.expiry_at).replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000);
           // Safety net for routers where the coin-auth CoA was missed:
           // re-sync only when the delta is significant and not sent recently.
@@ -786,9 +793,14 @@ async function handleAccountingRequest(packet: RadiusPacket, rinfo: dgram.Remote
           const nowMs = Date.now();
           if (remainingPaid - sessTime > 120 &&
               (Math.abs(remainingPaid - lastSent.value) > 60 || nowMs - lastSent.at > 300000)) {
-            sendCoASessionTimeout(client.router_id, session, nasIpStr, remainingPaid);
+            // The session already ran `sessTime` seconds, and the CoA replaces
+            // the total limit, so the used part is added back by the sender.
+            sendCoASessionTimeout(client.router_id, nasIpStr, {
+              remainingSeconds: remainingPaid, framedIp: clientIp, username: user,
+              uptimeSeconds: sessTime, sessionId: session,
+            });
             lastCoASent.set(`${client.router_id}:${session}`, { value: remainingPaid, at: nowMs });
-            logRadiusEvent('accounting', `Top-up CoA: Session-Timeout=${remainingPaid}s session=${session}`, client.router_id, user, rinfo.address);
+            logRadiusEvent('accounting', `Top-up CoA: Session-Timeout=${remainingPaid + sessTime}s session=${session}`, client.router_id, user, rinfo.address);
           }
         }
       } catch (coaErr) {
@@ -886,15 +898,56 @@ export function sendDisconnectRequest(routerId: number, sessionId: string, nasIp
   }
 }
 
+/** RFC 5176 Error-Cause values worth translating for the RADIUS log. */
+function describeErrorCause(cause?: number): string {
+  switch (cause) {
+    case undefined: return 'no Error-Cause reported';
+    case 201: return 'invalid request';
+    case 400: return 'request denied';
+    case 403: return 'invalid attribute';
+    case 404: return 'nas not found';
+    case 406: return 'no live session matched (RouterOS matches a CoA by Framed-IP-Address)';
+    case 500: return 'administratively prohibited';
+    default: return `Error-Cause ${cause}`;
+  }
+}
+
 /**
- * CoA-Request (RFC 3579) that changes Session-Timeout on a LIVE session
- * without disconnecting it. MikroTik applies the new timeout to the
- * /ip/hotspot/active entry, so the router's time-left and the panel's
- * expiry_at stay in sync after a coin top-up. Best-effort: failures are
- * logged and never affect the payment flow.
+ * CoA-Request (RFC 5176) that changes Session-Timeout on a LIVE session without
+ * disconnecting it, so a paid top-up shows up on the customer's countdown
+ * instead of only at the next login.
+ *
+ * MEASURED ON ROUTEROS (dev HEX, /radius service=hotspot): MikroTik matches a
+ * CoA against a live hotspot session BY FRAMED-IP-ADDRESS ONLY. A request that
+ * identifies the session by Acct-Session-Id, User-Name or Calling-Station-Id is
+ * answered `CoA-NAK, Error-Cause 406`, so the client IP is required here and is
+ * never optional. `sessionId` survives only as a log label.
+ *
+ * The new Session-Timeout REPLACES the session's total limit while MikroTik
+ * keeps counting from the uptime the session already has, so the value sent is
+ * `remainingSeconds + uptimeSeconds`. Without that, every hit-less top-up
+ * silently costs the customer the minutes they already used in this session.
+ *
+ * Best-effort by design: a NAK is logged with its Error-Cause and never fails a
+ * payment - the panel's expiry_at stays authoritative for the next login.
+ * Returns false when nothing was sent (no client config, no usable client IP).
  */
-export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp: string, timeoutSeconds: number, username?: string, framedIp?: string): void {
+export interface CoAParams {
+  remainingSeconds: number;
+  framedIp: string;
+  username?: string;
+  uptimeSeconds?: number;
+  sessionId?: string;
+}
+
+export function sendCoASessionTimeout(routerId: number, nasIp: string, params: CoAParams): boolean {
   try {
+    const framedIp = String(params.framedIp || '').split('/')[0].split(':')[0];
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(framedIp)) {
+      console.log(`[RADIUS] CoA skipped for router ${routerId}: no client IP to match the live session (RouterOS only accepts a CoA identified by Framed-IP-Address)`);
+      return false;
+    }
+
     const db = getDb();
     const radiusClient = db.prepare(
       `SELECT rc.shared_secret FROM radius_clients rc
@@ -904,22 +957,26 @@ export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp
 
     if (!radiusClient) {
       console.error(`[RADIUS] No active client config for router ${routerId} — cannot send CoA`);
-      return;
+      return false;
     }
 
     const identifier = Math.floor(Math.random() * 256);
-    // Identify the session by Acct-Session-Id when we have it; otherwise fall
-    // back to User-Name so the CoA can still match a live session when RADIUS
-    // accounting is not delivering session ids.
+    const ipBuf = ipToBuffer(framedIp);
+    if (!ipBuf) {
+      console.log(`[RADIUS] CoA skipped for router ${routerId}: client IP ${framedIp} could not be encoded`);
+      return false;
+    }
+    const uptimeSec = Math.max(0, Math.floor(Number(params.uptimeSeconds) || 0));
+    const remainingSec = Math.max(1, Math.floor(Number(params.remainingSeconds) || 0));
+    const sessionTimeout = remainingSec + uptimeSec;
+
     const attrs: RadiusAttribute[] = [];
-    if (sessionId) attrs.push({ type: RADIUS_ATTR.ACCT_SESSION_ID, value: sessionId });
-    if (username) attrs.push({ type: RADIUS_ATTR.USER_NAME, value: username });
-    const ipBuf = framedIp ? ipToBuffer(framedIp) : null;
-    if (ipBuf) attrs.push({ type: RADIUS_ATTR.FRAMED_IP_ADDRESS, value: ipBuf });
-    attrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: Math.max(1, Math.floor(timeoutSeconds)) });
+    if (params.username) attrs.push({ type: RADIUS_ATTR.USER_NAME, value: params.username });
+    attrs.push({ type: RADIUS_ATTR.FRAMED_IP_ADDRESS, value: ipBuf });
+    attrs.push({ type: RADIUS_ATTR.SESSION_TIMEOUT, value: sessionTimeout });
 
     // CoA-Request Request-Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)
-    // (RFC 3579 §3.1) — buildResponsePacket does exactly this when seeded
+    // (RFC 5176 §3.1) — buildResponsePacket does exactly this when seeded
     // with an all-zero authenticator.
     const zeroAuth = Buffer.alloc(16);
     const packet = buildResponsePacket(
@@ -931,15 +988,21 @@ export function sendCoASessionTimeout(routerId: number, sessionId: string, nasIp
     );
 
     const port = config.radiusCoaPort; // CoA/Disconnect port (3799), NOT the auth port
+    const label = params.sessionId ? ` session=${params.sessionId}` : '';
     acctSocket?.send(packet, 0, packet.length, port, nasIp, (err) => {
       if (err) {
         console.error(`[RADIUS] CoA-Request send error: ${err.message}`);
       } else {
-        console.log(`[RADIUS] CoA-Request sent to ${nasIp}:${port} session=${sessionId} Session-Timeout=${timeoutSeconds}s`);
+        console.log(
+          `[RADIUS] CoA-Request sent to ${nasIp}:${port} ip=${framedIp} user=${params.username || '-'}${label} ` +
+          `Session-Timeout=${sessionTimeout}s (remaining ${remainingSec}s + used ${uptimeSec}s)`
+        );
       }
     });
+    return true;
   } catch (err) {
     console.error('[RADIUS] CoA error:', err);
+    return false;
   }
 }
 
@@ -981,8 +1044,14 @@ function onAcctMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
       const label = packet.code === RADIUS_CODES.COA_ACK ? 'CoA-ACK'
         : packet.code === RADIUS_CODES.COA_NAK ? 'CoA-NAK'
         : packet.code === RADIUS_CODES.DISCONNECT_ACK ? 'Disconnect-ACK' : 'Disconnect-NAK';
-      console.log(`[RADIUS] ${label} from ${rinfo.address}`);
-      logRadiusEvent('accounting', `${label} from ${rinfo.address}`, undefined, '', rinfo.address);
+      // Error-Cause (101) tells the operator WHY the NAS refused the update,
+      // which is the only feedback a fire-and-forget CoA ever gives.
+      const cause = getAttr(packet.attributes, RADIUS_ATTR.ERROR_CAUSE);
+      const causeText = label.endsWith('NAK')
+        ? `: ${describeErrorCause(typeof cause?.value === 'number' ? cause.value : undefined)}`
+        : '';
+      console.log(`[RADIUS] ${label} from ${rinfo.address}${causeText}`);
+      logRadiusEvent('accounting', `${label} from ${rinfo.address}${causeText}`, undefined, '', rinfo.address);
     } else {
       console.warn(`[RADIUS] Unexpected code ${packet.code} on acct port from ${rinfo.address}`);
     }

@@ -195,6 +195,12 @@ export async function propagateTimeToRouter(params: PropagateParams): Promise<vo
   // router's time-left reflect the new total WITHOUT dropping the device,
   // send a RADIUS CoA-Request (Session-Timeout) for the live session —
   // MikroTik updates the active session in place, no re-auth needed.
+  //
+  // RouterOS matches that CoA BY THE CLIENT IP ONLY (an Acct-Session-Id or
+  // User-Name keyed request gets CoA-NAK / Error-Cause 406), and the panel does
+  // not store the device's address, so the live session is read from the router
+  // first. No live session means there is nothing to extend - the stacked
+  // expiry_at is handed out by the next Access-Accept.
   if (isExtend || hadRemaining) {
     try {
       const { sendCoASessionTimeout } = await import('./radiusServer');
@@ -203,56 +209,42 @@ export async function propagateTimeToRouter(params: PropagateParams): Promise<vo
         Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
       );
 
-      // Case-insensitive match: the router may report the user in a different
-      // case than the panel identity. Ignore synthetic 'coin_' ids - MikroTik
-      // only accepts a REAL RADIUS Acct-Session-Id.
-      const sess = db.prepare(
-        `SELECT session_id, nas_ip, username FROM radius_sessions
-         WHERE router_id = ? AND LOWER(username) = LOWER(?) AND status = 'active'
-         ORDER BY updated_at DESC LIMIT 1`
-      ).get(routerId, accountUsername) as any;
-      const realSessionId = sess?.session_id && !String(sess.session_id).startsWith('coin_')
-        ? String(sess.session_id) : '';
-
-      if (realSessionId && sess?.nas_ip) {
-        console.log(`${logTag}: CoA extend ${macNoColon} -> Session-Timeout=${remainingSec}s on router ${routerId} (session ${realSessionId})`);
-        sendCoASessionTimeout(routerId, realSessionId, sess.nas_ip, remainingSec, String(sess.username || macNoColon));
-      } else {
-        // No real accounting session id. Look up the LIVE active session so we
-        // can CoA by the router's actual username + the device IP
-        // (Framed-IP-Address) - MikroTik can match a session by those even
-        // without Acct-Session-Id.
-        const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
-        const nasIp = String(routerRow?.host || '').split(':')[0];
-        let coaUser = accountUsername;
-        let coaIp = '';
+      const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
+      const nasIp = String(routerRow?.host || '').split(':')[0];
+      const macKey = macNoColon.toLowerCase();
+      let live: any = null;
+      if (nasIp && mikroTikService.isConnected(routerId)) {
         try {
-          if (mikroTikService.isConnected(routerId)) {
-            const live = await mikroTikService.getActiveConnections(routerId);
-            const macKey = macNoColon.toLowerCase();
-            const conn = (Array.isArray(live) ? live : []).find((c: any) =>
-              String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '') === macKey
-            );
-            if (conn) {
-              coaUser = String(conn.user || coaUser);
-              coaIp = String(conn.address || '').split('/')[0].split(':')[0];
-              console.log(`${logTag}: live active entry for ${macNoColon}: user="${coaUser}" ip=${coaIp} timeLeft=${conn['session-time-left']}`);
-            } else {
-              const macs = (Array.isArray(live) ? live : [])
-                .map((c: any) => String(c.mac || c['mac-address'] || c.user || '').toLowerCase())
-                .filter(Boolean);
-              console.log(`${logTag}: ${macNoColon} not in the router's live active list (live=${macs.join(',') || 'none'})`);
-            }
-          }
+          const conns = await mikroTikService.getActiveConnections(routerId);
+          live = (Array.isArray(conns) ? conns : []).find((c: any) =>
+            String(c.mac || c['mac-address'] || '').toLowerCase().replace(/[^0-9a-f]/g, '') === macKey ||
+            String(c.user || '').toUpperCase() === String(accountUsername).toUpperCase()) || null;
         } catch (liveErr: any) {
-          console.log(`${logTag}: live lookup failed: ${liveErr.message}`);
+          console.log(`${logTag}: live session lookup on router ${routerId} failed: ${liveErr.message}`);
         }
-        const recent = db.prepare(
-          `SELECT username, session_id, status, updated_at FROM radius_sessions
-           WHERE router_id = ? ORDER BY updated_at DESC LIMIT 3`
-        ).all(routerId) as any[];
-        console.log(`${logTag}: no real RADIUS session for ${macNoColon} - User-Name/Framed-IP CoA user="${coaUser}" ip=${coaIp || '-'} to ${nasIp || 'unknown'}; recent=${JSON.stringify(recent)}`);
-        if (nasIp) sendCoASessionTimeout(routerId, '', nasIp, remainingSec, coaUser, coaIp || undefined);
+      }
+
+      if (!live) {
+        console.log(
+          `${logTag}: ${macNoColon} is not in router ${routerId}'s live session list - ` +
+          `${remainingSec}s saved on the account for its next login`
+        );
+      } else {
+        const usedSec = mikrotikUptimeToSeconds(live.uptime);
+        const framedIp = String(live.address || '').split('/')[0].split(':')[0];
+        // The router keeps counting from the session's existing uptime, so the
+        // used part is added back inside the sender: the device must be left
+        // with `remainingSec`, not `remainingSec - usedSec`.
+        const sent = sendCoASessionTimeout(routerId, nasIp, {
+          remainingSeconds: remainingSec,
+          framedIp,
+          username: String(live.user || accountUsername),
+          uptimeSeconds: usedSec,
+        });
+        console.log(
+          `${logTag}: CoA extend ${macNoColon} on router ${routerId} -> ip=${framedIp || '-'} ` +
+          `user="${live.user || accountUsername}" paid remaining ${remainingSec}s (session used ${usedSec}s) ${sent ? 'requested' : 'NOT SENT'}`
+        );
       }
     } catch (coaErr: any) {
       console.error(`${logTag}: CoA extend failed for ${macNoColon} on router ${routerId}:`, coaErr.message);

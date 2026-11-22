@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { sendDisconnectRequest, sendCoASessionTimeout } from '../services/radiusServer';
 import { mikroTikService } from '../services/mikrotik';
+import { mikrotikTimeToSeconds } from '../services/deviceSessions';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
@@ -122,27 +123,24 @@ router.post('/router/:routerId/:sessionId/extend', async (req: Request, res: Res
     // Apply to the live session with a CoA (no disconnect).
     let coa = 'none';
     try {
-      const realId = session.session_id && !String(session.session_id).startsWith('coin_')
-        ? String(session.session_id) : '';
       const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
       const nasIp = String(routerRow?.host || '').split(':')[0];
+      const live = await findLiveSession(routerId, username, macMatch);
+      const realId = session.session_id && !String(session.session_id).startsWith('coin_')
+        ? String(session.session_id) : '';
 
-      let framedIp = '';
-      if (mikroTikService.isConnected(routerId)) {
-        const live = await mikroTikService.getActiveConnections(routerId);
-        const conn = (Array.isArray(live) ? live : []).find((c: any) =>
-          String(c.user || '').toLowerCase() === username.toLowerCase() ||
-          (macMatch && String(c.mac || c['mac-address'] || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macMatch)
-        );
-        if (conn) framedIp = String(conn.address || '').split('/')[0].split(':')[0];
-      }
-
-      if (realId && session.nas_ip) {
-        sendCoASessionTimeout(routerId, realId, session.nas_ip, remainingSeconds, username, framedIp || undefined);
-        coa = 'session-id';
-      } else if (nasIp) {
-        sendCoASessionTimeout(routerId, '', nasIp, remainingSeconds, username, framedIp || undefined);
-        coa = 'user-name';
+      if (nasIp && live?.ip) {
+        coa = sendCoASessionTimeout(routerId, nasIp, {
+          remainingSeconds,
+          framedIp: live.ip,
+          username: live.user || username,
+          uptimeSeconds: live.uptimeSeconds,
+          sessionId: realId || undefined,
+        }) ? 'requested' : 'not-sent';
+      } else {
+        // The device has no live session we can address, so the stacked time
+        // simply waits for its next login.
+        coa = 'no-live-session';
       }
     } catch (coaErr: any) {
       console.error('extend session CoA error:', coaErr.message);
@@ -159,6 +157,32 @@ router.post('/router/:routerId/:sessionId/extend', async (req: Request, res: Res
     res.status(500).json({ error: error.message });
   }
 });
+
+/**
+ * The live hotspot session for this user/MAC, as RouterOS needs it for a CoA:
+ * the client IP (the only thing MikroTik matches a CoA against) plus how long
+ * the session already ran, because the new Session-Timeout replaces the total.
+ */
+async function findLiveSession(routerId: number, username: string, macMatch: string):
+  Promise<{ ip: string; user: string; uptimeSeconds: number } | null> {
+  if (!mikroTikService.isConnected(routerId)) return null;
+  try {
+    const live = await mikroTikService.getActiveConnections(routerId);
+    const conn = (Array.isArray(live) ? live : []).find((c: any) =>
+      String(c.user || '').toLowerCase() === String(username || '').toLowerCase() ||
+      (macMatch && String(c.mac || c['mac-address'] || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macMatch)
+    ) as any;
+    if (!conn) return null;
+    return {
+      ip: String(conn.address || '').split('/')[0].split(':')[0],
+      user: String(conn.user || username || ''),
+      uptimeSeconds: Math.max(0, Math.floor(mikrotikTimeToSeconds(conn.uptime) || 0)),
+    };
+  } catch (err: any) {
+    console.error('live session lookup failed:', err.message);
+    return null;
+  }
+}
 
 // Add `minutes` of time to the account behind a username (stack + CoA). Shared
 // by the admin "add time" and "add voucher" actions.
@@ -193,27 +217,22 @@ async function addTimeToUser(routerId: number, username: string, minutes: number
 
   let coa = 'none';
   try {
-    const realId = session?.session_id && !String(session.session_id).startsWith('coin_')
-      ? String(session.session_id) : '';
     const routerRow = db.prepare('SELECT host FROM routers WHERE id = ?').get(routerId) as any;
     const nasIp = String(routerRow?.host || '').split(':')[0];
+    const realId = session?.session_id && !String(session.session_id).startsWith('coin_')
+      ? String(session.session_id) : '';
+    const live = await findLiveSession(routerId, username, macMatch);
 
-    let framedIp = '';
-    if (mikroTikService.isConnected(routerId)) {
-      const live = await mikroTikService.getActiveConnections(routerId);
-      const conn = (Array.isArray(live) ? live : []).find((c: any) =>
-        String(c.user || '').toLowerCase() === String(username).toLowerCase() ||
-        (macMatch && String(c.mac || c['mac-address'] || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase() === macMatch)
-      );
-      if (conn) framedIp = String(conn.address || '').split('/')[0].split(':')[0];
-    }
-
-    if (realId && session?.nas_ip) {
-      sendCoASessionTimeout(routerId, realId, session.nas_ip, remainingSeconds, username, framedIp || undefined);
-      coa = 'session-id';
-    } else if (nasIp) {
-      sendCoASessionTimeout(routerId, '', nasIp, remainingSeconds, username, framedIp || undefined);
-      coa = 'user-name';
+    if (nasIp && live?.ip) {
+      coa = sendCoASessionTimeout(routerId, nasIp, {
+        remainingSeconds,
+        framedIp: live.ip,
+        username: live.user || username,
+        uptimeSeconds: live.uptimeSeconds,
+        sessionId: realId || undefined,
+      }) ? 'requested' : 'not-sent';
+    } else {
+      coa = 'no-live-session';
     }
   } catch (coaErr: any) {
     console.error('addTimeToUser CoA error:', coaErr.message);

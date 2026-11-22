@@ -77,6 +77,44 @@ export interface PppSecret {
   disabled?: string;
 }
 
+/**
+ * Everything /interface pppoe-server server needs to accept connections.
+ *
+ * RouterOS does NOT let you name a PPPoE server: the record is identified by its
+ * `.id` and by the (interface, service-name) pair, which is also the combination
+ * RouterOS enforces as unique. The panel derives a display name from that pair.
+ * New servers are created `disabled` by RouterOS itself, so nothing answers a
+ * PADI until the operator turns the server on.
+ */
+export type PppoeServerData = {
+  interface?: string;
+  'service-name'?: string;
+  'default-profile'?: string;
+  authentication?: string;
+  'one-session-per-host'?: boolean | string;
+  'max-sessions'?: number | string;
+  'max-mtu'?: number | string;
+  'max-mru'?: number | string;
+  'keepalive-timeout'?: string | number;
+  comment?: string;
+  disabled?: boolean | string;
+}
+
+/**
+ * RouterOS takes booleans as `yes`/`no`. Empty strings are kept on purpose: an
+ * empty `service-name` ("match any") or `comment` has to overwrite the previous
+ * value when the panel edits a server.
+ */
+function toRouterParams(data: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'boolean') out[key] = value ? 'yes' : 'no';
+    else out[key] = value;
+  }
+  return out;
+}
+
 class MikroTikService {
   private connections: Map<number, RouterOSAPI> = new Map();
   private routerConfigs: Map<number, RouterConnection> = new Map();
@@ -541,6 +579,154 @@ class MikroTikService {
       console.error(`enablePppSecret failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
+  }
+
+  /**
+   * Change the profile of an existing secret by username. RouterOS cannot
+   * rename a secret and re-adding one drops the live session, so billing
+   * (cut-off / restore) always edits in place. Returns false when the secret
+   * is not on the router - the caller decides whether that is an error.
+   */
+  async setPppSecretProfile(routerId: number, name: string, profile: string): Promise<boolean> {
+    const config = this.routerConfigs.get(routerId);
+
+    try {
+      if (config?.useRestApi) {
+        const secrets = await this.restApiCall(config, 'GET', `/ppp/secret?name=${encodeURIComponent(name)}`);
+        const secret = Array.isArray(secrets) ? secrets.find((s: any) => s.name === name) : null;
+        if (!secret || !secret['.id']) return false;
+        await this.restApiCall(config, 'PATCH', `/ppp/secret/${secret['.id']}`, { profile });
+        return true;
+      }
+
+      const client = this.getClient(routerId);
+      const secrets = await client.write('/ppp/secret/print', [`=?name=${name}`]) as any[];
+      const secret = Array.isArray(secrets) && secrets.length > 0 ? secrets[0] : null;
+      if (!secret || !secret['.id']) return false;
+      await client.write('/ppp/secret/set', [`=.id=${secret['.id']}`, `=profile=${profile}`]);
+      return true;
+    } catch (err) {
+      console.error(`setPppSecretProfile failed for ${name} on router ${routerId}:`, (err as Error).message);
+      throw err;
+    }
+  }
+
+  /**
+   * Set a free-form field on a secret by username (used for the due-date stamp
+   * we keep in `comment`).
+   */
+  async setPppSecretAttribute(routerId: number, name: string, attr: string, value: string): Promise<boolean> {
+    const config = this.routerConfigs.get(routerId);
+
+    try {
+      if (config?.useRestApi) {
+        const secrets = await this.restApiCall(config, 'GET', `/ppp/secret?name=${encodeURIComponent(name)}`);
+        const secret = Array.isArray(secrets) ? secrets.find((s: any) => s.name === name) : null;
+        if (!secret || !secret['.id']) return false;
+        await this.restApiCall(config, 'PATCH', `/ppp/secret/${secret['.id']}`, { [attr]: value });
+        return true;
+      }
+
+      const client = this.getClient(routerId);
+      const secrets = await client.write('/ppp/secret/print', [`=?name=${name}`]) as any[];
+      const secret = Array.isArray(secrets) && secrets.length > 0 ? secrets[0] : null;
+      if (!secret || !secret['.id']) return false;
+      await client.write('/ppp/secret/set', [`=.id=${secret['.id']}`, `=${attr}=${value}`]);
+      return true;
+    } catch (err) {
+      console.error(`setPppSecretAttribute failed for ${name} on router ${routerId}:`, (err as Error).message);
+      return false;
+    }
+  }
+
+  /**
+   * Drop every live PPP session for a username. RouterOS reads a secret's
+   * profile at connection time, so a profile change (cut-off or restore)
+   * only takes effect after the session reconnects. This is the PPPoE
+   * equivalent of kickActiveSession for hotspot.
+   */
+  async disconnectPppSession(routerId: number, username: string): Promise<boolean> {
+    const sessions = await this.getPppActive(routerId);
+    let removed = 0;
+
+    for (const session of Array.isArray(sessions) ? sessions : []) {
+      if (String(session.name || '') !== username) continue;
+      try {
+        await this.removePppActive(routerId, session['.id']);
+        removed++;
+        console.log(`disconnectPppSession: dropped ${username} on router ${routerId}`);
+      } catch (err) {
+        // A session the router refuses to remove must not abort the rest.
+        console.error(`disconnectPppSession failed for ${username} on router ${routerId}:`, (err as Error).message);
+      }
+    }
+    return removed > 0;
+  }
+
+  async removePppActive(routerId: number, id: string): Promise<void> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `/ppp/active/${id}`);
+      return;
+    }
+
+    const client = this.getClient(routerId);
+    await client.write('/ppp/active/remove', [`=.id=${id}`]);
+  }
+
+  async getPppProfiles(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/ppp/profile', '/ppp/profile/print');
+  }
+
+  async createPppProfile(
+    routerId: number,
+    data: { name: string; localAddress?: string; remoteAddress?: string; comment?: string; [key: string]: any }
+  ): Promise<any> {
+    return this.genericCreate(routerId, '/ppp/profile/add', '/ppp/profile/add', data);
+  }
+
+  async createAddressPool(routerId: number, name: string, ranges: string, comment?: string): Promise<any> {
+    const data: Record<string, any> = { name, ranges };
+    if (comment) data.comment = comment;
+    return this.genericCreate(routerId, '/ip/pool/add', '/ip/pool/add', data);
+  }
+
+  // ---------------- PPPoE server (/interface pppoe-server server) ----------------
+
+  async getPppoeServers(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/interface/pppoe-server/server', '/interface/pppoe-server/server/print');
+  }
+
+  async createPppoeServer(routerId: number, server: PppoeServerData): Promise<any> {
+    return this.genericCreate(routerId, '/interface/pppoe-server/server/add', '/interface/pppoe-server/server/add', toRouterParams(server));
+  }
+
+  /**
+   * Edit through the `set` command, never through REST PUT: PUT replaces the
+   * whole record, so any property the panel leaves out gets reset to its default
+   * and the interface of a PPPoE server gets wiped along with it.
+   */
+  async updatePppoeServer(routerId: number, id: string, server: Partial<PppoeServerData>): Promise<any> {
+    const data = { '.id': id, ...toRouterParams(server) };
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return this.restApiCall(config, 'POST', '/interface/pppoe-server/server/set', data);
+    }
+
+    const client = this.getClient(routerId);
+    const params: string[] = [];
+    for (const [key, value] of Object.entries(data)) params.push(`=${key}=${value}`);
+    return client.write('/interface/pppoe-server/server/set', params);
+  }
+
+  async removePppoeServer(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/interface/pppoe-server/server', '/interface/pppoe-server/server/remove', id);
+  }
+
+  async setPppoeServerDisabled(routerId: number, id: string, disabled: boolean): Promise<void> {
+    await this.updatePppoeServer(routerId, id, { disabled });
   }
 
   private normalizeIp(raw: string): string {

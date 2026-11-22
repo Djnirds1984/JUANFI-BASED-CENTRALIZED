@@ -474,6 +474,88 @@ export function initializeDatabase(): void {
       topup_validity_min INTEGER NOT NULL DEFAULT 15,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- ============================================================
+    -- PPPoE subscription billing
+    -- ============================================================
+
+    -- One row per RouterOS '/interface pppoe-server server' entry. The panel
+    -- keeps the definition locally so the list still renders when the router is
+    -- unreachable, and mikrotik_id holds the RouterOS .id of the last sync.
+    CREATE TABLE IF NOT EXISTS pppoe_servers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      interface TEXT NOT NULL,
+      service_name TEXT NOT NULL DEFAULT '',
+      default_profile TEXT NOT NULL DEFAULT 'default',
+      authentication TEXT NOT NULL DEFAULT 'pap,chap,mschap1,mschap2',
+      one_session_per_host INTEGER NOT NULL DEFAULT 1,
+      max_sessions INTEGER NOT NULL DEFAULT 0,
+      max_mtu INTEGER NOT NULL DEFAULT 1480,
+      max_mru INTEGER NOT NULL DEFAULT 1480,
+      keepalive_timeout TEXT NOT NULL DEFAULT '10',
+      disabled INTEGER NOT NULL DEFAULT 0,
+      comment TEXT,
+      mikrotik_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(router_id, name),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    -- A monthly plan IS a PPP profile plus a price: paying moves the subscriber
+    -- onto pppoe_profile, not paying moves them to the cut-off profile.
+    CREATE TABLE IF NOT EXISTS billing_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      price REAL NOT NULL DEFAULT 0,
+      cycle_days INTEGER NOT NULL DEFAULT 30,
+      currency TEXT NOT NULL DEFAULT 'PHP',
+      pppoe_profile TEXT NOT NULL,
+      description TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(router_id, name),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    -- Per router because profiles are router objects. cutoff_day is the day of
+    -- the month every bill on this router is due, so the whole book is collected
+    -- on one date instead of scattered per install date.
+    CREATE TABLE IF NOT EXISTS billing_settings (
+      router_id INTEGER PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      cutoff_day INTEGER NOT NULL DEFAULT 1,
+      grace_days INTEGER NOT NULL DEFAULT 3,
+      expiry_time TEXT NOT NULL DEFAULT '00:00',
+      non_payment_profile TEXT NOT NULL DEFAULT 'non-payment',
+      default_plan_id INTEGER,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Append-only money record. due_before/due_after make a collection audit
+    -- possible without trusting the customer row's current state.
+    CREATE TABLE IF NOT EXISTS ppp_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      customer_id INTEGER NOT NULL,
+      plan_id INTEGER,
+      amount REAL NOT NULL DEFAULT 0,
+      cycle_days INTEGER NOT NULL DEFAULT 30,
+      payment_method TEXT NOT NULL DEFAULT 'cash',
+      reference TEXT,
+      due_before TEXT,
+      due_after TEXT NOT NULL,
+      recorded_by TEXT NOT NULL DEFAULT '',
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ppp_payments_customer ON ppp_payments(customer_id, created_at);
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];
@@ -528,6 +610,34 @@ export function initializeDatabase(): void {
 
   if (!deviceCols.some((c: any) => c.name === 'access_mode')) {
     db.exec("ALTER TABLE active_devices ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'normal'");
+  }
+
+  // PPP subscribers gained a monthly billing book: the plan they pay for, when
+  // the next cycle is due, and what they were moved off. original_profile keeps
+  // the paid plan profile while a subscriber is cut off so a payment restores
+  // exactly what they had instead of guessing from the plan list.
+  const pppCols = db.prepare("PRAGMA table_info('ppp_customers')").all() as any[];
+  if (!pppCols.some((c: any) => c.name === 'plan_id')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN plan_id INTEGER");
+  }
+  if (!pppCols.some((c: any) => c.name === 'due_date')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN due_date TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ppp_customers_due ON ppp_customers(router_id, due_date)");
+  }
+  if (!pppCols.some((c: any) => c.name === 'billing_status')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN billing_status TEXT NOT NULL DEFAULT 'unbilled'");
+  }
+  if (!pppCols.some((c: any) => c.name === 'original_profile')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN original_profile TEXT");
+  }
+  if (!pppCols.some((c: any) => c.name === 'last_paid_at')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN last_paid_at TEXT");
+  }
+  // The API has always tagged a subscriber with the side that created it, but
+  // the column was only ever added to hotspot_users, so creating a PPP customer
+  // through the panel died on "no column named source".
+  if (!pppCols.some((c: any) => c.name === 'source')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN source TEXT NOT NULL DEFAULT 'api'");
   }
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];

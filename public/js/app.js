@@ -8093,6 +8093,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="tabs">
           <button class="tab ${this.pppTab === 'active' ? 'active' : ''}" data-tab="active">Active Connections</button>
           <button class="tab ${this.pppTab === 'customers' ? 'active' : ''}" data-tab="customers">Customers</button>
+          <button class="tab ${this.pppTab === 'servers' ? 'active' : ''}" data-tab="servers">PPPoE Servers</button>
+          <button class="tab ${this.pppTab === 'plans' ? 'active' : ''}" data-tab="plans">Billing Plans</button>
+          <button class="tab ${this.pppTab === 'billing' ? 'active' : ''}" data-tab="billing">Billing Settings</button>
         </div>
         <div id="ppp-tab-content">Loading...</div>
       </div>
@@ -8119,6 +8122,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     container.innerHTML = 'Loading...';
     try {
       if (this.pppTab === 'customers') await this.loadPppCustomers(container);
+      else if (this.pppTab === 'servers') await this.loadPppoeServers(container);
+      else if (this.pppTab === 'plans') await this.loadBillingPlans(container);
+      else if (this.pppTab === 'billing') await this.loadBillingSettings(container);
       else await this.loadPppActiveConnections(container);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
@@ -8195,6 +8201,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 
   renderPppCustomersTable(container, customers) {
     if (!container) container = document.getElementById('ppp-tab-content');
+    this._pppCustomers = customers || [];
     if (!customers || customers.length === 0) {
       container.innerHTML = '<div class="empty-state"><p>No PPP customers found.</p><button class="btn btn-primary btn-sm" onclick="App.showAddCustomerModal()">Add Customer</button></div>';
       return;
@@ -8202,78 +8209,61 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     container.innerHTML = `
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Name</th><th>Username</th><th>Profile</th><th>Service</th><th>Uptime Limit</th><th>Quota In/Out</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Customer</th><th>Plan</th><th>Profile</th><th>Due Date</th><th>Billing</th><th>Account</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody id="ppp-customers-tbody">
-            ${customers.map((c) => {
-              const quota = (c.bytes_in_quota || 0) || (c.bytes_out_quota || 0) ? `${c.bytes_in_quota || 0}/${c.bytes_out_quota || 0}` : '-';
-              return `
+            ${customers.map((c) => `
               <tr>
-                <td>${this.escapeHtml(c.name || '-')}</td>
-                <td>${this.escapeHtml(c.username || '-')}</td>
+                <td><strong>${this.escapeHtml(c.name || '-')}</strong><br><span style="color:var(--text-muted);font-size:0.85rem">${this.escapeHtml(c.username || '-')}</span></td>
+                <td>${c.plan_name ? `${this.escapeHtml(c.plan_name)} <span style="color:var(--text-muted);font-size:0.85rem">(${this.formatAmount(c.plan_currency || this.systemCurrency, c.plan_price)})</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>
                 <td>${this.escapeHtml(c.profile || '-')}</td>
-                <td>${this.escapeHtml(c.service || '-')}</td>
-                <td>${this.escapeHtml(c.uptime_limit || '-')}</td>
-                <td>${this.escapeHtml(quota)}</td>
+                <td>${this.renderDueCell(c)}</td>
+                <td>${this.renderBillingBadge(c)}</td>
                 <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
-                <td>
+                <td style="text-align:right;white-space:nowrap">
+                  <button class="btn btn-sm btn-primary" onclick="App.showPayModal(${c.id})">Pay</button>
+                  <button class="btn btn-sm btn-outline" onclick="App.showAssignPlanModal(${c.id})">Plan</button>
                   <button class="btn btn-sm btn-outline" onclick="App.showEditCustomerModal(${c.id})">Edit</button>
-                  <button class="btn btn-sm ${c.disabled ? 'btn-success' : 'btn-danger'}" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
+                  <button class="btn btn-sm btn-outline" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
                   <button class="btn btn-sm btn-danger" onclick="App.deleteCustomer(${c.id})">Delete</button>
                 </td>
               </tr>
-              `;
-            }).join('')}
+            `).join('')}
           </tbody>
         </table>
       </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Cut-off runs every minute: a subscription that passed its due date plus the grace period is moved to the non-payment profile and its live session is dropped so the new speed takes effect.</p>
     `;
   },
 
-  async loadPppCustomers(container) {
-    if (!container) container = document.getElementById('ppp-tab-content');
-    this.clearPppPollers();
-    try {
-      const customers = await api.getPppCustomers(this.selectedRouterId);
-      this.renderPppCustomersTable(container, customers || []);
-    } catch (err) {
-      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
-    }
+  renderDueCell(customer) {
+    if (!customer.due_date) return '<span style="color:var(--text-muted)">not billed</span>';
+    const due = new Date(`${customer.due_date}T00:00:00`);
+    if (Number.isNaN(due.getTime())) return this.escapeHtml(customer.due_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.round((due.getTime() - today.getTime()) / 86400000);
+    const label = due.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    if (days < 0) return `<span style="color:var(--danger)">${label}<br><small>${Math.abs(days)}d overdue</small></span>`;
+    if (days <= 3) return `<span style="color:var(--warning)">${label}<br><small>${days === 0 ? 'due today' : `in ${days}d`}</small></span>`;
+    return `${label}<br><small style="color:var(--text-muted)">in ${days}d</small>`;
   },
 
-  renderPppCustomersTable(container, customers) {
-    if (!container) container = document.getElementById('ppp-tab-content');
-    if (!customers || customers.length === 0) {
-      container.innerHTML = '<div class="empty-state"><p>No PPP customers found.</p><button class="btn btn-primary btn-sm" onclick="App.showAddCustomerModal()">Add Customer</button></div>';
-      return;
-    }
-    container.innerHTML = `
-      <div class="table-wrapper">
-        <table>
-          <thead><tr><th>Name</th><th>Username</th><th>Profile</th><th>Service</th><th>Uptime Limit</th><th>Quota In/Out</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody id="ppp-customers-tbody">
-            ${customers.map((c) => {
-              const quota = (c.bytes_in_quota || 0) || (c.bytes_out_quota || 0) ? `${c.bytes_in_quota || 0}/${c.bytes_out_quota || 0}` : '-';
-              return `
-              <tr>
-                <td>${this.escapeHtml(c.name || '-')}</td>
-                <td>${this.escapeHtml(c.username || '-')}</td>
-                <td>${this.escapeHtml(c.profile || '-')}</td>
-                <td>${this.escapeHtml(c.service || '-')}</td>
-                <td>${this.escapeHtml(c.uptime_limit || '-')}</td>
-                <td>${this.escapeHtml(quota)}</td>
-                <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
-                <td>
-                  <button class="btn btn-sm btn-outline" onclick="App.showEditCustomerModal(${c.id})">Edit</button>
-                  <button class="btn btn-sm ${c.disabled ? 'btn-success' : 'btn-danger'}" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
-                  <button class="btn btn-sm btn-danger" onclick="App.deleteCustomer(${c.id})">Delete</button>
-                </td>
-              </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
+  renderBillingBadge(customer) {
+    const status = customer.billing_status || 'unbilled';
+    if (status === 'cut-off') return '<span class="badge badge-offline">Cut-off</span>';
+    if (status === 'suspended') return '<span class="badge badge-offline">Suspended</span>';
+    if (!customer.plan_id || !customer.due_date) return '<span class="badge" style="opacity:0.6">Unbilled</span>';
+    const due = new Date(`${customer.due_date}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (due < today) return '<span class="badge badge-offline">Grace</span>';
+    return '<span class="badge badge-online">Paid</span>';
+  },
+
+  // Plans carry their own currency code; fall back to the system one.
+  planMoney(plan) {
+    if (!plan) return '-';
+    return this.formatAmount(plan.currency || this.systemCurrency, plan.price);
   },
 
   async showAddCustomerModal(customerId = null) {
@@ -8352,6 +8342,596 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     try {
       await api[disabled ? 'disablePppCustomer' : 'enablePppCustomer'](this.selectedRouterId, customerId);
       this.toast(disabled ? 'Customer disabled' : 'Customer enabled', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- PPP sub-pages: shared option loaders ----
+
+  // Profiles and interfaces live on the router, so every picker falls back to a
+  // free-text box when the router is offline rather than blocking the form.
+  async pppProfileNames(force) {
+    const routerId = this.selectedRouterId;
+    if (!force && this._pppProfileCache && this._pppProfileCache.routerId === routerId) return this._pppProfileCache.names;
+    let names = [];
+    try {
+      const profiles = await api.getPppProfiles(routerId);
+      names = (profiles || []).map((p) => p.name).filter(Boolean);
+    } catch (err) { /* offline */ }
+    this._pppProfileCache = { routerId, names };
+    return names;
+  },
+
+  async pppInterfaceNames(force) {
+    const routerId = this.selectedRouterId;
+    if (!force && this._pppInterfaceCache && this._pppInterfaceCache.routerId === routerId) return this._pppInterfaceCache.names;
+    let names = [];
+    try {
+      const list = await api.getRouterInterfaces(routerId);
+      names = (list || []).map((i) => i.name).filter(Boolean);
+    } catch (err) { /* offline */ }
+    this._pppInterfaceCache = { routerId, names };
+    return names;
+  },
+
+  optionList(options, selected) {
+    const items = (options || []).slice();
+    if (selected && !items.includes(selected)) items.unshift(selected);
+    return items.map((value) => `<option value="${this.escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${this.escapeHtml(value)}</option>`).join('');
+  },
+
+  profileField(name, selected, names, label) {
+    if (!names || names.length === 0) {
+      return `<div class="form-group"><label>${label || 'PPPoE Profile'}</label>
+        <input type="text" name="${name}" value="${this.escapeHtml(selected || '')}" placeholder="default">
+        <small style="color:var(--text-muted)">Connect the router to list the profiles it has.</small></div>`;
+    }
+    return `<div class="form-group"><label>${label || 'PPPoE Profile'}</label>
+      <select name="${name}">${this.optionList(names, selected || names[0])}</select></div>`;
+  },
+
+  // ---- PPPoE Servers sub-page ----
+
+  async loadPppoeServers(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    // The profile/interface calls look unused here, but they warm the caches the
+    // create/edit form reads, so the modal opens instantly.
+    const [servers] = await Promise.all([
+      api.getPppoeServers(this.selectedRouterId),
+      this.pppProfileNames(),
+      this.pppInterfaceNames(),
+    ]);
+    this._pppServers = servers || [];
+
+    const head = `
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-bottom:0.75rem;flex-wrap:wrap">
+        <button class="btn btn-sm btn-outline" onclick="App.loadPppoeServers()">Refresh from Router</button>
+        <button class="btn btn-sm btn-primary" onclick="App.showServerModal()">Create PPPoE Server</button>
+      </div>`;
+
+    if (!servers || servers.length === 0) {
+      container.innerHTML = `${head}<div class="empty-state"><p>No PPPoE server on this router yet. Create one to accept PPPoE dial-ins.</p></div>`;
+      return;
+    }
+
+    container.innerHTML = `${head}
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Interface</th><th>Service Name</th><th>Default Profile</th><th>Authentication</th><th>Sessions</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody>
+            ${servers.map((s) => `
+              <tr>
+                <td><strong>${this.escapeHtml(s.interface || s.name)}</strong>${s.on_router ? '' : '<br><small style="color:var(--warning)">not on the router anymore</small>'}</td>
+                <td>${s.service_name ? `<code>${this.escapeHtml(s.service_name)}</code>` : '<small style="color:var(--text-muted)">(matches any)</small>'}</td>
+                <td>${this.escapeHtml(s.default_profile || '-')}</td>
+                <td><small>${this.escapeHtml(s.authentication || '-')}</small></td>
+                <td>${s.current_sessions || 0}${s.max_sessions ? ` / ${s.max_sessions}` : ''}</td>
+                <td>${s.running === null
+                  ? '<span class="badge" style="opacity:0.6">Unknown</span>'
+                  : s.running
+                    ? '<span class="badge badge-online">Running</span>'
+                    : s.invalid
+                      ? `<span class="badge badge-warning" title="${s.interface_down ? 'RouterOS will start it as soon as the port gets a link' : 'RouterOS refuses to run it on this interface'}">${s.interface_down ? 'No link' : 'Invalid'}</span>`
+                      : '<span class="badge badge-offline">Disabled</span>'}</td>
+                <td style="text-align:right;white-space:nowrap">
+                  <button class="btn btn-sm btn-outline" onclick="App.showServerModal(${s.id})">Edit</button>
+                  ${s.on_router ? `<button class="btn btn-sm btn-outline" onclick="App.toggleServer(${s.id}, ${s.disabled ? 0 : 1})">${s.disabled ? 'Enable' : 'Disable'}</button>` : ''}
+                  <button class="btn btn-sm btn-danger" onclick="App.deleteServer(${s.id})">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">RouterOS has no name for a PPPoE server: the interface plus the service name is what identifies it. Servers created in Winbox are picked up automatically. A server on a port with no cable shows as No link - RouterOS starts it the moment the link comes up. Customers get their speed from their own PPP secret profile, not from the default profile here.</p>
+    `;
+  },
+
+  async showServerModal(serverId = null) {
+    const isEdit = serverId != null;
+    const existing = isEdit ? (this._pppServers || []).find((s) => s.id === serverId) || {} : {};
+    const [profiles, interfaces] = await Promise.all([this.pppProfileNames(), this.pppInterfaceNames()]);
+    const authOptions = ['pap,chap,mschap1,mschap2', 'pap,chap', 'pap', 'chap', 'mschap2'];
+    const auth = existing.authentication || 'pap,chap,mschap1,mschap2';
+
+    const form = `
+      <form id="ppp-server-form">
+        ${isEdit ? `<div class="form-group"><label>Server</label>
+          <input type="text" value="${this.escapeHtml(existing.interface || existing.name || '')}" readonly>
+          <small style="color:var(--text-muted)">RouterOS gives a PPPoE server no name of its own.</small></div>` : ''}
+        ${interfaces.length
+          ? `<div class="form-group"><label>Interface (where customers plug in)</label>
+               <select name="interface">${this.optionList(interfaces, existing.interface)}</select></div>`
+          : `<div class="form-group"><label>Interface (where customers plug in)</label>
+               <input type="text" name="interface" required value="${this.escapeHtml(existing.interface || '')}" placeholder="ether2 / bridge1 / vlan10"></div>`}
+        <div class="form-group"><label>Service Name (optional)</label>
+          <input type="text" name="serviceName" value="${this.escapeHtml(existing.service_name || '')}">
+          <small style="color:var(--text-muted)">Leave empty to answer every client on that interface. Fill it in only when a remote router dials a specific service name.</small></div>
+        ${this.profileField('defaultProfile', existing.default_profile || 'default', profiles, 'Default Profile')}
+        <div class="form-group"><label>Authentication</label>
+          <select name="authentication">${authOptions.map((a) => `<option value="${a}" ${a === auth ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Max Sessions (0 = unlimited)</label>
+            <input type="number" name="maxSessions" min="0" value="${existing.max_sessions != null ? existing.max_sessions : 0}"></div>
+          <div class="form-group"><label>Keepalive Timeout (s)</label>
+            <input type="text" name="keepaliveTimeout" value="${this.escapeHtml(existing.keepalive_timeout || '10')}"></div>
+          <div class="form-group"><label>Max MTU</label>
+            <input type="number" name="maxMtu" min="1280" max="1480" value="${existing.max_mtu || 1480}"></div>
+          <div class="form-group"><label>Max MRU</label>
+            <input type="number" name="maxMru" min="1280" max="1480" value="${existing.max_mru || 1480}"></div>
+        </div>
+        <div class="form-group"><label style="display:flex;gap:0.5rem;align-items:center;text-transform:none">
+          <input type="checkbox" name="oneSessionPerHost" ${existing.one_session_per_host === 0 ? '' : 'checked'}> One session per host</label></div>
+        <div class="form-group"><label style="display:flex;gap:0.5rem;align-items:center;text-transform:none">
+          <input type="checkbox" name="disabled" ${isEdit ? (existing.disabled ? 'checked' : '') : 'checked'}> Disabled (create it switched off)</label></div>
+        <div class="form-group"><label>Comment (optional)</label>
+          <input type="text" name="comment" value="${this.escapeHtml(existing.comment || '')}"></div>
+      </form>
+    `;
+
+    this.openModal(isEdit ? 'Edit PPPoE Server' : 'Create PPPoE Server', form, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: isEdit ? 'Save Changes' : 'Create Server', class: 'btn btn-primary', action: () => this.submitServer(serverId) },
+    ]);
+  },
+
+  async submitServer(serverId = null) {
+    const form = document.getElementById('ppp-server-form');
+    const payload = {
+      interface: form.interface.value.trim(),
+      serviceName: form.serviceName.value.trim(),
+      defaultProfile: form.defaultProfile.value ? form.defaultProfile.value.trim() : 'default',
+      authentication: form.authentication.value,
+      oneSessionPerHost: form.oneSessionPerHost.checked ? 1 : 0,
+      maxSessions: parseInt(form.maxSessions.value, 10) || 0,
+      maxMtu: parseInt(form.maxMtu.value, 10) || 1480,
+      maxMru: parseInt(form.maxMru.value, 10) || 1480,
+      keepaliveTimeout: form.keepaliveTimeout.value.trim() || '10',
+      disabled: form.disabled.checked ? 1 : 0,
+      comment: form.comment.value.trim(),
+    };
+    if (!payload.interface) { this.toast('Pick the interface the server runs on', 'error'); return; }
+
+    try {
+      if (serverId != null) await api.updatePppoeServer(this.selectedRouterId, serverId, payload);
+      else await api.createPppoeServer(this.selectedRouterId, payload);
+      this.closeModal();
+      this.toast(`PPPoE server ${serverId != null ? 'updated' : 'created'}`, 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async toggleServer(serverId, disable) {
+    const server = (this._pppServers || []).find((s) => s.id === serverId);
+    if (!server) return;
+    try {
+      await api.updatePppoeServer(this.selectedRouterId, serverId, { disabled: disable ? 1 : 0 });
+      this.toast(`PPPoE server ${disable ? 'disabled' : 'enabled'}`, 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async deleteServer(serverId) {
+    const server = (this._pppServers || []).find((s) => s.id === serverId);
+    if (!confirm(`Remove PPPoE server "${server ? server.name : serverId}" from the router? Active clients will drop.`)) return;
+    try {
+      const result = await api.deletePppoeServer(this.selectedRouterId, serverId);
+      this.closeModal();
+      this.toast(result && result.warning ? result.warning : 'PPPoE server deleted', result && result.warning ? 'info' : 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- Billing Plans sub-page ----
+
+  async loadBillingPlans(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    const [plans, profiles] = await Promise.all([api.getBillingPlans(this.selectedRouterId), this.pppProfileNames()]);
+    this._billingPlans = plans || [];
+    this._billingProfileNames = profiles || [];
+
+    const head = `
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-bottom:0.75rem">
+        <button class="btn btn-sm btn-primary" onclick="App.showPlanModal()">New Plan</button>
+      </div>`;
+
+    if (!plans || plans.length === 0) {
+      container.innerHTML = `${head}<div class="empty-state"><p>No billing plans yet. A plan is a price plus the PPPoE profile it hands out.</p></div>`;
+      return;
+    }
+
+    container.innerHTML = `${head}
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Plan</th><th>Price</th><th>Cycle</th><th>Binds to Profile</th><th>Description</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody>
+            ${plans.map((p) => `
+              <tr>
+                <td><strong>${this.escapeHtml(p.name)}</strong></td>
+                <td>${this.planMoney(p)}</td>
+                <td>${p.cycle_days >= 365 ? `${Math.round(p.cycle_days / 365)} year(s)` : p.cycle_days >= 28 ? `${Math.round(p.cycle_days / 30)} month(s)` : `${p.cycle_days} days`}</td>
+                <td><code>${this.escapeHtml(p.pppoe_profile)}</code></td>
+                <td><small style="color:var(--text-muted)">${this.escapeHtml(p.description || '-')}</small></td>
+                <td><span class="badge ${p.is_active ? 'badge-online' : 'badge-offline'}">${p.is_active ? 'Active' : 'Hidden'}</span></td>
+                <td style="text-align:right;white-space:nowrap">
+                  <button class="btn btn-sm btn-outline" onclick="App.showPlanModal(${p.id})">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="App.deletePlan(${p.id})">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Plans with 28 days or more lock to the cut-off day in Billing Settings. Shorter cycles (weekly, 15 days) simply roll forward by that many days.</p>
+    `;
+  },
+
+  async showPlanModal(planId = null) {
+    const isEdit = planId != null;
+    const existing = isEdit ? (this._billingPlans || []).find((p) => p.id === planId) || {} : {};
+    const profiles = this._billingProfileNames || (await this.pppProfileNames());
+
+    const form = `
+      <form id="billing-plan-form">
+        <div class="form-group"><label>Plan Name</label>
+          <input type="text" name="name" required value="${this.escapeHtml(existing.name || '')}" placeholder="e.g. 10Mbps - 500"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Price per Cycle</label>
+            <input type="number" name="price" min="0" step="0.01" required value="${existing.price != null ? existing.price : ''}"></div>
+          <div class="form-group"><label>Currency</label>
+            <input type="text" name="currency" value="${this.escapeHtml(existing.currency || 'PHP')}" maxlength="3"></div>
+          <div class="form-group"><label>Cycle (days)</label>
+            <input type="number" name="cycleDays" min="1" required value="${existing.cycle_days != null ? existing.cycle_days : 30}">
+            <small style="color:var(--text-muted)">30 monthly, 90 quarterly, 365 yearly</small></div>
+        </div>
+        ${this.profileField('pppoeProfile', existing.pppoe_profile, profiles, 'Binds to PPPoE Profile')}
+        <div class="form-group"><label>Description (optional)</label>
+          <input type="text" name="description" value="${this.escapeHtml(existing.description || '')}"></div>
+        <div class="form-group"><label style="display:flex;gap:0.5rem;align-items:center;text-transform:none">
+          <input type="checkbox" name="isActive" ${existing.is_active === 0 ? '' : 'checked'}> Offer this plan (untick to hide it from new sales)</label></div>
+      </form>
+    `;
+
+    this.openModal(isEdit ? 'Edit Billing Plan' : 'New Billing Plan', form, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: isEdit ? 'Save Changes' : 'Create Plan', class: 'btn btn-primary', action: () => this.submitPlan(planId) },
+    ]);
+  },
+
+  async submitPlan(planId = null) {
+    const form = document.getElementById('billing-plan-form');
+    const payload = {
+      name: form.name.value.trim(),
+      price: parseFloat(form.price.value) || 0,
+      currency: (form.currency.value.trim() || 'PHP').toUpperCase(),
+      cycleDays: parseInt(form.cycleDays.value, 10) || 30,
+      pppoeProfile: form.pppoeProfile.value.trim(),
+      description: form.description.value.trim(),
+      isActive: form.isActive.checked ? 1 : 0,
+    };
+    if (!payload.pppoeProfile) { this.toast('A PPPoE profile is required', 'error'); return; }
+
+    try {
+      if (planId != null) await api.updateBillingPlan(this.selectedRouterId, planId, payload);
+      else await api.createBillingPlan(this.selectedRouterId, payload);
+      this.closeModal();
+      this.toast(`Billing plan ${planId != null ? 'updated' : 'created'}`, 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async deletePlan(planId) {
+    const plan = (this._billingPlans || []).find((p) => p.id === planId);
+    if (!confirm(`Delete billing plan "${plan ? plan.name : planId}"?`)) return;
+    try {
+      const result = await api.deleteBillingPlan(this.selectedRouterId, planId);
+      this.toast(result && result.deactivated
+        ? `Plan has ${result.customers} customer(s), hidden instead of deleted`
+        : 'Billing plan deleted', result && result.deactivated ? 'info' : 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- Billing Settings sub-page ----
+
+  async loadBillingSettings(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    const [settings, plans, overview, payments, profiles] = await Promise.all([
+      api.getBillingSettings(this.selectedRouterId),
+      api.getBillingPlans(this.selectedRouterId),
+      api.getBillingOverview(this.selectedRouterId),
+      api.getBillingPayments(this.selectedRouterId, 25),
+      this.pppProfileNames(),
+    ]);
+    this._billingSettings = settings || {};
+    this._billingPlans = plans || [];
+    this._billingProfileNames = profiles || [];
+
+    const card = (label, value, color) => `
+      <div class="stat-card">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value"${color ? ` style="color:${color}"` : ''}>${value}</div>
+      </div>`;
+
+    const planOptions = (plans || []).filter((p) => p.is_active).map((p) => ({ value: String(p.id), label: `${p.name} - ${this.planMoney(p)}` }));
+    const profileOptions = profiles || [];
+
+    container.innerHTML = `
+      <div class="stats-grid" style="margin-bottom:1rem">
+        ${card('Subscribers', overview.total)}
+        ${card('Paid', overview.active, 'var(--success)')}
+        ${card('Due Soon', overview.dueSoon, 'var(--warning)')}
+        ${card('In Grace', overview.grace, 'var(--warning)')}
+        ${card('Cut-off', overview.cutOff, 'var(--danger)')}
+        ${card('Collected This Month', this.formatAmount(this.systemCurrency, overview.collectedThisMonth))}
+      </div>
+
+      <form id="billing-settings-form" class="form-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;align-items:end">
+        <div class="form-group"><label style="display:flex;gap:0.5rem;align-items:center;text-transform:none">
+          <input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}> Enable automatic cut-off</label>
+          <small style="color:var(--text-muted)">Checked every minute for this router</small></div>
+        <div class="form-group"><label>Cut-off Day of Month</label>
+          <input type="number" name="cutoffDay" min="1" max="28" value="${settings.cutoff_day || 1}">
+          <small style="color:var(--text-muted)">Everyone lands on this day</small></div>
+        <div class="form-group"><label>Grace Period (days)</label>
+          <input type="number" name="graceDays" min="0" max="28" value="${settings.grace_days || 0}"></div>
+        <div class="form-group"><label>Expiry Time (HH:MM)</label>
+          <input type="time" name="expiryTime" value="${this.escapeHtml(settings.expiry_time || '00:00')}"></div>
+        <div class="form-group"><label>Transfer to Profile (cut-off)</label>
+          ${profileOptions.length
+            ? `<select name="nonPaymentProfile">${this.optionList(profileOptions, settings.non_payment_profile)}</select>`
+            : `<input type="text" name="nonPaymentProfile" value="${this.escapeHtml(settings.non_payment_profile || 'non-payment')}">`}</div>
+        <div class="form-group"><label>Default Plan (for quick billing)</label>
+          <select name="defaultPlanId">
+            <option value="">- none -</option>
+            ${planOptions.map((o) => `<option value="${o.value}" ${Number(settings.default_plan_id) === Number(o.value) ? 'selected' : ''}>${this.escapeHtml(o.label)}</option>`).join('')}
+          </select></div>
+        <div class="form-group" style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="button" class="btn btn-primary" onclick="App.submitBillingSettings()">Save Settings</button>
+          <button type="button" class="btn btn-outline" onclick="App.runCutoffNow()">Run Cut-off Now</button>
+        </div>
+      </form>
+
+      <h4 style="margin:1.25rem 0 0.5rem">Recent Payments</h4>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Date</th><th>Customer</th><th>Plan</th><th>Amount</th><th>Method</th><th>Reference</th><th>By</th><th>New Due</th></tr></thead>
+          <tbody>
+            ${(payments || []).length === 0
+              ? '<tr><td colspan="8" style="color:var(--text-muted)">No payments recorded yet.</td></tr>'
+              : payments.map((p) => `
+              <tr>
+                <td><small>${this.escapeHtml(String(p.created_at || '').replace('T', ' ').slice(0, 16))}</small></td>
+                <td>${this.escapeHtml(p.customer_name || p.customer_username || '-')}</td>
+                <td>${this.escapeHtml(p.plan_name || '-')}</td>
+                <td>${this.formatAmount(this.systemCurrency, p.amount)}</td>
+                <td>${this.escapeHtml(p.payment_method || '-')}</td>
+                <td><small>${this.escapeHtml(p.reference || '-')}</small></td>
+                <td><small>${this.escapeHtml(p.recorded_by || '-')}</small></td>
+                <td>${this.escapeHtml(p.due_after || '-')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Cut-off moves the subscriber to the profile above and drops their session so the new limit applies. Recording a payment restores the plan profile and re-anchors the next due date on the cut-off day.</p>
+    `;
+  },
+
+  async submitBillingSettings() {
+    const form = document.getElementById('billing-settings-form');
+    try {
+      await api.saveBillingSettings(this.selectedRouterId, {
+        enabled: form.enabled.checked ? 1 : 0,
+        cutoffDay: parseInt(form.cutoffDay.value, 10) || 1,
+        graceDays: parseInt(form.graceDays.value, 10) || 0,
+        expiryTime: form.expiryTime.value || '00:00',
+        nonPaymentProfile: form.nonPaymentProfile.value.trim(),
+        defaultPlanId: form.defaultPlanId.value ? parseInt(form.defaultPlanId.value, 10) : null,
+      });
+      this.toast('Billing settings saved', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async runCutoffNow() {
+    try {
+      const report = await api.runBillingSweep(this.selectedRouterId);
+      const moved = (report && report.cutOff) || 0;
+      const pending = (report && report.pending) || 0;
+      this.toast(moved ? `Cut-off applied to ${moved} subscriber(s)` : 'Nothing was due', moved || pending ? 'success' : 'info');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- Per-customer billing actions ----
+
+  findPppCustomer(customerId) {
+    return (this._pppCustomers || []).find((c) => c.id === customerId) || null;
+  },
+
+  async showAssignPlanModal(customerId) {
+    const customer = this.findPppCustomer(customerId);
+    if (!customer) { this.toast('Reload the customers list first', 'error'); return; }
+    const plans = (await api.getBillingPlans(this.selectedRouterId)).filter((p) => p.is_active || p.id === customer.plan_id);
+    this._billingPlans = plans;
+
+    if (plans.length === 0) {
+      this.toast('Create a billing plan first', 'error');
+      return;
+    }
+
+    const form = `
+      <form id="assign-plan-form">
+        <p style="color:var(--text-muted)">Binds <strong>${this.escapeHtml(customer.name || customer.username)}</strong> to a plan and starts the clock from today. No payment is recorded - use this for free trials and postpaid accounts.</p>
+        <div class="form-group"><label>Plan</label>
+          <select name="planId" onchange="App.updateAssignPreview()">
+            ${plans.map((p) => `<option value="${p.id}" ${p.id === customer.plan_id ? 'selected' : ''}>${this.escapeHtml(p.name)} - ${this.planMoney(p)} / ${p.cycle_days}d</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label>Cycles</label>
+          <input type="number" name="cycles" min="1" max="24" value="1" onchange="App.updateAssignPreview()" oninput="App.updateAssignPreview()"></div>
+        <div class="form-group"><label>Resulting Profile</label><input type="text" id="assign-profile" readonly value="${this.escapeHtml(plans[0].pppoe_profile)}"></div>
+      </form>
+    `;
+
+    this.openModal('Assign Billing Plan', form, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Assign Plan', class: 'btn btn-primary', action: () => this.submitAssignPlan(customerId) },
+    ]);
+  },
+
+  updateAssignPreview() {
+    const form = document.getElementById('assign-plan-form');
+    if (!form) return;
+    const plan = (this._billingPlans || []).find((p) => p.id === parseInt(form.planId.value, 10));
+    const field = document.getElementById('assign-profile');
+    if (plan && field) field.value = plan.pppoe_profile;
+  },
+
+  async submitAssignPlan(customerId) {
+    const form = document.getElementById('assign-plan-form');
+    try {
+      const result = await api.assignCustomerPlan(this.selectedRouterId, customerId, {
+        planId: parseInt(form.planId.value, 10),
+        cycles: parseInt(form.cycles.value, 10) || 1,
+      });
+      this.closeModal();
+      this.toast(`${result.username} billed until ${result.dueDate}${result.warning ? ` (${result.warning})` : ''}`, result.warning ? 'info' : 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async showPayModal(customerId) {
+    const customer = this.findPppCustomer(customerId);
+    if (!customer) { this.toast('Reload the customers list first', 'error'); return; }
+    const [plans, payments] = await Promise.all([
+      api.getBillingPlans(this.selectedRouterId),
+      api.getCustomerPayments(this.selectedRouterId, customerId).catch(() => []),
+    ]);
+    const options = plans.filter((p) => p.is_active || p.id === customer.plan_id);
+    if (options.length === 0) { this.toast('Create a billing plan first', 'error'); return; }
+    this._billingPlans = options;
+    this._payCustomer = customer;
+
+    const selected = customer.plan_id || options[0].id;
+    const history = (payments || []).slice(0, 8);
+
+    const form = `
+      <form id="pay-form">
+        <p style="color:var(--text-muted)">
+          <strong>${this.escapeHtml(customer.name || customer.username)}</strong> (${this.escapeHtml(customer.username)})
+          ${customer.due_date ? ` - currently paid until <strong>${this.escapeHtml(customer.due_date)}</strong>` : ' - not billed yet'}
+          ${customer.billing_status === 'cut-off' ? ' - <span style="color:var(--danger)">cut off</span>' : ''}
+        </p>
+        <div class="form-group"><label>Plan</label>
+          <select name="planId" onchange="App.updatePayPreview()">
+            ${options.map((p) => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${this.escapeHtml(p.name)} - ${this.planMoney(p)} / ${p.cycle_days}d</option>`).join('')}
+          </select></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Cycles (months)</label>
+            <input type="number" name="cycles" min="1" max="24" value="1" oninput="App.updatePayPreview()" onchange="App.updatePayPreview()"></div>
+          <div class="form-group"><label>Amount</label>
+            <input type="number" name="amount" min="0" step="0.01" id="pay-amount" value="${Number((options.find((p) => p.id === selected) || options[0]).price).toFixed(2)}"></div>
+          <div class="form-group"><label>Method</label>
+            <select name="paymentMethod"><option value="cash">Cash</option><option value="gcash">GCash</option><option value="maya">Maya</option><option value="bank">Bank</option><option value="other">Other</option></select></div>
+          <div class="form-group"><label>Reference (optional)</label>
+            <input type="text" name="reference" placeholder="OR number"></div>
+        </div>
+        <div class="form-group"><label>New Due Date</label>
+          <input type="text" id="pay-due-preview" readonly value="calculating..."></div>
+        <div class="form-group"><label>Note (optional)</label>
+          <input type="text" name="note"></div>
+      </form>
+      ${history.length ? `
+        <h5 style="margin:0.75rem 0 0.25rem">Payment History</h5>
+        <div class="table-wrapper" style="max-height:160px;overflow:auto">
+          <table>
+            <thead><tr><th>Date</th><th>Plan</th><th>Amount</th><th>Method</th><th>Due After</th></tr></thead>
+            <tbody>${history.map((p) => `
+              <tr><td><small>${this.escapeHtml(String(p.created_at || '').slice(0, 10))}</small></td>
+                  <td>${this.escapeHtml(p.plan_name || '-')}</td>
+                  <td>${this.formatAmount(this.systemCurrency, p.amount)}</td>
+                  <td>${this.escapeHtml(p.payment_method || '-')}</td>
+                  <td>${this.escapeHtml(p.due_after || '-')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : ''}
+    `;
+
+    this.openModal('Record Payment', form, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: 'Record Payment', class: 'btn btn-primary', action: () => this.submitPayment(customerId) },
+    ]);
+    this.updatePayPreview();
+  },
+
+  // Mirrors the server rule so the operator sees the date before saving: the
+  // cycle is measured from the date the customer already paid up to.
+  updatePayPreview() {
+    const form = document.getElementById('pay-form');
+    const preview = document.getElementById('pay-due-preview');
+    const amountField = document.getElementById('pay-amount');
+    if (!form || !preview) return;
+
+    const plan = (this._billingPlans || []).find((p) => p.id === parseInt(form.planId.value, 10));
+    if (!plan) return;
+    const cycles = Math.max(1, parseInt(form.cycles.value, 10) || 1);
+    if (amountField) amountField.value = (Number(plan.price) * cycles).toFixed(2);
+
+    const settings = this._billingSettings || {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let due = this._payCustomer && this._payCustomer.due_date ? new Date(`${this._payCustomer.due_date}T00:00:00`) : today;
+    if (Number.isNaN(due.getTime()) || due < today) due = today;
+
+    if (Number(settings.enabled) === 1 && plan.cycle_days >= 28) {
+      const cutoffDay = Math.max(1, Math.min(28, parseInt(settings.cutoff_day, 10) || 1));
+      for (let i = 0; i < cycles; i++) {
+        const lastDay = new Date(due.getFullYear(), due.getMonth() + 1, 0).getDate();
+        const candidate = new Date(due.getFullYear(), due.getMonth(), Math.min(cutoffDay, lastDay));
+        due = candidate > due ? candidate : new Date(due.getFullYear(), due.getMonth() + 1, Math.min(cutoffDay, lastDay));
+      }
+    } else {
+      due = new Date(due.getFullYear(), due.getMonth(), due.getDate() + plan.cycle_days * cycles);
+    }
+
+    const profileNote = this._payCustomer && this._payCustomer.billing_status === 'cut-off' ? ' - profile restored to plan' : '';
+    const local = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
+    preview.value = `${local} via profile "${plan.pppoe_profile}"${profileNote}`;
+  },
+
+  async submitPayment(customerId) {
+    const form = document.getElementById('pay-form');
+    try {
+      const result = await api.payCustomerBill(this.selectedRouterId, customerId, {
+        planId: parseInt(form.planId.value, 10),
+        cycles: parseInt(form.cycles.value, 10) || 1,
+        amount: form.amount.value === '' ? null : parseFloat(form.amount.value),
+        paymentMethod: form.paymentMethod.value,
+        reference: form.reference.value.trim() || null,
+        note: form.note.value.trim() || null,
+      });
+      this.closeModal();
+      this.toast(`${result.username}: ${this.formatAmount(this.systemCurrency, result.amount)} paid, due ${result.dueDate}${result.warning ? ` (${result.warning})` : ''}`, result.warning ? 'info' : 'success');
       this.loadPppTab();
     } catch (err) { this.toast(err.message, 'error'); }
   },

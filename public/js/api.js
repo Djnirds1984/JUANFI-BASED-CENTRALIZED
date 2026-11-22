@@ -870,6 +870,84 @@ class ApiClient {
   async disablePppCustomer(routerId, customerId) {
     return this.post(`/ppp/router/${routerId}/customers/${customerId}/disable`);
   }
+
+  // --- PPPoE servers ---
+  async getPppoeServers(routerId) {
+    return this.get(`/ppp/router/${routerId}/pppoe-servers`);
+  }
+
+  async createPppoeServer(routerId, server) {
+    return this.post(`/ppp/router/${routerId}/pppoe-servers`, server);
+  }
+
+  async updatePppoeServer(routerId, serverId, data) {
+    return this.put(`/ppp/router/${routerId}/pppoe-servers/${serverId}`, data);
+  }
+
+  async deletePppoeServer(routerId, serverId) {
+    return this.delete(`/ppp/router/${routerId}/pppoe-servers/${serverId}`);
+  }
+
+  async getPppProfiles(routerId) {
+    return this.get(`/ppp/router/${routerId}/ppp-profiles`);
+  }
+
+  // --- PPP subscription billing ---
+  async getBillingPlans(routerId) {
+    return this.get(`/ppp/router/${routerId}/billing/plans`);
+  }
+
+  async createBillingPlan(routerId, plan) {
+    return this.post(`/ppp/router/${routerId}/billing/plans`, plan);
+  }
+
+  async updateBillingPlan(routerId, planId, data) {
+    return this.put(`/ppp/router/${routerId}/billing/plans/${planId}`, data);
+  }
+
+  async deleteBillingPlan(routerId, planId) {
+    return this.delete(`/ppp/router/${routerId}/billing/plans/${planId}`);
+  }
+
+  async getBillingSettings(routerId) {
+    return this.get(`/ppp/router/${routerId}/billing/settings`);
+  }
+
+  async saveBillingSettings(routerId, settings) {
+    return this.put(`/ppp/router/${routerId}/billing/settings`, settings);
+  }
+
+  async getBillingOverview(routerId) {
+    return this.get(`/ppp/router/${routerId}/billing/overview`);
+  }
+
+  async runBillingSweep(routerId) {
+    return this.post(`/ppp/router/${routerId}/billing/sweep`);
+  }
+
+  async assignCustomerPlan(routerId, customerId, data) {
+    return this.post(`/ppp/router/${routerId}/customers/${customerId}/plan`, data);
+  }
+
+  async payCustomerBill(routerId, customerId, data) {
+    return this.post(`/ppp/router/${routerId}/customers/${customerId}/pay`, data);
+  }
+
+  async cutoffCustomer(routerId, customerId, data) {
+    return this.post(`/ppp/router/${routerId}/customers/${customerId}/cutoff`, data || {});
+  }
+
+  async getCustomerPayments(routerId, customerId) {
+    return this.get(`/ppp/router/${routerId}/customers/${customerId}/payments`);
+  }
+
+  async getBillingPayments(routerId, limit) {
+    return this.get(`/ppp/router/${routerId}/billing/payments?limit=${limit || 100}`);
+  }
+
+  async getRouterInterfaces(routerId) {
+    return this.get(`/interfaces/router/${routerId}/interfaces`);
+  }
 }
 
 window.api = new ApiClient();

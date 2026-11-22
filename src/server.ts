@@ -10,6 +10,7 @@ import { initializeDatabase, closeDb } from './database';
 import { initializeAdmin } from './services/auth';
 import { startMonitoring, stopMonitoring, reconnectRouters } from './services/monitor';
 import { startActiveDeviceSync, stopActiveDeviceSync } from './services/activeDevices';
+import { startPppBillingSweep, stopPppBillingSweep } from './services/pppBilling';
 import { mikroTikService } from './services/mikrotik';
 import { startRadiusServer, stopRadiusServer, hasRadiusClients } from './services/radiusServer';
 import * as turso from './services/turso';
@@ -147,6 +148,9 @@ async function bootstrap(): Promise<void> {
     console.log('Starting active devices sync...');
     startActiveDeviceSync(config.activeDevicesSyncSec);
 
+    console.log('Starting PPP billing sweep...');
+    startPppBillingSweep(60);
+
     console.log('Checking Turso cloud sync...');
     const tursoPull = await turso.pullIfLocalEmpty();
     console.log(`[Turso] ${tursoPull.message}`);
@@ -178,6 +182,7 @@ function shutdown(): void {
   console.log('\nShutting down...');
   stopMonitoring();
   stopActiveDeviceSync();
+  stopPppBillingSweep();
   stopRadiusServer();
   mikroTikService.disconnectAll();
   closeDb();

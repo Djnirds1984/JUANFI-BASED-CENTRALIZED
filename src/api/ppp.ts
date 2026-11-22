@@ -92,6 +92,20 @@ function normalizeDateTime(value: any): string | null {
   return `${day} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+/**
+ * A skipped arming is normal behaviour, but saying nothing left the operator
+ * looking at a customer with no router timer and no explanation. Word it as
+ * information, never as a failure - the job was legitimately not needed.
+ */
+function scheduleNotice(skipped?: string): string | undefined {
+  switch (skipped) {
+    case 'billing disabled': return 'Billing is switched off on this router, so no cut-off timer was armed and the panel sweep will not cut this account off either';
+    case 'no due date': return 'This account has no due date, so there is nothing for a cut-off timer to fire on';
+    case 'already past': return 'The cut-off moment (due date plus grace) has already passed, so no timer was armed';
+    default: return undefined;
+  }
+}
+
 
 router.post('/router/:routerId/customers', async (req: Request, res: Response) => {
   try {
@@ -230,7 +244,9 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       scheduledAt: job.scheduledAt,
       dueDate: due,
       profile: effectiveProfile,
-      warning: job.error || (secretOnRouter ? undefined : 'router was offline: the login was saved in the panel only'),
+      warning: job.error
+        || scheduleNotice(job.skipped)
+        || (secretOnRouter ? undefined : 'router was offline: the login was saved in the panel only'),
     });
   } catch (error: any) {
     console.error('Create PPP customer error:', error);
@@ -360,6 +376,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
     const saved = db.prepare('SELECT due_date FROM ppp_customers WHERE id = ?').get(customerId) as any;
     let scheduledAt: string | null = null;
     let scheduleError: string | undefined;
+    let scheduleSkipped: string | undefined;
     if (dueProvided || plan || nextProfile !== customer.profile) {
       // The timer belongs to the account, so renaming the login or moving the
       // due date has to move the timer with it.
@@ -367,10 +384,15 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       const job = await scheduleAccountCutoff(routerId, newUsername, saved?.due_date, getBillingSettings(routerId));
       scheduledAt = job.scheduledAt;
       scheduleError = job.error;
+      scheduleSkipped = job.skipped;
       db.prepare("UPDATE ppp_customers SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(job.scheduledAt, customerId);
     }
 
-    res.json({ message: 'PPP customer updated successfully', scheduledAt, warning: scheduleError });
+    res.json({
+      message: `PPP customer updated${scheduledAt ? `, cut-off armed on the router for ${scheduledAt}` : ''}`,
+      scheduledAt,
+      warning: scheduleError || scheduleNotice(scheduleSkipped),
+    });
   } catch (error: any) {
     console.error('Update PPP customer error:', error);
     res.status(500).json({ error: error.message });

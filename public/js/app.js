@@ -2801,6 +2801,19 @@ const App = {
     ]);
   },
 
+  // The row button has been here longer than this method: without it the click
+  // threw and the Delete looked pressed but did nothing. RouterOS itself refuses
+  // a profile that users or server profiles still reference, so the router's own
+  // error is what the operator gets back.
+  async deleteUserProfile(profileId) {
+    if (!confirm('Delete this hotspot user profile from the router?')) return;
+    try {
+      await api.deleteUserProfile(this.selectedRouterId, profileId);
+      this.toast('User profile deleted', 'success');
+      this.loadHotspotSettingsTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
   async showEditIpBindingModal(bindingId) {
     const bindings = await api.getIpBindings(this.selectedRouterId);
     const binding = bindings.find((b) => b['.id'] === bindingId);
@@ -8194,7 +8207,14 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     if (!container) container = document.getElementById('ppp-tab-content');
     this.clearPppPollers();
     try {
-      const customers = await api.getPppCustomers(this.selectedRouterId);
+      // The billing switch decides whether an account can have a router timer at
+      // all, so the table needs it to explain an unarmed row instead of guessing.
+      const [customers, settings] = await Promise.all([
+        api.getPppCustomers(this.selectedRouterId),
+        api.getBillingSettings(this.selectedRouterId).catch(() => null),
+      ]);
+      this._pppBillingEnabled = Number(settings?.enabled) === 1;
+      this._pppBillingGrace = Number(settings?.grace_days || 0);
       this.renderPppCustomersTable(container, customers || []);
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
@@ -8224,7 +8244,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
                 <td style="text-align:right;white-space:nowrap">
                   <button class="btn btn-sm btn-primary" onclick="App.showPayModal(${c.id})">Pay</button>
                   <button class="btn btn-sm btn-outline" onclick="App.showAssignPlanModal(${c.id})">Plan</button>
-                  <button class="btn btn-sm btn-outline" onclick="App.showEditCustomerModal(${c.id})">Edit</button>
+                  <button class="btn btn-sm btn-outline" onclick="App.showAddCustomerModal(${c.id})">Edit</button>
                   <button class="btn btn-sm btn-outline" onclick="App.toggleCustomer(${c.id}, ${c.disabled ? 0 : 1})">${c.disabled ? 'Enable' : 'Disable'}</button>
                   <button class="btn btn-sm btn-danger" onclick="App.deleteCustomer(${c.id})">Delete</button>
                 </td>
@@ -8248,20 +8268,29 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
   },
 
   /**
-   * What the router's own scheduler job is armed for. Blank means the timer is
-   * not on the router, which only happens when it was unreachable or the account
-   * has no future due date - the panel sweep still covers it.
+   * What the router's own scheduler job is armed for. Blank means no timer on the
+   * router, and the reason matters: billing switched off, a cut-off instant that
+   * has already gone by, or a router that was unreachable when the account was
+   * saved. The panel sweep is the backstop in every case.
    */
   renderScheduledCell(customer) {
     if (!customer.due_date) return '';
-    if (!customer.scheduled_at) {
-      return '<br><small style="color:var(--warning);font-size:0.78rem" title="The router had no scheduler job armed for this account; the panel sweep still cuts it off">router timer not armed</small>';
+    if (customer.scheduled_at) {
+      const when = this.parseDue(customer.scheduled_at);
+      const label = when
+        ? `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+        : this.escapeHtml(customer.scheduled_at);
+      return `<br><small style="color:var(--text-muted);font-size:0.78rem">&#9200; auto-kick on router: ${label}</small>`;
     }
-    const when = this.parseDue(customer.scheduled_at);
-    const label = when
-      ? `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
-      : this.escapeHtml(customer.scheduled_at);
-    return `<br><small style="color:var(--text-muted);font-size:0.78rem">&#9200; auto-kick on router: ${label}</small>`;
+    if (this._pppBillingEnabled === false) {
+      return '<br><small style="color:var(--warning);font-size:0.78rem" title="Billing is switched off on this router, so the panel arms no cut-off timer and its sweep does not run either. Turn billing on in PPP - Billing Settings, then save the account.">billing off - no cut-off</small>';
+    }
+    const due = this.parseDue(customer.due_date);
+    const fires = due ? new Date(due.getTime() + (this._pppBillingGrace || 0) * 86400000) : null;
+    if (fires && fires <= new Date()) {
+      return '<br><small style="color:var(--text-muted);font-size:0.78rem" title="The cut-off instant has passed, so there is nothing left to arm; the sweep handles it.">cut-off due</small>';
+    }
+    return '<br><small style="color:var(--warning);font-size:0.78rem" title="No scheduler job on the router for this account - it was offline when the account was saved, or the account predates per-account timers. Open Edit and press Save to arm it.">router timer not armed</small>';
   },
 
   renderDueCell(customer) {

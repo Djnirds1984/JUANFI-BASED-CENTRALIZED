@@ -5,14 +5,19 @@ import { authMiddleware } from '../middleware/auth';
 import {
   DEFAULT_BILLING_SETTINGS,
   assignPlan,
+  computeDueDate,
   cutOffCustomer,
+  formatDateOnly,
   getBillingOverview,
   getBillingPlan,
   getBillingSettings,
   listBillingPlans,
+  parseDueMoment,
   recordPayment,
+  removeAccountCutoff,
   runCutoffSweep,
   saveBillingSettings,
+  scheduleAccountCutoff,
 } from '../services/pppBilling';
 
 const router = Router();
@@ -68,6 +73,26 @@ router.get('/router/:routerId/customers', (_req: Request, res: Response) => {
 });
 
 
+/**
+ * Accept what a browser date/time input actually sends (`2026-11-22T14:30`) as
+ * well as a bare day, and store it the way the billing code reads it. The wall
+ * time is kept by string, never by Date arithmetic, so a picker set to 23:59
+ * cannot drift an hour because of a timezone.
+ */
+function normalizeDateTime(value: any): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const raw = String(value).trim().replace('T', ' ');
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ ](\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(raw);
+  if (!match) return null;
+  const day = `${match[1]}-${match[2]}-${match[3]}`;
+  if (!parseDueMoment(day)) return null;
+  if (match[4] === undefined) return day;
+  const hour = Math.min(23, parseInt(match[4], 10));
+  const minute = Math.min(59, parseInt(match[5], 10));
+  return `${day} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+
 router.post('/router/:routerId/customers', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -75,18 +100,18 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       name,
       username,
       password,
+      planId,
+      installDate,
+      dueDate,
       profile,
       service,
       localAddress,
       remoteAddress,
-      uptimeLimit,
-      bytesInQuota,
-      bytesOutQuota,
       comment,
     } = req.body;
 
-    if (!name || !username || !password || !profile) {
-      res.status(400).json({ error: 'Name, username, password, and profile are required' });
+    if (!name || !username || !password) {
+      res.status(400).json({ error: 'Name, username and password are required' });
       return;
     }
 
@@ -101,6 +126,39 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       return;
     }
 
+    // The speed comes from the billing plan, which already binds a PPPoE profile
+    // carrying the rate-limit - which is why the customer form has no profile box.
+    let plan = null as ReturnType<typeof getBillingPlan>;
+    if (planId !== undefined && planId !== null && planId !== '' && Number(planId) !== 0) {
+      plan = getBillingPlan(routerId, Number(planId));
+      if (!plan) {
+        res.status(400).json({ error: 'Pick a billing plan that exists on this router' });
+        return;
+      }
+    }
+    const effectiveProfile = String(plan?.pppoe_profile || profile || '').trim();
+    if (!effectiveProfile) {
+      res.status(400).json({ error: 'A billing plan (or a PPPoE profile) is required so the subscriber gets a speed' });
+      return;
+    }
+
+    const install = normalizeDateTime(installDate);
+    if (installDate && !install) {
+      res.status(400).json({ error: 'Installation date is not a valid date' });
+      return;
+    }
+    let due = normalizeDateTime(dueDate);
+    if (dueDate && !due) {
+      res.status(400).json({ error: 'Next due date is not a valid date and time' });
+      return;
+    }
+
+    const settings = getBillingSettings(routerId);
+    if (!due && plan) {
+      // No explicit due date: give them the plan's own cycle from today.
+      due = formatDateOnly(computeDueDate({ anchorDate: null, settings, cycleDays: plan.cycle_days }).due);
+    }
+
     let secretOnRouter = false;
     if (mikroTikService.isConnected(routerId)) {
       try {
@@ -109,7 +167,7 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
         await mikroTikService.createPppSecret(routerId, {
           name: username,
           password,
-          profile,
+          profile: effectiveProfile,
           service: service || 'pppoe',
           localAddress,
           remoteAddress,
@@ -126,22 +184,23 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
 
     try {
       db.prepare(
-        `INSERT INTO ppp_customers (router_id, name, username, password, profile, service, local_address, remote_address, uptime_limit, bytes_in_quota, bytes_out_quota, comment, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO ppp_customers (router_id, name, username, password, profile, service, local_address, remote_address, comment, source, plan_id, due_date, install_date, billing_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         routerId,
         name,
         username,
         password,
-        profile,
+        effectiveProfile,
         service || 'pppoe',
         localAddress || null,
         remoteAddress || null,
-        uptimeLimit || '00:00:00',
-        bytesInQuota || 0,
-        bytesOutQuota || 0,
         comment || null,
-        source
+        source,
+        plan?.id ?? null,
+        due,
+        install,
+        due ? 'active' : 'unbilled',
       );
     } catch (error: any) {
       // The login already exists on the router; keeping it while the panel has
@@ -157,7 +216,22 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       throw error;
     }
 
-    res.status(201).json({ message: 'PPP customer created successfully' });
+    // Arm this account's own cut-off timer on the router, so the subscriber is
+    // moved to the non-payment profile at their due moment even if the panel is
+    // down when it arrives.
+    const created = db.prepare('SELECT id FROM ppp_customers WHERE router_id = ? AND username = ?').get(routerId, username) as any;
+    const job = await scheduleAccountCutoff(routerId, username, due, settings);
+    if (job.scheduledAt && created?.id) {
+      db.prepare("UPDATE ppp_customers SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(job.scheduledAt, created.id);
+    }
+
+    res.status(201).json({
+      message: `PPP customer created${job.scheduledAt ? `, cut-off armed on the router for ${job.scheduledAt}` : ''}`,
+      scheduledAt: job.scheduledAt,
+      dueDate: due,
+      profile: effectiveProfile,
+      warning: job.error || (secretOnRouter ? undefined : 'router was offline: the login was saved in the panel only'),
+    });
   } catch (error: any) {
     console.error('Create PPP customer error:', error);
     res.status(500).json({ error: error.message });
@@ -173,13 +247,13 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       name,
       username,
       password,
+      planId,
+      installDate,
+      dueDate,
       profile,
       service,
       localAddress,
       remoteAddress,
-      uptimeLimit,
-      bytesInQuota,
-      bytesOutQuota,
       comment,
     } = req.body;
 
@@ -195,6 +269,33 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       return;
     }
 
+    // Same rule as the create form: picking a plan decides the speed.
+    let plan = null as ReturnType<typeof getBillingPlan>;
+    if (planId !== undefined && planId !== null && planId !== '' && Number(planId) !== 0) {
+      plan = getBillingPlan(routerId, Number(planId));
+      if (!plan) {
+        res.status(400).json({ error: 'Pick a billing plan that exists on this router' });
+        return;
+      }
+    }
+    const nextProfile = String(plan?.pppoe_profile || profile || customer.profile || '').trim();
+
+    const installProvided = installDate !== undefined && installDate !== null;
+    const install = installProvided ? normalizeDateTime(installDate) : null;
+    if (installProvided && String(installDate).trim() !== '' && !install) {
+      res.status(400).json({ error: 'Installation date is not a valid date' });
+      return;
+    }
+    const dueProvided = dueDate !== undefined && dueDate !== null;
+    const due = dueProvided ? normalizeDateTime(dueDate) : null;
+    if (dueProvided && String(dueDate).trim() !== '' && !due) {
+      res.status(400).json({ error: 'Next due date is not a valid date and time' });
+      return;
+    }
+    // Pushing the due date out is the operator saying "they have paid me": the
+    // record stops being flagged as overdue. Pulling it back does not fake a cut-off.
+    const nextStatus = due && parseDueMoment(due) && parseDueMoment(due)! > new Date() ? 'active' : customer.billing_status;
+
     if (mikroTikService.isConnected(routerId)) {
       try {
         if (newUsername !== customer.username) {
@@ -205,7 +306,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
           await mikroTikService.createPppSecret(routerId, {
             name: newUsername,
             password: password || customer.password,
-            profile: profile || customer.profile,
+            profile: nextProfile,
             service: service || customer.service || 'pppoe',
             localAddress: localAddress ?? customer.local_address,
             remoteAddress: remoteAddress ?? customer.remote_address,
@@ -215,7 +316,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
           // Everything else is a plain set on the existing login.
           const changes: Array<[string, string]> = [];
           if (password && password !== customer.password) changes.push(['password', password]);
-          if (profile && profile !== customer.profile) changes.push(['profile', profile]);
+          if (nextProfile && nextProfile !== customer.profile) changes.push(['profile', nextProfile]);
           if (service && service !== customer.service) changes.push(['service', service]);
           if (localAddress !== undefined) changes.push(['local-address', localAddress || '']);
           if (remoteAddress !== undefined) changes.push(['remote-address', remoteAddress || '']);
@@ -225,7 +326,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
           }
           // A running session keeps the profile it authenticated with, so a
           // speed change only takes effect after a reconnect.
-          if (profile && profile !== customer.profile) {
+          if (nextProfile && nextProfile !== customer.profile) {
             await mikroTikService.disconnectPppSession(routerId, customer.username);
           }
         }
@@ -239,19 +340,37 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       `UPDATE ppp_customers
        SET name = COALESCE(?, name), username = COALESCE(?, username), password = COALESCE(?, password),
            profile = COALESCE(?, profile), service = COALESCE(?, service), local_address = COALESCE(?, local_address),
-           remote_address = COALESCE(?, remote_address), uptime_limit = COALESCE(?, uptime_limit),
-           bytes_in_quota = COALESCE(?, bytes_in_quota), bytes_out_quota = COALESCE(?, bytes_out_quota),
-           comment = COALESCE(?, comment), updated_at = datetime('now')
+           remote_address = COALESCE(?, remote_address), comment = COALESCE(?, comment),
+           plan_id = COALESCE(?, plan_id),
+           install_date = CASE WHEN ? = 1 THEN ? ELSE install_date END,
+           due_date = CASE WHEN ? = 1 THEN ? ELSE due_date END,
+           billing_status = COALESCE(?, billing_status),
+           updated_at = datetime('now')
        WHERE id = ? AND router_id = ?`
     ).run(
-      name ?? null, username ?? null, password ?? null, profile ?? null, service ?? null,
-      localAddress ?? null, remoteAddress ?? null,
-      uptimeLimit ?? null, bytesInQuota ?? null, bytesOutQuota ?? null,
-      comment ?? null,
+      name ?? null, username ?? null, password ?? null, nextProfile || null, service ?? null,
+      localAddress ?? null, remoteAddress ?? null, comment ?? null,
+      plan?.id ?? null,
+      installProvided ? 1 : 0, install,
+      dueProvided ? 1 : 0, due,
+      nextStatus ?? null,
       customerId, routerId
     );
 
-    res.json({ message: 'PPP customer updated successfully' });
+    const saved = db.prepare('SELECT due_date FROM ppp_customers WHERE id = ?').get(customerId) as any;
+    let scheduledAt: string | null = null;
+    let scheduleError: string | undefined;
+    if (dueProvided || plan || nextProfile !== customer.profile) {
+      // The timer belongs to the account, so renaming the login or moving the
+      // due date has to move the timer with it.
+      if (newUsername !== customer.username) await removeAccountCutoff(routerId, customer.username);
+      const job = await scheduleAccountCutoff(routerId, newUsername, saved?.due_date, getBillingSettings(routerId));
+      scheduledAt = job.scheduledAt;
+      scheduleError = job.error;
+      db.prepare("UPDATE ppp_customers SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(job.scheduledAt, customerId);
+    }
+
+    res.json({ message: 'PPP customer updated successfully', scheduledAt, warning: scheduleError });
   } catch (error: any) {
     console.error('Update PPP customer error:', error);
     res.status(500).json({ error: error.message });
@@ -282,6 +401,8 @@ router.delete('/router/:routerId/customers/:customerId', async (req: Request, re
           return;
         }
       }
+      // A timer left behind would fire against a login that no longer exists.
+      await removeAccountCutoff(routerId, customer.username);
     }
 
     db.prepare('DELETE FROM ppp_customers WHERE id = ? AND router_id = ?').run(customerId, routerId);
@@ -671,6 +792,45 @@ router.delete('/router/:routerId/pppoe-servers/:serverId', async (req: Request, 
 
 // --- Pickers for the sub-pages (profiles and interfaces come from the router) ---
 
+// RouterOS keeps PPPoE profiles in /ppp/profile and nowhere else, so the panel
+// never mirrors them: the list is read live and enriched with who is using each
+// one, because a profile with subscribers behind it must not be edited blindly.
+function parseRateLimit(value: any): { rx: string; tx: string } {
+  const raw = String(value || '').trim();
+  if (!raw) return { rx: '', tx: '' };
+  const [rx, tx] = raw.split('/');
+  return { rx: rx || '', tx: tx || rx || '' };
+}
+
+function profileUsage(db: ReturnType<typeof getDb>, routerId: number) {
+  const customers = db
+    .prepare('SELECT profile, COUNT(*) AS n FROM ppp_customers WHERE router_id = ? GROUP BY profile')
+    .all(routerId) as any[];
+  const plans = db.prepare('SELECT name, pppoe_profile FROM billing_plans WHERE router_id = ?').all(routerId) as any[];
+  const servers = db.prepare('SELECT name, default_profile FROM pppoe_servers WHERE router_id = ?').all(routerId) as any[];
+
+  const byProfile = new Map<string, { customers: number; plans: string[]; servers: string[] }>();
+  const entry = (profile: string) => {
+    const key = String(profile || '').trim();
+    if (!key) return null;
+    if (!byProfile.has(key)) byProfile.set(key, { customers: 0, plans: [], servers: [] });
+    return byProfile.get(key)!;
+  };
+  for (const row of customers) {
+    const slot = entry(row.profile);
+    if (slot) slot.customers += Number(row.n || 0);
+  }
+  for (const row of plans) {
+    const slot = entry(row.pppoe_profile);
+    if (slot) slot.plans.push(row.name);
+  }
+  for (const row of servers) {
+    const slot = entry(row.default_profile);
+    if (slot) slot.servers.push(row.name);
+  }
+  return byProfile;
+}
+
 router.get('/router/:routerId/ppp-profiles', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -678,10 +838,271 @@ router.get('/router/:routerId/ppp-profiles', async (req: Request, res: Response)
       res.json([]);
       return;
     }
-    const profiles = await mikroTikService.getPppProfiles(routerId);
-    res.json(Array.isArray(profiles) ? profiles : []);
+
+    const [profiles, secrets] = await Promise.all([
+      mikroTikService.getPppProfiles(routerId),
+      mikroTikService.getPppSecrets(routerId).catch(() => [] as any[]),
+    ]);
+    const db = getDb();
+    const usage = profileUsage(db, routerId);
+    const secretCounts = new Map<string, number>();
+    for (const secret of Array.isArray(secrets) ? secrets : []) {
+      const profile = String(secret.profile || '').trim();
+      if (profile) secretCounts.set(profile, (secretCounts.get(profile) || 0) + 1);
+    }
+
+    res.json(
+      (Array.isArray(profiles) ? profiles : []).map((p: any) => {
+        const { rx, tx } = parseRateLimit(p['rate-limit']);
+        const slot = usage.get(String(p.name || '')) || { customers: 0, plans: [], servers: [] };
+        const secretCount = secretCounts.get(String(p.name || '')) || 0;
+        return {
+          id: p['.id'],
+          name: p.name,
+          rate_limit: String(p['rate-limit'] || ''),
+          rx_limit: rx,
+          tx_limit: tx,
+          local_address: String(p['local-address'] || ''),
+          remote_address: String(p['remote-address'] || ''),
+          only_one: String(p['only-one'] || 'default'),
+          change_tcp_mss: String(p['change-tcp-mss'] || 'default'),
+          use_ipv6: String(p['use-ipv6'] || 'default'),
+          use_encryption: String(p['use-encryption'] || 'default'),
+          // default=true is a profile RouterOS shipped with; deleting it is not offered.
+          built_in: String(p.default) === 'true',
+          secrets: secretCount,
+          customers: slot.customers,
+          plans: slot.plans,
+          servers: slot.servers,
+          in_use: secretCount > 0 || slot.customers > 0 || slot.plans.length > 0 || slot.servers.length > 0,
+        };
+      }),
+    );
   } catch (error: any) {
     console.error('Get PPP profiles error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// A profile name ends up inside RouterOS scripts and every secret refers to it
+// by that text, so it is validated on the way in rather than repaired later.
+function validProfileName(name: any): string | null {
+  const value = String(name || '').trim();
+  if (!value) return 'A profile name is required';
+  if (value.length > 63) return 'Profile name is too long (63 characters max)';
+  if (/["'\\;|&`$>\n\r]/.test(value)) return 'Profile name cannot contain quotes, backslashes or shell characters';
+  return null;
+}
+
+/**
+ * Build the RouterOS property set from the panel form. Only keys the caller
+ * actually sent are included - the edit path relies on that so `set` never
+ * touches a property the operator did not change.
+ */
+function profileParams(body: any, { forCreate }: { forCreate: boolean }): Record<string, any> {
+  const data: Record<string, any> = {};
+
+  if (body.name !== undefined) data.name = String(body.name).trim();
+
+  if (body.rateLimit !== undefined) {
+    // "10M" is how an operator writes a symmetrical cap; RouterOS wants rx/tx.
+    const raw = String(body.rateLimit).trim();
+    if (!raw) {
+      // Clearing works on an existing profile, but an add with an empty
+      // rate-limit is not something RouterOS was ever asked for here.
+      if (!forCreate) data['rate-limit'] = '';
+    } else if (raw.includes('/')) data['rate-limit'] = raw;
+    else data['rate-limit'] = `${raw}/${raw}`;
+  }
+
+  // Proven on the hEX: an address can only be set to a real address or pool. An
+  // empty value gets "ambiguous value of pool" and RouterOS' own default token
+  // gets "input does not match any value of pool", so a blank is treated as
+  // "not specified" - the create falls back to the RouterOS default and an edit
+  // simply keeps whatever the profile already has.
+  const local = String(body.localAddress ?? '').trim();
+  if (body.localAddress !== undefined && local) data['local-address'] = local;
+  const remote = String(body.remoteAddress ?? '').trim();
+  if (body.remoteAddress !== undefined && remote) data['remote-address'] = remote;
+
+  const switches: Array<[string, string]> = [
+    ['onlyOne', 'only-one'],
+    ['changeTcpMss', 'change-tcp-mss'],
+    ['useIpv6', 'use-ipv6'],
+    ['useEncryption', 'use-encryption'],
+  ];
+  for (const [from, to] of switches) {
+    if (body[from] !== undefined && body[from] !== null && body[from] !== '') data[to] = String(body[from]);
+  }
+
+  if (forCreate && data['use-ipv6'] === undefined) data['use-ipv6'] = 'no';
+  return data;
+}
+
+router.post('/router/:routerId/ppp-profiles', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const nameError = validProfileName(req.body.name);
+    if (nameError) {
+      res.status(400).json({ error: nameError });
+      return;
+    }
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const name = String(req.body.name).trim();
+    const existing = await mikroTikService.getPppProfiles(routerId);
+    if ((Array.isArray(existing) ? existing : []).some((p: any) => p.name === name)) {
+      res.status(409).json({ error: `The router already has a profile called ${name}` });
+      return;
+    }
+
+    const data = profileParams(req.body, { forCreate: true });
+    try {
+      await mikroTikService.createPppProfile(routerId, data);
+    } catch (err) {
+      res.status(502).json({ error: `Router rejected the profile: ${(err as Error).message}` });
+      return;
+    }
+
+    res.status(201).json({ message: `Profile ${name} created on the router`, rate_limit: data['rate-limit'] || '' });
+  } catch (error: any) {
+    console.error('Create PPP profile error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function findProfile(routerId: number, name: string): Promise<any | null> {
+  const profiles = await mikroTikService.getPppProfiles(routerId);
+  return (Array.isArray(profiles) ? profiles : []).find((p: any) => p.name === name) || null;
+}
+
+router.put('/router/:routerId/ppp-profiles/:profileName', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileName = decodeURIComponent(req.params.profileName);
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const profile = await findProfile(routerId, profileName);
+    if (!profile?.['.id']) {
+      res.status(404).json({ error: `No profile called ${profileName} on the router` });
+      return;
+    }
+
+    const rename = req.body.name !== undefined && String(req.body.name).trim() !== profileName;
+    if (rename) {
+      // Secrets point at a profile by name, so a rename silently strands every
+      // subscriber on it. They have to change the plan or the profile instead.
+      res.status(400).json({ error: 'A profile cannot be renamed: subscribers refer to it by name. Create the new one and move the plans across.' });
+      return;
+    }
+
+    const data = profileParams(req.body, { forCreate: false });
+    delete data.name;
+    if (Object.keys(data).length === 0) {
+      res.status(400).json({ error: 'Nothing to change' });
+      return;
+    }
+
+    try {
+      await mikroTikService.updatePppProfile(routerId, profile['.id'], data);
+    } catch (err) {
+      res.status(502).json({ error: `Router rejected the change: ${(err as Error).message}` });
+      return;
+    }
+
+    // A profile change is a speed change, and a running session keeps the limits
+    // it authenticated with, so the live sessions on it have to reconnect.
+    const reconnected = data['rate-limit'] !== undefined
+      ? await disconnectProfileSessions(routerId, profileName)
+      : 0;
+
+    res.json({ message: `Profile ${profileName} updated on the router`, reconnected });
+  } catch (error: any) {
+    console.error('Update PPP profile error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function disconnectProfileSessions(routerId: number, profileName: string): Promise<number> {
+  try {
+    const [secrets, sessions] = await Promise.all([
+      mikroTikService.getPppSecrets(routerId),
+      mikroTikService.getPppActive(routerId),
+    ]);
+    const onProfile = new Set(
+      (Array.isArray(secrets) ? secrets : [])
+        .filter((s: any) => String(s.profile || '') === profileName)
+        .map((s: any) => String(s.name || '')),
+    );
+    let dropped = 0;
+    for (const session of Array.isArray(sessions) ? sessions : []) {
+      if (!onProfile.has(String(session.name || ''))) continue;
+      try {
+        await mikroTikService.removePppActive(routerId, session['.id']);
+        dropped++;
+      } catch (err) {
+        console.error(`Could not drop ${session.name} after the profile change:`, (err as Error).message);
+      }
+    }
+    return dropped;
+  } catch (err) {
+    // Nobody loses money over a reconnect that did not happen.
+    console.error('disconnectProfileSessions failed:', (err as Error).message);
+    return 0;
+  }
+}
+
+router.delete('/router/:routerId/ppp-profiles/:profileName', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+    const profileName = decodeURIComponent(req.params.profileName);
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const profile = await findProfile(routerId, profileName);
+    if (!profile?.['.id']) {
+      res.json({ message: `Profile ${profileName} is not on the router anymore`, gone: true });
+      return;
+    }
+    if (String(profile.default) === 'true') {
+      res.status(400).json({ error: `${profileName} is a built-in RouterOS profile and cannot be deleted` });
+      return;
+    }
+
+    const secrets = await mikroTikService.getPppSecrets(routerId).catch(() => [] as any[]);
+    const using = (Array.isArray(secrets) ? secrets : []).filter((s: any) => String(s.profile || '') === profileName);
+    const slot = profileUsage(getDb(), routerId).get(profileName);
+    if (using.length > 0 || (slot && (slot.customers > 0 || slot.plans.length > 0 || slot.servers.length > 0))) {
+      const who = [
+        using.length > 0 ? `${using.length} router login(s)` : '',
+        slot?.customers ? `${slot.customers} customer record(s)` : '',
+        slot?.plans.length ? `billing plan(s): ${slot.plans.join(', ')}` : '',
+        slot?.servers.length ? `PPPoE server default(s): ${slot.servers.join(', ')}` : '',
+      ].filter(Boolean).join('; ');
+      // Deleting a profile that is handed out would drop those subscribers onto
+      // RouterOS defaults, which is never what the operator meant.
+      res.status(409).json({ error: `Still in use - ${who}. Move them first, or edit this profile's speed instead.` });
+      return;
+    }
+
+    try {
+      await mikroTikService.removePppProfile(routerId, profile['.id']);
+    } catch (err) {
+      res.status(502).json({ error: `The router refused to delete the profile: ${(err as Error).message}` });
+      return;
+    }
+
+    res.json({ message: `Profile ${profileName} deleted from the router` });
+  } catch (error: any) {
+    console.error('Delete PPP profile error:', error);
     res.status(500).json({ error: error.message });
   }
 });

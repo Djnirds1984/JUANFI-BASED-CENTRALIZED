@@ -70,12 +70,83 @@ mt.setPppSecretAttribute = async (_routerId, name, attr, value) => {
   secret[attr] = value;
   return true;
 };
-mt.getPppActive = async () => activeSessions;
+// A real print hands back a fresh list every call, so the code under test cannot
+// be tripped up by its own removals shifting the array it is walking.
+mt.getPppActive = async () => activeSessions.map((s) => ({ ...s }));
 mt.removePppActive = async (_routerId, id) => {
   const index = activeSessions.findIndex((s) => s['.id'] === id);
   if (index >= 0) activeSessions.splice(index, 1);
 };
-mt.getPppProfiles = async () => [{ name: '10mbps' }, { name: 'non-payment' }, { name: 'default' }];
+// Profiles are the router's own data. The real ones on the hEX are `default`
+// (built-in), a rate-limited plan profile and the NON-PAYMENT one, so the mock
+// carries the same shape: kebab-case properties, a `.id`, and default=true on
+// the ones RouterOS shipped.
+let liveProfiles = [
+  { '.id': '*1', name: '10mbps', 'rate-limit': '10M/10M', 'local-address': '', 'remote-address': '', 'only-one': 'default', 'change-tcp-mss': 'default', 'use-ipv6': 'no', 'use-encryption': 'no', default: 'false' },
+  { '.id': '*2', name: 'non-payment', 'rate-limit': '1M/1M', 'local-address': '172.16.44.1', 'remote-address': 'NON-PAYMENT', 'only-one': 'default', 'change-tcp-mss': 'default', 'use-ipv6': 'no', 'use-encryption': 'no', default: 'false' },
+  { '.id': '*0', name: 'default', 'rate-limit': '', 'local-address': '', 'remote-address': '', default: 'true' },
+];
+// RouterOS has no way to un-set a profile address: an empty value answers
+// "ambiguous value of pool" and even its own default token is refused, so the
+// mock refuses them too and the panel is only allowed to send a real one.
+function routerRejectsBlankAddresses(data) {
+  for (const key of ['local-address', 'remote-address']) {
+    if (data[key] === '') throw new Error(`400 Bad Request - invalid value for argument ${key}: ambiguous value of pool, more than one possible value matches input`);
+  }
+}
+
+let nextProfileId = 10;
+mt.getPppProfiles = async () => liveProfiles.map((p) => ({ ...p }));
+mt.createPppProfile = async (_routerId, data) => {
+  if (!data.name) throw new Error('400 Bad Request - name is required');
+  if (liveProfiles.some((p) => p.name === data.name)) throw new Error('400 Bad Request - profile already exists');
+  routerRejectsBlankAddresses(data);
+  // RouterOS rejects a rate-limit it cannot parse, and `add` only takes what the
+  // menu actually has - there is no comment on a profile.
+  if (data['rate-limit'] && !/^\d+(\.\d+)?[kmgt]?(\/\d+(\.\d+)?[kmgt]?)?$/i.test(data['rate-limit'])) {
+    throw new Error(`400 Bad Request - failure parsing rate-limit '${data['rate-limit']}'`);
+  }
+  const entry = { '.id': `*${nextProfileId++}`, default: 'false', 'only-one': 'default', 'change-tcp-mss': 'default', 'use-ipv6': 'no', 'use-encryption': 'no', 'local-address': '', 'remote-address': '', 'rate-limit': '', ...data };
+  liveProfiles.push(entry);
+  return { ret: entry['.id'] };
+};
+mt.updatePppProfile = async (_routerId, id, data) => {
+  const entry = liveProfiles.find((p) => p['.id'] === id);
+  if (!entry) throw new Error(`400 Bad Request - no such entry ${id}`);
+  routerRejectsBlankAddresses(data);
+  Object.assign(entry, data);
+  return [];
+};
+mt.removePppProfile = async (_routerId, id) => {
+  const before = liveProfiles.length;
+  liveProfiles = liveProfiles.filter((p) => p['.id'] !== id);
+  if (liveProfiles.length === before) throw new Error(`400 Bad Request - no such entry ${id}`);
+  return {};
+};
+// /system/scheduler is where each account's own cut-off timer lives. A job with
+// a name that already exists is a set, not a second job, and one-shot jobs run
+// with interval=0s.
+const schedulerJobs = new Map();
+let nextJobId = 1;
+mt.getSchedulerJobs = async () => [...schedulerJobs.values()].map((j) => ({ ...j }));
+mt.setSchedulerJob = async (_routerId, job) => {
+  if (!job.name) throw new Error('400 Bad Request - name is required');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(job['start-date'] || ''))) {
+    throw new Error(`400 Bad Request - failure parsing start-date '${job['start-date']}'`);
+  }
+  if (!/^\d{2}:\d{2}:\d{2}$/.test(String(job['start-time'] || ''))) {
+    throw new Error(`400 Bad Request - failure parsing start-time '${job['start-time']}'`);
+  }
+  const existing = schedulerJobs.get(job.name);
+  if (existing) {
+    Object.assign(existing, job);
+    return { created: false, id: existing['.id'] };
+  }
+  const entry = { '.id': `*job${nextJobId++}`, disabled: 'false', ...job };
+  schedulerJobs.set(job.name, entry);
+  return { created: true, id: entry['.id'] };
+};
+mt.removeSchedulerJob = async (_routerId, name) => schedulerJobs.delete(name);
 // Link state, because RouterOS marks a PPPoE server invalid while its port has
 // no cable in it, and the panel has to tell that apart from a bad interface.
 const interfaceLinks = new Map([['bridge1', false], ['ether5', true], ['ether7', true]]);
@@ -784,6 +855,230 @@ test('profile picker comes from the router so plans can only bind to real profil
   const res = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`);
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.map((p) => p.name), ['10mbps', 'non-payment', 'default']);
+});
+
+// ---- the router's own cut-off timer ----------------------------------------
+// The panel sweep only runs while the panel is up, and a municipal box restarts
+// for updates, so each account also gets a /system/scheduler job of its own -
+// the same trick the reference Mikrotik-Billing-Manager uses, with the due
+// minute the operator picked kept all the way through.
+
+test('the due date keeps the minute the operator picked, not the global expiry time', () => {
+  const settings = { enabled: 1, grace_days: 2, expiry_time: '00:00', non_payment_profile: 'non-payment' };
+  const withClock = billing.expiryMoment('2026-12-01 23:59', settings);
+  assert.equal(withClock.getHours(), 23);
+  assert.equal(withClock.getMinutes(), 59);
+  // Two days of grace, then 23:59 is still the cut-off instant.
+  assert.equal(billing.formatDateTime(withClock), '2026-12-03 23:59:00');
+
+  // A bare day has no clock of its own, so expiry_time still decides.
+  const dayOnly = billing.expiryMoment('2026-12-01', settings);
+  assert.equal(billing.formatDateTime(dayOnly), '2026-12-03 00:00:00');
+});
+
+test('a renewal lands on the same clock the account was billed with', () => {
+  assert.equal(billing.formatDueKeepingClock('2026-11-30 23:59', new Date(2026, 11, 30)), '2026-12-30 23:59');
+  assert.equal(billing.formatDueKeepingClock('2026-11-30', new Date(2026, 11, 30)), '2026-12-30');
+});
+
+test(`creating a subscriber with a plan and a due date arms that account's timer on the router`, async () => {
+  billing.saveBillingSettings(ROUTER_ID, {
+    enabled: 1, cutoff_day: 1, grace_days: 0, expiry_time: '00:00', non_payment_profile: 'non-payment',
+  });
+  const jobsBefore = schedulerJobs.size;
+  const planId = makePlan('Fiber 10M monthly', 1200, 30, '10mbps');
+  const future = new Date(Date.now() + 20 * 86400000);
+  const dueDay = iso(future);
+
+  const created = await call(`/api/ppp/router/${ROUTER_ID}/customers`, {
+    method: 'POST',
+    body: {
+      name: 'Armed Juan',
+      username: 'armed-juan',
+      password: 'pw1234',
+      planId,
+      installDate: `${dueDay} 08:30`,
+      dueDate: `${dueDay} 23:59`,
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+
+  // The speed comes from the plan: the form never mentions a profile any more.
+  assert.equal(secrets.get('armed-juan').profile, '10mbps');
+  const row = db.prepare("SELECT * FROM ppp_customers WHERE username = 'armed-juan'").get();
+  assert.equal(row.plan_id, planId);
+  assert.equal(row.install_date, `${dueDay} 08:30`);
+  assert.equal(row.due_date, `${dueDay} 23:59`);
+  assert.equal(row.billing_status, 'active');
+  assert.equal(row.scheduled_at, `${dueDay} 23:59:00`);
+
+  const job = schedulerJobs.get('ppp-auto-kick-armed-juan');
+  assert.ok(job, 'one scheduler job per account');
+  assert.equal(job['start-date'], dueDay, 'RouterOS takes the ISO day the REST API accepts');
+  assert.equal(job['start-time'], '23:59:00');
+  assert.equal(job.interval, '0s', 'one-shot, so it does not fire again next month');
+  assert.match(job['on-event'], /\/ppp secret set \[find where name="armed-juan"\] profile="non-payment"/);
+  assert.match(job['on-event'], /\/ppp active remove \[find where name="armed-juan"\]/);
+
+  // Moving the due date re-arms the same job instead of stacking a second one,
+  // and deleting the account takes it off the router entirely.
+  const later = new Date(Date.now() + 50 * 86400000);
+  const moved = await call(`/api/ppp/router/${ROUTER_ID}/customers/${row.id}`, {
+    method: 'PUT', body: { dueDate: `${iso(later)} 09:15` },
+  });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(moved.body.scheduledAt, `${iso(later)} 09:15:00`);
+  const rearmed = schedulerJobs.get('ppp-auto-kick-armed-juan');
+  assert.equal(rearmed['.id'], job['.id'], 'the job is set, not recreated');
+  assert.equal(rearmed['start-date'], iso(later));
+  assert.equal(rearmed['start-time'], '09:15:00');
+  assert.equal(schedulerJobs.size, jobsBefore + 1, 'moving the date re-arms it, it does not add a second timer');
+
+  const removed = await call(`/api/ppp/router/${ROUTER_ID}/customers/${row.id}`, { method: 'DELETE' });
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(schedulerJobs.get('ppp-auto-kick-armed-juan'), undefined, 'no orphan timer left behind');
+});
+
+test(`a timer is never armed for a schedule that cannot fire or a router that is down`, async () => {
+  billing.saveBillingSettings(ROUTER_ID, {
+    enabled: 1, cutoff_day: 1, grace_days: 0, expiry_time: '00:00', non_payment_profile: 'non-payment',
+  });
+
+  // Already overdue: the sweep handles it, and a job with a past start-time
+  // would fire the instant RouterOS accepted it.
+  const past = await billing.scheduleAccountCutoff(ROUTER_ID, 'yesterday', `${iso(new Date(Date.now() - 86400000))} 10:00`, billing.getBillingSettings(ROUTER_ID));
+  assert.equal(past.scheduledAt, null);
+  assert.equal(past.skipped, 'already past');
+
+  const unbilled = await billing.scheduleAccountCutoff(ROUTER_ID, 'no-due', null, billing.getBillingSettings(ROUTER_ID));
+  assert.equal(unbilled.skipped, 'no due date');
+
+  const disabled = await billing.scheduleAccountCutoff(ROUTER_ID, 'off', '2099-01-01 08:00', { ...billing.getBillingSettings(ROUTER_ID), enabled: 0 });
+  assert.equal(disabled.skipped, 'billing disabled');
+
+  // The router refuses the job: the account is still created, but the panel says
+  // out loud that the on-router timer is missing.
+  const refused = mt.setSchedulerJob;
+  mt.setSchedulerJob = async () => { throw new Error('400 Bad Request - failure parsing start-date'); };
+  const result = await billing.scheduleAccountCutoff(ROUTER_ID, 'refused-juan', '2099-01-01 08:00', billing.getBillingSettings(ROUTER_ID));
+  mt.setSchedulerJob = refused;
+  assert.equal(result.ok, false);
+  assert.match(result.error, /failure parsing start-date/);
+  assert.equal(schedulerJobs.get('ppp-auto-kick-refused-juan'), undefined);
+});
+
+// ---- PPPoE profiles sub-page ------------------------------------------------
+
+test('profiles are read live from the router with who is using each one', async () => {
+  putSecret('someone-on-10mbps', '10mbps');
+  const res = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`);
+  assert.equal(res.status, 200);
+  const byName = Object.fromEntries(res.body.map((p) => [p.name, p]));
+
+  assert.equal(byName['10mbps'].rate_limit, '10M/10M');
+  assert.equal(byName['10mbps'].rx_limit, '10M');
+  assert.equal(byName['10mbps'].tx_limit, '10M');
+  assert.equal(byName['10mbps'].built_in, false);
+  assert.ok(byName['10mbps'].secrets >= 1);
+  assert.equal(byName['default'].built_in, true, 'RouterOS ships default and it must be marked');
+  assert.equal(byName['non-payment'].remote_address, 'NON-PAYMENT', 'the remote pool is a name, not a range');
+});
+
+test('a profile can be added from the panel and keeps every property it was not given', async () => {
+  const created = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`, {
+    method: 'POST',
+    body: { name: '20M', rateLimit: '20M', localAddress: '10.20.0.1', remoteAddress: 'PPPOE' },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const entry = liveProfiles.find((p) => p.name === '20M');
+  assert.ok(entry, 'the profile is on the router');
+  assert.equal(entry['rate-limit'], '20M/20M', 'one value means both directions');
+  assert.equal(entry['local-address'], '10.20.0.1');
+  assert.equal(entry['remote-address'], 'PPPOE');
+
+  // A speed edit is a set: the addresses the operator did not touch stay put. A
+  // PUT would replace the whole record and blank them.
+  const edited = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/20M`, {
+    method: 'PUT', body: { rateLimit: '30M/15M' },
+  });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(entry['rate-limit'], '30M/15M');
+  assert.equal(entry['local-address'], '10.20.0.1');
+  assert.equal(entry['remote-address'], 'PPPOE');
+
+  const clash = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`, {
+    method: 'POST', body: { name: '20M', rateLimit: '5M' },
+  });
+  assert.equal(clash.status, 409);
+
+  const renamed = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/20M`, {
+    method: 'PUT', body: { name: '30M' },
+  });
+  assert.equal(renamed.status, 400);
+  assert.match(renamed.body.error, /cannot be renamed/);
+
+  const junkName = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`, {
+    method: 'POST', body: { name: 'bad"name;reboot' },
+  });
+  assert.equal(junkName.status, 400, 'a name lands inside RouterOS scripts, so it is validated on the way in');
+
+  // The panel form always submits its text boxes, so a blank address arrives as
+  // ''. RouterOS would answer "ambiguous value of pool" to that, which is why
+  // the API drops it instead of forwarding it.
+  const blankAddress = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles`, {
+    method: 'POST',
+    body: { name: '512k', rateLimit: '512k', localAddress: '', remoteAddress: '', onlyOne: 'default', changeTcpMss: 'default', useIpv6: 'default', useEncryption: 'default' },
+  });
+  assert.equal(blankAddress.status, 201, JSON.stringify(blankAddress.body));
+  const made = liveProfiles.find((p) => p.name === '512k');
+  assert.equal(made['rate-limit'], '512k/512k');
+  assert.equal(made['local-address'], '', 'nothing was pushed, so RouterOS keeps its own default');
+
+  // An edit that leaves the address box empty must not wipe a working pool.
+  const keptBlank = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/non-payment`, {
+    method: 'PUT', body: { rateLimit: '1M/1M', localAddress: '', remoteAddress: '' },
+  });
+  assert.equal(keptBlank.status, 200, JSON.stringify(keptBlank.body));
+  const slow = liveProfiles.find((p) => p.name === 'non-payment');
+  assert.equal(slow['local-address'], '172.16.44.1');
+  assert.equal(slow['remote-address'], 'NON-PAYMENT');
+
+  const clearedSpeed = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/512k`, {
+    method: 'PUT', body: { rateLimit: '' },
+  });
+  assert.equal(clearedSpeed.status, 200, JSON.stringify(clearedSpeed.body));
+  assert.equal(made['rate-limit'], '', 'an existing profile can have its cap removed');
+});
+
+test('a profile that is handed out or shipped by RouterOS cannot be deleted', async () => {
+  const builtIn = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/default`, { method: 'DELETE' });
+  assert.equal(builtIn.status, 400);
+  assert.match(builtIn.body.error, /built-in/);
+
+  // non-payment has a router login on it and is the billing cut-off profile.
+  const inUse = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/non-payment`, { method: 'DELETE' });
+  assert.equal(inUse.status, 409, JSON.stringify(inUse.body));
+  assert.ok(liveProfiles.some((p) => p.name === 'non-payment'), 'the operator\'s own profile survives');
+
+  const free = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/20M`, { method: 'DELETE' });
+  assert.equal(free.status, 200, JSON.stringify(free.body));
+  assert.equal(liveProfiles.some((p) => p.name === '20M'), false);
+
+  // Something deleted in Winbox is simply gone from the panel's next look.
+  const gone = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/no-longer-here`, { method: 'DELETE' });
+  assert.equal(gone.status, 200);
+  assert.equal(gone.body.gone, true);
+});
+
+test(`changing a profile's speed reconnects the subscribers still on the old cap`, async () => {
+  putSecret('live-on-10mbps', '10mbps');
+  activeSessions.push({ '.id': 'sess-live-on-10mbps', name: 'live-on-10mbps' });
+  const res = await call(`/api/ppp/router/${ROUTER_ID}/ppp-profiles/10mbps`, {
+    method: 'PUT', body: { rateLimit: '15M/15M' },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.ok(res.body.reconnected >= 1);
+  assert.equal(activeSessions.some((s) => s.name === 'live-on-10mbps'), false, 'RouterOS only reads the limit when the session connects');
 });
 
 test('the billing routes are behind authentication', async () => {

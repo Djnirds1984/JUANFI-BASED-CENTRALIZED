@@ -68,6 +68,30 @@ export function parseDateOnly(value: string | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+// A stored due date used to be a bare day. The customer form now captures the
+// exact instant a subscription runs out, so both shapes have to keep working:
+// date-only rows still fall back to the configured expiry time.
+const CLOCK_PATTERN = /[T ](\d{1,2}):(\d{2})/;
+
+/** Parse `YYYY-MM-DD` or `YYYY-MM-DD HH:MM(:SS)` into a local Date. */
+export function parseDueMoment(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (!day) return null;
+  const clock = CLOCK_PATTERN.exec(raw);
+  const date = new Date(
+    parseInt(day[1]),
+    parseInt(day[2]) - 1,
+    parseInt(day[3]),
+    clock ? parseInt(clock[1], 10) : 0,
+    clock ? parseInt(clock[2], 10) : 0,
+    0,
+    0,
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export function formatDateOnly(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -75,10 +99,36 @@ export function formatDateOnly(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+/** `YYYY-MM-DD HH:MM:SS` - what the panel stores and what RouterOS is fed. */
+export function formatDateTime(date: Date): string {
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+  return `${formatDateOnly(date)} ${time}`;
+}
+
 export function addDays(date: Date, days: number): Date {
   const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   next.setDate(next.getDate() + days);
   return next;
+}
+
+/** Whole-day shift that keeps the clock time the operator picked. */
+export function addDaysKeepingTime(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+/**
+ * Render a newly computed due date. A customer whose subscription was timed to
+ * the minute keeps that minute through every renewal; a plain day stays a plain
+ * day so the cut-off still follows the configured expiry time.
+ */
+export function formatDueKeepingClock(previousDue: string | null | undefined, next: Date): string {
+  const clock = CLOCK_PATTERN.exec(String(previousDue || ''));
+  if (!clock) return formatDateOnly(next);
+  // Kept as text on purpose: the minute the operator picked survives the renewal
+  // untouched, and the stored shape stays exactly what the picker sent.
+  return `${formatDateOnly(next)} ${String(parseInt(clock[1], 10)).padStart(2, '0')}:${clock[2]}`;
 }
 
 /** The cut-off date inside the month `date` belongs to. */
@@ -133,16 +183,20 @@ export function computeDueDate(opts: {
   return { due, anchor };
 }
 
-/** When a paid period really ends: due date + grace days, at the configured hour. */
+/** When a paid period really ends: due date + grace days, at the picked hour. */
 export function expiryMoment(
   dueDate: string,
   settings: Pick<BillingSettings, 'grace_days' | 'expiry_time'>
 ): Date | null {
-  const due = parseDateOnly(dueDate);
+  const due = parseDueMoment(dueDate);
   if (!due) return null;
-  const moment = addDays(due, Math.max(0, Math.round(settings.grace_days) || 0));
-  const [hour, minute] = String(settings.expiry_time || '00:00').split(':').map((v) => parseInt(v, 10));
-  moment.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0);
+  const moment = addDaysKeepingTime(due, Math.max(0, Math.round(settings.grace_days) || 0));
+  // A due date the operator timed to the minute owns its own clock; a bare day
+  // (everything billed before this, plus plan auto-renewals) uses the setting.
+  if (!CLOCK_PATTERN.test(String(dueDate || ''))) {
+    const [hour, minute] = String(settings.expiry_time || '00:00').split(':').map((v) => parseInt(v, 10));
+    moment.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0);
+  }
   return moment;
 }
 
@@ -264,6 +318,92 @@ async function stampSecretComment(routerId: number, username: string, plan: Bill
   }
 }
 
+// ---------------------------------------------------------------- per-account cut-off timer
+
+/**
+ * RouterOS runs a /system/scheduler job on its own clock, so a subscription that
+ * ends at 23:59 is cut off at 23:59 even when the panel is offline, restarting or
+ * mid-deploy. The panel-side sweep stays as the backstop for the routers we could
+ * not reach while the job was being written.
+ */
+export const ACCOUNT_JOB_PREFIX = 'ppp-auto-kick-';
+
+export function accountJobName(username: string): string {
+  return `${ACCOUNT_JOB_PREFIX}${String(username || '').slice(0, 48)}`;
+}
+
+/** RouterOS scripts have no escape syntax worth using, so strip what would break out of the quotes. */
+function scriptSafe(value: string): string {
+  return String(value || '').replace(/["\\\r\n]/g, '').slice(0, 63);
+}
+
+/** The on-event body: slow the login down, then drop the live session so it bites now. */
+export function buildCutoffScript(username: string, profile: string): string {
+  const user = scriptSafe(username);
+  const lines = [`/log info message="AIRCOINS cut-off: ${user}"`];
+  if (profile) {
+    lines.push(`/ppp secret set [find where name="${user}"] profile="${scriptSafe(profile)}"`);
+  }
+  lines.push(`:do { /ppp active remove [find where name="${user}"] } on-error={}`);
+  return lines.join('\n');
+}
+
+export interface ScheduleResult {
+  ok: boolean;
+  scheduledAt: string | null;
+  skipped?: 'billing disabled' | 'no due date' | 'already past' | 'router not connected';
+  error?: string;
+}
+
+/**
+ * Arm the router timer for one account. Returns the instant the job will fire so
+ * the caller can store it next to the customer and show it in the table.
+ */
+export async function scheduleAccountCutoff(
+  routerId: number,
+  username: string,
+  dueDate: string | null | undefined,
+  settings: Pick<BillingSettings, 'enabled' | 'grace_days' | 'expiry_time' | 'non_payment_profile'>,
+  now: Date = new Date()
+): Promise<ScheduleResult> {
+  if (Number(settings.enabled) !== 1) {
+    return { ok: true, scheduledAt: null, skipped: 'billing disabled' };
+  }
+  const moment = dueDate ? expiryMoment(dueDate, settings) : null;
+  if (!moment) return { ok: true, scheduledAt: null, skipped: 'no due date' };
+  if (moment <= now) return { ok: true, scheduledAt: null, skipped: 'already past' };
+
+  if (!mikroTikService.isConnected(routerId)) {
+    return { ok: false, scheduledAt: null, skipped: 'router not connected', error: 'router not connected' };
+  }
+
+  try {
+    await mikroTikService.setSchedulerJob(routerId, {
+      name: accountJobName(username),
+      'start-date': formatDateOnly(moment),
+      'start-time': moment.toTimeString().slice(0, 8),
+      interval: '0s',
+      'on-event': buildCutoffScript(username, settings.non_payment_profile),
+    });
+    return { ok: true, scheduledAt: formatDateTime(moment) };
+  } catch (err) {
+    // A timer the router refused is worth reporting but never worth failing a
+    // payment over: the sweep still cuts the account off.
+    return { ok: false, scheduledAt: null, error: (err as Error).message };
+  }
+}
+
+/** Disarm the router timer for one account (deleted subscriber or finished cut-off). */
+export async function removeAccountCutoff(routerId: number, username: string): Promise<boolean> {
+  try {
+    if (!mikroTikService.isConnected(routerId)) return false;
+    return await mikroTikService.removeSchedulerJob(routerId, accountJobName(username));
+  } catch (err) {
+    console.error(`[billing] could not remove the cut-off job for ${username} on router ${routerId}:`, (err as Error).message);
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- customer billing
 
 export interface BillingResult {
@@ -278,6 +418,7 @@ export interface BillingResult {
   amount: number;
   routerSynced: boolean;
   disconnected: boolean;
+  scheduledAt?: string | null;
   warning?: string;
 }
 
@@ -307,17 +448,18 @@ export async function assignPlan(
     cycles: opts.cycles || 1,
     today: opts.today,
   });
-  const dueDate = formatDateOnly(due);
+  const dueDate = formatDueKeepingClock(customer.due_date, due);
 
   const routerResult = await applyProfileOnRouter(routerId, customer.username, plan.pppoe_profile);
   await stampSecretComment(routerId, customer.username, plan, dueDate);
+  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, settings);
 
   db.prepare(
     `UPDATE ppp_customers
      SET plan_id = ?, profile = ?, due_date = ?, billing_status = 'active',
-         original_profile = NULL, updated_at = datetime('now')
+         original_profile = NULL, scheduled_at = ?, updated_at = datetime('now')
      WHERE id = ? AND router_id = ?`
-  ).run(plan.id, plan.pppoe_profile, dueDate, customerId, routerId);
+  ).run(plan.id, plan.pppoe_profile, dueDate, job.scheduledAt, customerId, routerId);
 
   return {
     customerId,
@@ -331,7 +473,8 @@ export async function assignPlan(
     amount: 0,
     routerSynced: routerResult.synced,
     disconnected: routerResult.disconnected,
-    warning: describeRouterFailure(routerResult),
+    scheduledAt: job.scheduledAt,
+    warning: job.error || describeRouterFailure(routerResult),
   };
 }
 
@@ -372,11 +515,13 @@ export async function recordPayment(
     cycles,
     today: input.today,
   });
-  const dueDate = formatDateOnly(due);
+  const dueDate = formatDueKeepingClock(customer.due_date, due);
   const amount = input.amount === null || input.amount === undefined ? plan.price * cycles : Number(input.amount);
 
   const routerResult = await applyProfileOnRouter(routerId, customer.username, plan.pppoe_profile);
   await stampSecretComment(routerId, customer.username, plan, dueDate);
+  // A payment is also a re-arm: the router timer moves out to the new expiry.
+  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, settings);
 
   const insertPayment = db.prepare(
     `INSERT INTO ppp_payments (router_id, customer_id, plan_id, amount, cycle_days, payment_method, reference, due_before, due_after, recorded_by, note)
@@ -385,7 +530,7 @@ export async function recordPayment(
   const updateCustomer = db.prepare(
     `UPDATE ppp_customers
      SET plan_id = ?, profile = ?, due_date = ?, billing_status = 'active',
-         original_profile = NULL, last_paid_at = datetime('now'), updated_at = datetime('now')
+         original_profile = NULL, scheduled_at = ?, last_paid_at = datetime('now'), updated_at = datetime('now')
      WHERE id = ? AND router_id = ?`
   );
   db.transaction(() => {
@@ -402,7 +547,7 @@ export async function recordPayment(
       input.recordedBy || '',
       input.note ?? null,
     );
-    updateCustomer.run(plan.id, plan.pppoe_profile, dueDate, customerId, routerId);
+    updateCustomer.run(plan.id, plan.pppoe_profile, dueDate, job.scheduledAt, customerId, routerId);
   })();
 
   return {
@@ -417,7 +562,8 @@ export async function recordPayment(
     amount,
     routerSynced: routerResult.synced,
     disconnected: routerResult.disconnected,
-    warning: describeRouterFailure(routerResult),
+    scheduledAt: job.scheduledAt,
+    warning: job.error || describeRouterFailure(routerResult),
   };
 }
 
@@ -453,10 +599,13 @@ export async function cutOffCustomer(
   // Only flip the status when the router actually took the new profile: a
   // router that is offline right now must be retried on the next sweep.
   if (routerResult.synced) {
+    // The account's own timer has done its job (or been overtaken by the sweep);
+    // taking it back off the router keeps /system/scheduler honest.
+    await removeAccountCutoff(routerId, customer.username);
     db.prepare(
       `UPDATE ppp_customers
        SET profile = ?, original_profile = COALESCE(original_profile, profile),
-           billing_status = 'cut-off', updated_at = datetime('now')
+           billing_status = 'cut-off', scheduled_at = NULL, updated_at = datetime('now')
        WHERE id = ? AND router_id = ?`
     ).run(profile, customerId, routerId);
   }

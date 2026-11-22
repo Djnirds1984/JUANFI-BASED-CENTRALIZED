@@ -639,6 +639,15 @@ export function initializeDatabase(): void {
   if (!pppCols.some((c: any) => c.name === 'source')) {
     db.exec("ALTER TABLE ppp_customers ADD COLUMN source TEXT NOT NULL DEFAULT 'api'");
   }
+  // A subscriber now carries the day the line went in and the exact instant
+  // their paid period ends, so the panel can arm a RouterOS scheduler job per
+  // account instead of only relying on the panel-side sweep.
+  if (!pppCols.some((c: any) => c.name === 'install_date')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN install_date TEXT");
+  }
+  if (!pppCols.some((c: any) => c.name === 'scheduled_at')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN scheduled_at TEXT");
+  }
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];
   if (!sessCols.some((c: any) => c.name === 'mac_address')) {

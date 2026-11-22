@@ -679,11 +679,110 @@ class MikroTikService {
     return this.genericList(routerId, '/ppp/profile', '/ppp/profile/print');
   }
 
-  async createPppProfile(
-    routerId: number,
-    data: { name: string; localAddress?: string; remoteAddress?: string; comment?: string; [key: string]: any }
-  ): Promise<any> {
+  /**
+   * `data` is a flat RouterOS property set (`name`, `rate-limit`,
+   * `local-address`, ...), not camelCase panel fields - the PPP profile menu
+   * takes those names verbatim.
+   */
+  async createPppProfile(routerId: number, data: Record<string, any>): Promise<any> {
     return this.genericCreate(routerId, '/ppp/profile/add', '/ppp/profile/add', data);
+  }
+
+  /**
+   * Edit a PPP profile through the `set` command. REST PUT on this build
+   * replaces the whole record, and a profile edited that way comes back with an
+   * empty name and its rate-limit, address pool and local address reset - so
+   * only the properties the operator touched are ever sent.
+   */
+  async updatePppProfile(routerId: number, id: string, data: Record<string, any>): Promise<any> {
+    const payload = { '.id': id, ...toRouterParams(data) };
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      return this.restApiCall(config, 'POST', '/ppp/profile/set', payload);
+    }
+
+    const client = this.getClient(routerId);
+    const params: string[] = [];
+    for (const [key, value] of Object.entries(payload)) params.push(`=${key}=${value}`);
+    return client.write('/ppp/profile/set', params);
+  }
+
+  async removePppProfile(routerId: number, id: string): Promise<any> {
+    return this.genericDelete(routerId, '/ppp/profile', '/ppp/profile/remove', id);
+  }
+
+  // ---------------- per-account cut-off timers (/system/scheduler) ----------------
+
+  async getSchedulerJobs(routerId: number): Promise<any[]> {
+    return this.genericList(routerId, '/system/scheduler', '/system/scheduler/print');
+  }
+
+  /**
+   * Arm (or re-arm) one named scheduler job. RouterOS runs `on-event` at
+   * start-date/start-time and, with interval `0s`, never again - which is what
+   * makes it the per-account cut-off timer. An existing job with the same name
+   * is rescheduled through `set` so its `.id` and history survive a payment.
+   */
+  async setSchedulerJob(
+    routerId: number,
+    job: { name: string; 'start-date': string; 'start-time': string; interval?: string; 'on-event': string }
+  ): Promise<{ created: boolean; id?: string }> {
+    const config = this.routerConfigs.get(routerId);
+    const payload = { interval: '0s', ...job };
+
+    if (config?.useRestApi) {
+      const found = await this.restApiCall(config, 'GET', `/system/scheduler?name=${encodeURIComponent(job.name)}`);
+      const existing = Array.isArray(found) ? found[0] : null;
+      if (existing?.['.id']) {
+        await this.restApiCall(config, 'POST', '/system/scheduler/set', { '.id': existing['.id'], ...payload });
+        return { created: false, id: existing['.id'] };
+      }
+      const ret = await this.restApiCall(config, 'POST', '/system/scheduler/add', payload);
+      return { created: true, id: Array.isArray(ret) ? ret[0]?.ret : ret?.ret };
+    }
+
+    const client = this.getClient(routerId);
+    const found = await client.write('/system/scheduler/print', [`=?name=${job.name}`]) as any[];
+    const existing = Array.isArray(found) && found.length > 0 ? found[0] : null;
+    if (existing?.['.id']) {
+      await client.write('/system/scheduler/set', [
+        `=.id=${existing['.id']}`,
+        `=start-date=${job['start-date']}`,
+        `=start-time=${job['start-time']}`,
+        `=interval=${payload.interval}`,
+        `=on-event=${job['on-event']}`,
+      ]);
+      return { created: false, id: existing['.id'] };
+    }
+    await client.write('/system/scheduler/add', [
+      `=name=${job.name}`,
+      `=start-date=${job['start-date']}`,
+      `=start-time=${job['start-time']}`,
+      `=interval=${payload.interval}`,
+      `=on-event=${job['on-event']}`,
+    ]);
+    return { created: true };
+  }
+
+  /** Delete the named scheduler job. False simply means there was nothing to remove. */
+  async removeSchedulerJob(routerId: number, name: string): Promise<boolean> {
+    const config = this.routerConfigs.get(routerId);
+
+    if (config?.useRestApi) {
+      const found = await this.restApiCall(config, 'GET', `/system/scheduler?name=${encodeURIComponent(name)}`);
+      const job = Array.isArray(found) ? found[0] : null;
+      if (!job?.['.id']) return false;
+      await this.restApiCall(config, 'DELETE', `/system/scheduler/${job['.id']}`);
+      return true;
+    }
+
+    const client = this.getClient(routerId);
+    const found = await client.write('/system/scheduler/print', [`=?name=${name}`]) as any[];
+    const job = Array.isArray(found) && found.length > 0 ? found[0] : null;
+    if (!job?.['.id']) return false;
+    await client.write('/system/scheduler/remove', [`=.id=${job['.id']}`]);
+    return true;
   }
 
   async createAddressPool(routerId: number, name: string, ranges: string, comment?: string): Promise<any> {

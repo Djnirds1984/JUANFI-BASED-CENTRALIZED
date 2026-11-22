@@ -892,6 +892,18 @@ class ApiClient {
     return this.get(`/ppp/router/${routerId}/ppp-profiles`);
   }
 
+  async createPppProfile(routerId, profile) {
+    return this.post(`/ppp/router/${routerId}/ppp-profiles`, profile);
+  }
+
+  async updatePppProfile(routerId, profileName, data) {
+    return this.put(`/ppp/router/${routerId}/ppp-profiles/${encodeURIComponent(profileName)}`, data);
+  }
+
+  async deletePppProfile(routerId, profileName) {
+    return this.delete(`/ppp/router/${routerId}/ppp-profiles/${encodeURIComponent(profileName)}`);
+  }
+
   // --- PPP subscription billing ---
   async getBillingPlans(routerId) {
     return this.get(`/ppp/router/${routerId}/billing/plans`);

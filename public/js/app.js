@@ -8094,6 +8094,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <button class="tab ${this.pppTab === 'active' ? 'active' : ''}" data-tab="active">Active Connections</button>
           <button class="tab ${this.pppTab === 'customers' ? 'active' : ''}" data-tab="customers">Customers</button>
           <button class="tab ${this.pppTab === 'servers' ? 'active' : ''}" data-tab="servers">PPPoE Servers</button>
+          <button class="tab ${this.pppTab === 'profiles' ? 'active' : ''}" data-tab="profiles">PPPoE Profiles</button>
           <button class="tab ${this.pppTab === 'plans' ? 'active' : ''}" data-tab="plans">Billing Plans</button>
           <button class="tab ${this.pppTab === 'billing' ? 'active' : ''}" data-tab="billing">Billing Settings</button>
         </div>
@@ -8123,6 +8124,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     try {
       if (this.pppTab === 'customers') await this.loadPppCustomers(container);
       else if (this.pppTab === 'servers') await this.loadPppoeServers(container);
+      else if (this.pppTab === 'profiles') await this.loadPppProfiles(container);
       else if (this.pppTab === 'plans') await this.loadBillingPlans(container);
       else if (this.pppTab === 'billing') await this.loadBillingSettings(container);
       else await this.loadPppActiveConnections(container);
@@ -8213,10 +8215,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <tbody id="ppp-customers-tbody">
             ${customers.map((c) => `
               <tr>
-                <td><strong>${this.escapeHtml(c.name || '-')}</strong><br><span style="color:var(--text-muted);font-size:0.85rem">${this.escapeHtml(c.username || '-')}</span></td>
+                <td><strong>${this.escapeHtml(c.name || '-')}</strong><br><span style="color:var(--text-muted);font-size:0.85rem">${this.escapeHtml(c.username || '-')}</span>${this.renderInstalledLine(c)}</td>
                 <td>${c.plan_name ? `${this.escapeHtml(c.plan_name)} <span style="color:var(--text-muted);font-size:0.85rem">(${this.formatAmount(c.plan_currency || this.systemCurrency, c.plan_price)})</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>
                 <td>${this.escapeHtml(c.profile || '-')}</td>
-                <td>${this.renderDueCell(c)}</td>
+                <td>${this.renderDueCell(c)}${this.renderScheduledCell(c)}</td>
                 <td>${this.renderBillingBadge(c)}</td>
                 <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
                 <td style="text-align:right;white-space:nowrap">
@@ -8231,21 +8233,70 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           </tbody>
         </table>
       </div>
-      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Cut-off runs every minute: a subscription that passed its due date plus the grace period is moved to the non-payment profile and its live session is dropped so the new speed takes effect.</p>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Every account carries its own cut-off timer on the router itself, armed for its due date plus the grace period, so a subscriber is moved to the non-payment profile even when the panel is offline. The panel's own sweep runs every minute as a backstop.</p>
     `;
+  },
+
+  renderInstalledLine(customer) {
+    if (!customer.install_date) return '';
+    const when = this.parseDue(customer.install_date);
+    if (!when) return '';
+    const text = customer.install_date.includes(':')
+      ? `${when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      : when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    return `<br><small style="color:var(--text-muted);font-size:0.78rem">installed ${text}</small>`;
+  },
+
+  /**
+   * What the router's own scheduler job is armed for. Blank means the timer is
+   * not on the router, which only happens when it was unreachable or the account
+   * has no future due date - the panel sweep still covers it.
+   */
+  renderScheduledCell(customer) {
+    if (!customer.due_date) return '';
+    if (!customer.scheduled_at) {
+      return '<br><small style="color:var(--warning);font-size:0.78rem" title="The router had no scheduler job armed for this account; the panel sweep still cuts it off">router timer not armed</small>';
+    }
+    const when = this.parseDue(customer.scheduled_at);
+    const label = when
+      ? `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      : this.escapeHtml(customer.scheduled_at);
+    return `<br><small style="color:var(--text-muted);font-size:0.78rem">&#9200; auto-kick on router: ${label}</small>`;
   },
 
   renderDueCell(customer) {
     if (!customer.due_date) return '<span style="color:var(--text-muted)">not billed</span>';
-    const due = new Date(`${customer.due_date}T00:00:00`);
-    if (Number.isNaN(due.getTime())) return this.escapeHtml(customer.due_date);
+    const due = this.parseDue(customer.due_date);
+    if (!due) return this.escapeHtml(customer.due_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const days = Math.round((due.getTime() - today.getTime()) / 86400000);
-    const label = due.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-    if (days < 0) return `<span style="color:var(--danger)">${label}<br><small>${Math.abs(days)}d overdue</small></span>`;
-    if (days <= 3) return `<span style="color:var(--warning)">${label}<br><small>${days === 0 ? 'due today' : `in ${days}d`}</small></span>`;
+    const days = Math.ceil((due.getTime() - today.getTime()) / 86400000);
+    const label = due.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      + (customer.due_date.includes(':') ? ` ${due.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '');
+    if (due < today) return `<span style="color:var(--danger)">${label}<br><small>${Math.abs(Math.round((today - due) / 86400000))}d overdue</small></span>`;
+    if (days <= 3) return `<span style="color:var(--warning)">${label}<br><small>${days <= 0 ? 'due today' : `in ${days}d`}</small></span>`;
     return `${label}<br><small style="color:var(--text-muted)">in ${days}d</small>`;
+  },
+
+  /**
+   * A stored due date is either a bare day or a day with the minute the operator
+   * picked. Both are read as local time - sending `2026-11-30` straight to
+   * new Date() would land it on midnight UTC and shift the whole billing day.
+   */
+  parseDue(value) {
+    if (!value) return null;
+    const text = String(value).trim().replace(' ', 'T');
+    const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T00:00:00` : text);
+    return Number.isNaN(date.getTime()) ? null : date;
+  },
+
+  /** Value for an <input type="datetime-local">: `YYYY-MM-DDTHH:MM`. */
+  toLocalInput(value, { endOfDay = false } = {}) {
+    if (!value) return '';
+    const text = String(value).trim().replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T${endOfDay ? '23:59' : '00:00'}`;
+    const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(text);
+    return match ? `${match[1]}T${match[2]}:${match[3]}` : '';
   },
 
   renderBillingBadge(customer) {
@@ -8253,10 +8304,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     if (status === 'cut-off') return '<span class="badge badge-offline">Cut-off</span>';
     if (status === 'suspended') return '<span class="badge badge-offline">Suspended</span>';
     if (!customer.plan_id || !customer.due_date) return '<span class="badge" style="opacity:0.6">Unbilled</span>';
-    const due = new Date(`${customer.due_date}T00:00:00`);
+    const due = this.parseDue(customer.due_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (due < today) return '<span class="badge badge-offline">Grace</span>';
+    if (due && due < today) return '<span class="badge badge-offline">Grace</span>';
     return '<span class="badge badge-online">Paid</span>';
   },
 
@@ -8266,65 +8317,87 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     return this.formatAmount(plan.currency || this.systemCurrency, plan.price);
   },
 
+  // The subscriber's speed comes from the billing plan, which already binds a
+  // PPPoE profile carrying the rate-limit. That is why this form has no profile,
+  // service, address or quota boxes any more: plan + dates only.
   async showAddCustomerModal(customerId = null) {
     const isEdit = customerId != null;
-    let customer = { name: '', username: '', password: '', profile: 'default', service: 'pppoe', local_address: '', remote_address: '', uptime_limit: '', bytes_in_quota: '', bytes_out_quota: '', comment: '' };
+    const [plans, settings] = await Promise.all([
+      api.getBillingPlans(this.selectedRouterId).catch(() => []),
+      api.getBillingSettings(this.selectedRouterId).catch(() => null),
+    ]);
+    let customer = { name: '', username: '', password: '', plan_id: null, install_date: '', due_date: '' };
     if (isEdit) {
       const customers = await api.getPppCustomers(this.selectedRouterId);
       customer = (customers || []).find((c) => c.id === customerId) || customer;
     }
+
+    const usable = (plans || []).filter((p) => p.is_active || p.id === customer.plan_id);
+    const grace = Number(settings?.grace_days || 0);
+    const planLabels = usable.map((p) => `${this.escapeHtml(p.name)} - ${this.planMoney(p)}/${p.cycle_days >= 28 ? 'month' : `${p.cycle_days}d`} (${this.escapeHtml(p.pppoe_profile)})`);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
     this.openModal(isEdit ? 'Edit PPP Customer' : 'Add PPP Customer', `
       <form id="ppp-customer-form">
-        <div class="form-group"><label>Name</label><input type="text" name="name" required value="${this.escapeHtml(customer.name)}"></div>
-        <div class="form-group"><label>Username</label><input type="text" name="username" required value="${this.escapeHtml(customer.username)}"></div>
-        <div class="form-group"><label>Password</label><input type="password" name="password" ${isEdit ? '' : 'required'} value="${this.escapeHtml(customer.password)}"></div>
-        <div class="form-group"><label>Profile</label><input type="text" name="profile" value="${this.escapeHtml(customer.profile)}"></div>
-        <div class="form-group"><label>Service</label><input type="text" name="service" value="${this.escapeHtml(customer.service)}"></div>
-        <div class="form-group"><label>Local Address (optional)</label><input type="text" name="localAddress" value="${this.escapeHtml(customer.local_address || '')}"></div>
-        <div class="form-group"><label>Remote Address (optional)</label><input type="text" name="remoteAddress" value="${this.escapeHtml(customer.remote_address || '')}"></div>
-        <div class="form-group"><label>Uptime Limit (e.g. 00:00:00)</label><input type="text" name="uptimeLimit" value="${this.escapeHtml(customer.uptime_limit || '')}"></div>
-        <div class="form-group"><label>Bytes In Quota</label><input type="number" name="bytesInQuota" value="${this.escapeHtml(customer.bytes_in_quota || '')}"></div>
-        <div class="form-group"><label>Bytes Out Quota</label><input type="number" name="bytesOutQuota" value="${this.escapeHtml(customer.bytes_out_quota || '')}"></div>
-        <div class="form-group"><label>Comment (optional)</label><input type="text" name="comment" value="${this.escapeHtml(customer.comment || '')}"></div>
+        <div class="form-group"><label>Customer Name</label><input type="text" name="name" required value="${this.escapeHtml(customer.name)}"></div>
+        <div class="form-group"><label>Username (PPPoE login)</label><input type="text" name="username" required value="${this.escapeHtml(customer.username)}" ${isEdit ? '' : 'autocomplete="off"'}></div>
+        <div class="form-group"><label>Password</label><input type="password" name="password" ${isEdit ? 'placeholder="leave empty to keep the current one"' : 'required'} value="${this.escapeHtml(customer.password || '')}"></div>
+        ${usable.length
+          ? `<div class="form-group"><label>Billing Plan (decides the speed)</label>
+               <select name="planId">${usable.map((p, i) => `<option value="${p.id}" ${String(p.id) === String(customer.plan_id || '') ? 'selected' : ''}>${planLabels[i]}</option>`).join('')}</select>
+               <small style="color:var(--text-muted)">The plan's PPPoE profile and its rate-limit are handed to this subscriber. Change the speed on the PPPoE Profiles tab.</small></div>`
+          : `<div class="form-group"><label>Billing Plan</label>
+               <input type="text" name="planId" value="" disabled>
+               <small style="color:var(--warning)">No billing plan on this router yet - create one on the Billing Plans tab before adding a subscriber.</small></div>`}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Date of Installation</label>
+            <input type="datetime-local" name="installDate" value="${this.toLocalInput(customer.install_date) || `${today}T08:00`}"></div>
+          <div class="form-group"><label>Next Due Date</label>
+            <input type="datetime-local" name="dueDate" value="${this.toLocalInput(customer.due_date, { endOfDay: true })}"></div>
+        </div>
+        <small style="color:var(--text-muted)">Leave the due date empty to bill one plan cycle from today. The panel arms a cut-off timer on the router for this account at the due date plus the ${grace}-day grace period, so the line is slowed down even when the panel is offline.</small>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
-      { label: isEdit ? 'Save Changes' : 'Add Customer', class: 'btn btn-primary', action: () => isEdit ? this.submitEditCustomer(customerId) : this.submitAddCustomer() },
+      { label: isEdit ? 'Save Changes' : 'Add Customer', class: 'btn btn-primary', action: () => (isEdit ? this.submitEditCustomer(customerId) : this.submitAddCustomer()) },
     ]);
+  },
+
+  // Shared by add and edit: the fields this form is allowed to touch.
+  customerFormPayload(form) {
+    return {
+      name: form.name.value.trim(),
+      username: form.username.value.trim(),
+      password: form.password.value || null,
+      planId: form.planId && form.planId.value ? parseInt(form.planId.value, 10) : null,
+      installDate: form.installDate.value || null,
+      dueDate: form.dueDate.value || null,
+    };
   },
 
   async submitAddCustomer() {
     const form = document.getElementById('ppp-customer-form');
+    const payload = this.customerFormPayload(form);
+    if (!payload.planId) { this.toast('Pick a billing plan so the subscriber gets a speed', 'error'); return; }
     try {
-      await api.createPppCustomer(this.selectedRouterId, {
-        name: form.name.value, username: form.username.value, password: form.password.value,
-        profile: form.profile.value || 'default', service: form.service.value || 'pppoe',
-        localAddress: form.localAddress.value || null, remoteAddress: form.remoteAddress.value || null,
-        uptimeLimit: form.uptimeLimit.value || null,
-        bytesInQuota: form.bytesInQuota.value ? parseInt(form.bytesInQuota.value) : null,
-        bytesOutQuota: form.bytesOutQuota.value ? parseInt(form.bytesOutQuota.value) : null,
-        comment: form.comment.value || null,
-      });
+      const result = await api.createPppCustomer(this.selectedRouterId, payload);
       this.closeModal();
-      this.toast('PPP customer created', 'success');
+      this.toast(result?.message || 'PPP customer created', 'success');
+      if (result?.warning) this.toast(result.warning, 'info');
       this.loadPppTab();
     } catch (err) { this.toast(err.message, 'error'); }
   },
 
   async submitEditCustomer(customerId) {
     const form = document.getElementById('ppp-customer-form');
+    const payload = this.customerFormPayload(form);
+    if (!payload.password) delete payload.password;
     try {
-      await api.updatePppCustomer(this.selectedRouterId, customerId, {
-        name: form.name.value || null, username: form.username.value || null, password: form.password.value || null,
-        profile: form.profile.value || null, service: form.service.value || null,
-        localAddress: form.localAddress.value || null, remoteAddress: form.remoteAddress.value || null,
-        uptimeLimit: form.uptimeLimit.value || null,
-        bytesInQuota: form.bytesInQuota.value ? parseInt(form.bytesInQuota.value) : null,
-        bytesOutQuota: form.bytesOutQuota.value ? parseInt(form.bytesOutQuota.value) : null,
-        comment: form.comment.value || null,
-      });
+      const result = await api.updatePppCustomer(this.selectedRouterId, customerId, payload);
       this.closeModal();
-      this.toast('PPP customer updated', 'success');
+      this.toast(result?.message || 'PPP customer updated', 'success');
+      if (result?.warning) this.toast(result.warning, 'info');
       this.loadPppTab();
     } catch (err) { this.toast(err.message, 'error'); }
   },
@@ -8538,6 +8611,173 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       const result = await api.deletePppoeServer(this.selectedRouterId, serverId);
       this.closeModal();
       this.toast(result && result.warning ? result.warning : 'PPPoE server deleted', result && result.warning ? 'info' : 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // ---- PPPoE Profiles sub-page ----
+
+  /**
+   * /ppp/profile belongs to the router, so nothing is mirrored in the database:
+   * the list is read live, a profile made in Winbox shows up here and one made
+   * here shows up in Winbox. The panel only adds who is using it, because a
+   * profile with subscribers behind it must not be deleted by accident.
+   */
+  async loadPppProfiles(container) {
+    if (!container) container = document.getElementById('ppp-tab-content');
+    const [profiles, pools] = await Promise.all([
+      api.getPppProfiles(this.selectedRouterId),
+      api.getAddressPools(this.selectedRouterId).catch(() => []),
+    ]);
+    this._pppProfiles = profiles || [];
+    this._pppPoolNames = (pools || []).map((p) => p.name).filter(Boolean);
+
+    const head = `
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-bottom:0.75rem;flex-wrap:wrap">
+        <button class="btn btn-sm btn-outline" onclick="App.loadPppProfiles()">Refresh from Router</button>
+        <button class="btn btn-sm btn-primary" onclick="App.showProfileModal()">Add PPPoE Profile</button>
+      </div>`;
+
+    if (!profiles || profiles.length === 0) {
+      container.innerHTML = `${head}<div class="empty-state"><p>No profiles could be read. Connect the router, then refresh - profiles are never stored in the panel, they live on the router.</p></div>`;
+      return;
+    }
+
+    container.innerHTML = `${head}
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Profile</th><th>Speed Limit</th><th>Local Address</th><th>Remote Pool</th><th>In Use By</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody>
+            ${profiles.map((p) => `
+              <tr>
+                <td><strong>${this.escapeHtml(p.name)}</strong>${p.built_in ? ' <span class="badge" style="opacity:0.6" title="Shipped by RouterOS">built-in</span>' : ''}</td>
+                <td>${p.rate_limit
+                  ? `<code>${this.escapeHtml(p.rate_limit)}</code><br><small style="color:var(--text-muted)">rx ${this.escapeHtml(p.rx_limit || '-')} / tx ${this.escapeHtml(p.tx_limit || '-')}</small>`
+                  : '<small style="color:var(--text-muted)">no limit</small>'}</td>
+                <td><small>${this.escapeHtml(p.local_address || '-')}</small></td>
+                <td><small>${this.escapeHtml(p.remote_address || '-')}</small></td>
+                <td>${this.renderProfileUsage(p)}</td>
+                <td style="text-align:right;white-space:nowrap">
+                  <button class="btn btn-sm btn-outline" onclick="App.showProfileModal('${this.escapeHtml(p.name).replace(/'/g, '&#39;')}')">Edit</button>
+                  ${p.built_in ? '' : `<button class="btn btn-sm btn-danger" onclick="App.deleteProfile('${this.escapeHtml(p.name).replace(/'/g, '&#39;')}')">Delete</button>`}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">These are the profiles a billing plan binds to and that a subscriber's login carries. RouterOS reads the speed when a session connects, so changing one drops the live sessions on it and the clients redial with the new cap. A profile name cannot be changed because every login refers to it by that text.</p>
+    `;
+  },
+
+  renderProfileUsage(p) {
+    const parts = [];
+    if (p.secrets) parts.push(`${p.secrets} router login(s)`);
+    if (p.customers) parts.push(`${p.customers} panel customer(s)`);
+    if (p.plans && p.plans.length) parts.push(`plan: ${p.plans.join(', ')}`);
+    if (p.servers && p.servers.length) parts.push(`server default: ${p.servers.join(', ')}`);
+    if (!parts.length) return '<small style="color:var(--text-muted)">nobody</small>';
+    return `<small>${parts.map((x) => this.escapeHtml(x)).join('<br>')}</small>`;
+  },
+
+  async showProfileModal(profileName = null) {
+    const isEdit = profileName != null;
+    const existing = isEdit ? (this._pppProfiles || []).find((p) => p.name === profileName) || {} : {};
+    const pools = this._pppPoolNames || [];
+    const yesNoDefault = (value) => ['default', 'yes', 'no'].map((o) => `<option value="${o}" ${(value || 'default') === o ? 'selected' : ''}>${o}</option>`).join('');
+
+    const form = `
+      <form id="ppp-profile-form">
+        <div class="form-group"><label>Profile Name</label>
+          ${isEdit
+            ? `<input type="text" value="${this.escapeHtml(existing.name || profileName)}" readonly>
+               <small style="color:var(--text-muted)">Subscribers point at a profile by name, so it cannot be renamed here.</small>`
+            : `<input type="text" name="name" required placeholder="e.g. 20M" value="">
+               <small style="color:var(--text-muted)">Letters, numbers, - and _. Whatever a billing plan will bind to.</small>`}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Download / Rx (first value)</label>
+            <input type="text" name="rxLimit" value="${this.escapeHtml(existing.rx_limit || '')}" placeholder="10M">
+            <small style="color:var(--text-muted)">10M, 512k... blank = no cap</small></div>
+          <div class="form-group"><label>Upload / Tx (second value)</label>
+            <input type="text" name="txLimit" value="${this.escapeHtml(existing.tx_limit || '')}" placeholder="10M">
+            <small style="color:var(--text-muted)">leave blank for the same both ways</small></div>
+          <div class="form-group"><label>Local Address (router side)</label>
+            <input type="text" name="localAddress" value="${this.escapeHtml(existing.local_address || '')}" placeholder="172.16.44.1">
+            <small style="color:var(--text-muted)">${isEdit ? 'blank keeps the address it has now - RouterOS cannot un-set one' : 'blank lets RouterOS use its own default'}</small></div>
+          ${pools.length
+            ? `<div class="form-group"><label>Remote Address / Pool</label>
+                 <select name="remoteAddressPool">${isEdit ? '' : '<option value="">(router default)</option>'}${this.optionList(pools, existing.remote_address)}</select>
+                 <small style="color:var(--text-muted)">the pool clients get their IP from</small></div>`
+            : `<div class="form-group"><label>Remote Address / Pool</label>
+                 <input type="text" name="remoteAddress" value="${this.escapeHtml(existing.remote_address || '')}" placeholder="PPPOE (an IP pool name)">
+                 <small style="color:var(--text-muted)">${isEdit ? 'blank keeps the pool it has now' : 'blank lets RouterOS use its own default'}</small></div>`}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+          <div class="form-group"><label>Only One Session</label><select name="onlyOne">${yesNoDefault(existing.only_one)}</select></div>
+          <div class="form-group"><label>Change TCP MSS</label><select name="changeTcpMss">${yesNoDefault(existing.change_tcp_mss)}</select></div>
+          <div class="form-group"><label>Use IPv6</label><select name="useIpv6">${yesNoDefault(existing.use_ipv6)}</select></div>
+          <div class="form-group"><label>Use Encryption</label><select name="useEncryption">${yesNoDefault(existing.use_encryption)}</select></div>
+        </div>
+      </form>
+    `;
+
+    this.openModal(isEdit ? `Edit Profile: ${profileName}` : 'Add PPPoE Profile', form, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      { label: isEdit ? 'Save on Router' : 'Create on Router', class: 'btn btn-primary', action: () => this.submitProfile(profileName) },
+    ]);
+  },
+
+  async submitProfile(profileName = null) {
+    const form = document.getElementById('ppp-profile-form');
+    const SPEED = /^\d+(\.\d+)?[kmgt]?$/i;
+    const rx = form.rxLimit.value.trim();
+    const tx = form.txLimit.value.trim();
+    if (rx && !SPEED.test(rx)) { this.toast('Download must look like 10M or 512k', 'error'); return; }
+    if (tx && !SPEED.test(tx)) { this.toast('Upload must look like 10M or 512k', 'error'); return; }
+
+    // RouterOS wants rx/tx; one value means the operator meant it both ways.
+    let rateLimit = '';
+    if (rx && tx) rateLimit = `${rx}/${tx}`;
+    else if (rx) rateLimit = rx;
+    else if (tx) rateLimit = `${tx}/${tx}`;
+
+    const poolField = form.remoteAddressPool || form.remoteAddress;
+    const payload = {
+      rateLimit,
+      localAddress: form.localAddress.value.trim(),
+      remoteAddress: poolField ? poolField.value.trim() : '',
+      onlyOne: form.onlyOne.value,
+      changeTcpMss: form.changeTcpMss.value,
+      useIpv6: form.useIpv6.value,
+      useEncryption: form.useEncryption.value,
+    };
+    if (profileName == null) {
+      payload.name = form.name.value.trim();
+      if (!payload.name) { this.toast('Give the profile a name', 'error'); return; }
+    }
+
+    try {
+      const result = profileName == null
+        ? await api.createPppProfile(this.selectedRouterId, payload)
+        : await api.updatePppProfile(this.selectedRouterId, profileName, payload);
+      this.closeModal();
+      this._pppProfileCache = null;
+      this.toast(result && result.message ? result.message : 'Profile saved', 'success');
+      this.loadPppTab();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  async deleteProfile(profileName) {
+    const profile = (this._pppProfiles || []).find((p) => p.name === profileName);
+    if (profile && profile.in_use) {
+      this.toast(`${profileName} still has subscribers, plans or a server default on it - move them first or change its speed instead`, 'error');
+      return;
+    }
+    if (!confirm(`Delete PPPoE profile "${profileName}" from the router?`)) return;
+    try {
+      const result = await api.deletePppProfile(this.selectedRouterId, profileName);
+      this._pppProfileCache = null;
+      this.toast(result && result.message ? result.message : 'Profile deleted', 'success');
       this.loadPppTab();
     } catch (err) { this.toast(err.message, 'error'); }
   },

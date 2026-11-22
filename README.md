@@ -1,9 +1,9 @@
-# JUANFI — Centralized MikroTik PisoWiFi Controller
+# AIRCOINS — MikroTik Controller
 
 **One small box. Every router. Every coin. Every customer.**
 
-JUANFI turns a Raspberry Pi, Orange Pi or any cheap Mini PC into the brain of a
-MicroTik hotspot business — vouchers, coin machines, GCash payments, a built-in
+AIRCOINS turns a Raspberry Pi, Orange Pi or any cheap Mini PC into the brain of a
+MikroTik hotspot business — vouchers, coin machines, GCash payments, a built-in
 RADIUS server, a customer-facing portal and a cash wallet your patrons load with
 coins and spend on internet time. No cloud subscription. No per-AP fee. No
 internet required for the shop to keep selling.
@@ -12,6 +12,13 @@ Built for Filipino *pisoWiFi* operators, barangay entrepreneurs, dormitories,
 catechetical centers, coffee shops, school canteens and small ISPs running one
 router or fifty.
 
+> **Naming.** **AIRCOINS** is the controller — the software in this repository. The
+> router-side configuration it writes and the coin machines it talks to still carry
+> the **JuanFi PisoWiFi** name (the legacy `hotspot/` page set, the *Default (JuanFi)*
+> portal theme and the `JuanFi-nodemcu/` firmware), because AIRCOINS is built on that
+> system's MikroTik conventions. Same router setup, same coin-slot protocol — new
+> brain running it.
+
 ```
    ┌───────────┐   ┌───────────┐   ┌───────────┐
    │  Router 1 │   │  Router 2 │   │  Router N │   MikroTik RouterOS
@@ -19,8 +26,8 @@ router or fifty.
          │  RADIUS / API / CoA           │
          └───────────────┬───────────────┘
                  ┌───────▼────────┐        ┌──────────────────┐
-                 │  JUANFI server │◄───────┤ NodeMCU coin slot│  ESP8266 / ESP32
-                 │  Node + SQLite │        └──────────────────┘
+                 │    AIRCOINS    │◄───────┤ NodeMCU coin slot│  ESP8266 / ESP32
+                 │ Node + SQLite  │        └──────────────────┘
                  └───────┬────────┘        ┌──────────────────┐
                          │                 │  GCash / PayMongo│
                     ┌────▼─────┐           └──────────────────┘
@@ -31,9 +38,9 @@ router or fifty.
 
 ---
 
-## Why operators switch to JUANFI
+## Why operators switch to AIRCOINS
 
-| The daily headache | What JUANFI does instead |
+| The daily headache | What AIRCOINS does instead |
 |---|---|
 | "I have to log in to every router separately." | One dashboard for every site, one connection list, one search box. |
 | "The customer paid but has no internet." | Time is pushed into the **live** session with a RADIUS CoA — no re-login, no "reload your portal". |
@@ -62,7 +69,7 @@ router or fifty.
 | **Vouchers** | Batch generation (1–100) with prefix, profile, duration and data cap, lookup, redemption, print-ready output, **MAC-as-voucher** mode where the coin machine issues the code itself. |
 | **RADIUS** | A real RADIUS server built in — authentication, accounting, **rate plans** with download/upload caps plus burst, session and idle timeouts, data quotas, validity period, price and shared-user limit, an assignable default plan per router, live sessions, per-router stats, **hitless session extension (CoA)** and **Disconnect-Request**, plus a queryable RADIUS log for support calls. |
 | **Chat** | Customers talk to you from the portal; you answer from the admin inbox with an unread badge. Also the delivery channel for wallet restore codes. |
-| **Portal** | The customer sign-in page is *yours*: theme switcher (Default JuanFi, Gaming, Sunrise, Christmas, Adopisoft), branding/logo upload, coin sounds, a built-in portal file editor, reset-to-default, and **push portal files to any router** in one action. |
+| **Portal** | The customer sign-in page is *yours*: theme switcher (Default (JuanFi) — the legacy PisoWiFi look — plus Gaming, Sunrise, Christmas and Adopisoft), branding/logo upload, coin sounds, a built-in portal file editor, reset-to-default, and **push portal files to any router** in one action. |
 | **Online Payment** | GCash / PayMongo checkout with webhook confirmation, payment rate table (the price list used for both GCash and wallet→time conversion), manual credit, status lookup, and payment history. |
 | **SubVendo** | Turn trusted resellers into sub-vendors with their own machine configuration, then push it to the router. |
 | **Sales Report** | Vouchers + GCash + per-machine coin counters combined into one revenue picture. |
@@ -96,6 +103,9 @@ router or fifty.
 - Money stays **out** of the Turso cloud sync path by design; the ledger is local-first.
 
 ### 4. Coin machine firmware — `JuanFi-nodemcu` (ESP8266 / ESP32)
+
+The PisoWiFi coin-slot firmware that AIRCOINS manages over the network. Firmware is
+still published under its JuanFi name; the controller side is AIRCOINS.
 
 Current firmware: **v4.5-SAFEOTA**.
 
@@ -195,7 +205,7 @@ Current firmware: **v4.5-SAFEOTA**.
 ### Install
 
 ```bash
-git clone <your-repo-url>
+git clone <your-repo-url>          # repository: JUANFI-BASED-CENTRALIZED (AIRCOINS controller)
 cd JUANFI-BASED-CENTRALIZED
 sudo bash deploy/install.sh
 ```
@@ -245,7 +255,7 @@ The **Routers** page shows the per-router RADIUS secret. On the router:
 /ip hotspot profile set <profile> login-by=http-chap radius
 ```
 
-JUANFI writes the walled-garden entries for you, so the captive portal still
+AIRCOINS writes the walled-garden entries for you, so the captive portal still
 opens while the customer is not yet authenticated.
 
 ---
@@ -457,7 +467,7 @@ src/                TypeScript backend
   database.ts       schema, migrations, seed
   server.ts         Express app, mounts, portal/admin serving, realtime
 public/             admin SPA (index.html, js/app.js) + customer portal (portal.html)
-hotspot/            legacy RouterOS hotspot page assets
+hotspot/            legacy JuanFi PisoWiFi RouterOS page assets (served as /hotspot-assets)
 JuanFi-nodemcu/     ESP8266/ESP32 coin-machine firmware + SPIFFS web files
 deploy/             install/update/uninstall, systemd unit, Nginx, SSL, ISO tooling
 tests/              node:test suites (router and DB stubbed where needed)

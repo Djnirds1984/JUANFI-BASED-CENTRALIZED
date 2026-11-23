@@ -506,6 +506,9 @@ export function initializeDatabase(): void {
 
     -- A monthly plan IS a PPP profile plus a price: paying moves the subscriber
     -- onto pppoe_profile, not paying moves them to the cut-off profile.
+    -- plan_type decides when the clock runs out: postpaid keeps the fixed
+    -- cut-off day plus the grace period, prepaid counts the cycle from the day
+    -- the money arrived and has no grace at all.
     CREATE TABLE IF NOT EXISTS billing_plans (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       router_id INTEGER NOT NULL,
@@ -515,6 +518,7 @@ export function initializeDatabase(): void {
       currency TEXT NOT NULL DEFAULT 'PHP',
       pppoe_profile TEXT NOT NULL,
       description TEXT,
+      plan_type TEXT NOT NULL DEFAULT 'postpaid',
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -647,6 +651,15 @@ export function initializeDatabase(): void {
   }
   if (!pppCols.some((c: any) => c.name === 'scheduled_at')) {
     db.exec("ALTER TABLE ppp_customers ADD COLUMN scheduled_at TEXT");
+  }
+
+  // Plans gained a billing model: postpaid keeps the fixed cut-off day and the
+  // grace period, prepaid counts its cycle from the day the money arrived and
+  // is cut off with no grace. Every plan already in the database was billed the
+  // first way, so that is what the column defaults to.
+  const planCols = db.prepare("PRAGMA table_info('billing_plans')").all() as any[];
+  if (planCols.length && !planCols.some((c: any) => c.name === 'plan_type')) {
+    db.exec("ALTER TABLE billing_plans ADD COLUMN plan_type TEXT NOT NULL DEFAULT 'postpaid'");
   }
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];

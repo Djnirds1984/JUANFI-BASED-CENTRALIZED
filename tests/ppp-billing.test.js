@@ -241,10 +241,10 @@ function customer(username) {
   return db.prepare('SELECT * FROM ppp_customers WHERE username = ?').get(username);
 }
 
-function makePlan(name, price, cycleDays, profile) {
+function makePlan(name, price, cycleDays, profile, planType = 'postpaid') {
   const row = db.prepare(
-    'INSERT INTO billing_plans (router_id, name, price, cycle_days, pppoe_profile) VALUES (?, ?, ?, ?, ?)'
-  ).run(ROUTER_ID, name, price, cycleDays, profile);
+    'INSERT INTO billing_plans (router_id, name, price, cycle_days, pppoe_profile, plan_type) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(ROUTER_ID, name, price, cycleDays, profile, planType);
   return Number(row.lastInsertRowid);
 }
 
@@ -1085,3 +1085,169 @@ test('the billing routes are behind authentication', async () => {
   const res = await fetch(`${base}/api/ppp/router/${ROUTER_ID}/billing/plans`).then((r) => ({ status: r.status }));
   assert.equal(res.status, 401);
 });
+
+// ---- prepaid and postpaid billing models ----------------------------------------
+// Postpaid is the neighbourhood billing day: everyone owes on the same cut-off
+// day and a few grace days are forgiven. Prepaid bought the period itself, so the
+// anniversary follows the day the money arrived and nothing is forgiven. The
+// operator asked for it with a worked example - activated Nov 23, due Dec 23, paid
+// Dec 25, next due Jan 25 - so that sentence is written down as a test.
+
+test('a plan is postpaid unless prepaid is asked for, and a typo is refused', async () => {
+  const legacy = await call(`/api/ppp/router/${ROUTER_ID}/billing/plans`, {
+    method: 'POST', body: { name: 'Postpaid Default', price: 500, cycleDays: 30, pppoeProfile: '10mbps' },
+  });
+  assert.equal(legacy.status, 201, JSON.stringify(legacy.body));
+  const prepaid = await call(`/api/ppp/router/${ROUTER_ID}/billing/plans`, {
+    method: 'POST', body: { name: 'Prepaid Asking', price: 500, cycleDays: 30, pppoeProfile: '10mbps', planType: 'prepaid' },
+  });
+  assert.equal(prepaid.status, 201, JSON.stringify(prepaid.body));
+
+  const plans = (await call(`/api/ppp/router/${ROUTER_ID}/billing/plans`)).body;
+  assert.equal(plans.find((p) => p.name === 'Postpaid Default').plan_type, 'postpaid', 'plans made before this feature keep today\'s rules');
+  assert.equal(plans.find((p) => p.name === 'Prepaid Asking').plan_type, 'prepaid');
+
+  // Filed under postpaid, a misspelling would hand a prepaid subscriber grace days
+  // nobody sold them, so it is rejected instead of guessed.
+  const typo = await call(`/api/ppp/router/${ROUTER_ID}/billing/plans`, {
+    method: 'POST', body: { name: 'Typo Plan', price: 500, cycleDays: 30, pppoeProfile: '10mbps', planType: 'pre-pay' },
+  });
+  assert.equal(typo.status, 400);
+  assert.match(typo.body.error, /postpaid or prepaid/);
+
+  // Editing the price only must not silently re-bill the plan as postpaid.
+  const planId = plans.find((p) => p.name === 'Prepaid Asking').id;
+  const priceOnly = await call(`/api/ppp/router/${ROUTER_ID}/billing/plans/${planId}`, { method: 'PUT', body: { price: 550 } });
+  assert.equal(priceOnly.status, 200, JSON.stringify(priceOnly.body));
+  assert.equal((await call(`/api/ppp/router/${ROUTER_ID}/billing/plans`)).body.find((p) => p.id === planId).plan_type, 'prepaid');
+});
+
+test('a prepaid monthly cycle counts real months from the day the money arrives', () => {
+  const settings = { enabled: 1, cutoff_day: 1, grace_days: 3 };
+
+  // The example, exactly as given: due Dec 23, paid Dec 25, next due Jan 25.
+  const late = billing.computeDueDate({ anchorDate: '2026-12-23', settings, cycleDays: 30, planType: 'prepaid', today: new Date(2026, 11, 25) });
+  assert.equal(iso(late.due), '2027-01-25');
+
+  // Activated Nov 23, runs to Dec 23 - the activation day is the anniversary.
+  const activated = billing.computeDueDate({ anchorDate: null, settings, cycleDays: 30, planType: 'prepaid', today: new Date(2026, 10, 23) });
+  assert.equal(iso(activated.due), '2026-12-23');
+
+  // Paying early keeps the days already bought instead of burning them.
+  const early = billing.computeDueDate({ anchorDate: '2026-12-30', settings, cycleDays: 30, planType: 'prepaid', today: new Date(2026, 11, 10) });
+  assert.equal(iso(early.due), '2027-01-30');
+
+  // A month is a month, so a 31st has to land on a day that exists.
+  const clamped = billing.computeDueDate({ anchorDate: '2027-01-31', settings, cycleDays: 30, planType: 'prepaid', today: new Date(2027, 0, 31) });
+  assert.equal(iso(clamped.due), '2027-02-28');
+
+  // 90 days is sold as "3 months", so a prepaid quarter steps 3 months, not 90 days.
+  const quarter = billing.computeDueDate({ anchorDate: '2026-12-25', settings, cycleDays: 90, planType: 'prepaid', today: new Date(2026, 11, 25) });
+  assert.equal(iso(quarter.due), '2027-03-25');
+
+  // Prepaid never snaps to the global cut-off day, but postpaid still does.
+  assert.equal(billing.planUsesFixedCutoff(settings, 30, 'prepaid'), false);
+  assert.equal(billing.planUsesFixedCutoff(settings, 30, 'postpaid'), true);
+  const postpaid = billing.computeDueDate({ anchorDate: '2026-12-23', settings, cycleDays: 30, planType: 'postpaid', today: new Date(2026, 11, 25) });
+  assert.equal(iso(postpaid.due), '2027-01-01', 'the same payment on a postpaid plan still lands on the 1st');
+
+  // Short cycles stay day-counted for both models.
+  const weekly = billing.computeDueDate({ anchorDate: null, settings, cycleDays: 7, planType: 'prepaid', today: new Date(2026, 10, 23) });
+  assert.equal(iso(weekly.due), '2026-11-30');
+});
+
+test('grace belongs to postpaid only, and a customer with no plan keeps the router setting', () => {
+  const settings = { enabled: 1, cutoff_day: 1, grace_days: 3, expiry_time: '00:00', non_payment_profile: 'non-payment' };
+  assert.equal(billing.graceDaysFor('prepaid', settings), 0);
+  assert.equal(billing.graceDaysFor('postpaid', settings), 3);
+  assert.equal(billing.graceDaysFor(null, settings), 3, 'an unbilled/plan-less row is not punished');
+
+  const due = '2027-01-25 23:59';
+  const post = billing.expiryMoment(due, settings, billing.graceDaysFor('postpaid', settings));
+  const pre = billing.expiryMoment(due, settings, billing.graceDaysFor('prepaid', settings));
+  assert.equal(iso(post), '2027-01-28');
+  assert.equal(iso(pre), '2027-01-25', 'a prepaid line expires on the due instant itself');
+  assert.equal(pre.getHours(), 23, 'and still keeps the minute the operator picked');
+});
+
+test(`each account's own router timer is armed with its plan's grace`, async () => {
+  const settings = billing.getBillingSettings(ROUTER_ID);
+  // A fixed "now" keeps this readable: the same due date, two billing models.
+  const now = new Date(2026, 10, 23);
+
+  const pre = await billing.scheduleAccountCutoff(ROUTER_ID, 'prepaid-timer', '2027-01-25 23:59', { ...settings, grace_days: 3, plan_type: 'prepaid' }, now);
+  assert.equal(pre.scheduledAt, '2027-01-25 23:59:00');
+  const post = await billing.scheduleAccountCutoff(ROUTER_ID, 'postpaid-timer', '2027-01-25 23:59', { ...settings, grace_days: 3, plan_type: 'postpaid' }, now);
+  assert.equal(post.scheduledAt, '2027-01-28 23:59:00');
+
+  assert.equal(schedulerJobs.get('ppp-auto-kick-prepaid-timer')['start-date'], '2027-01-25');
+  assert.equal(schedulerJobs.get('ppp-auto-kick-postpaid-timer')['start-date'], '2027-01-28');
+
+  await billing.removeAccountCutoff(ROUTER_ID, 'prepaid-timer');
+  await billing.removeAccountCutoff(ROUTER_ID, 'postpaid-timer');
+});
+
+test('a prepaid subscriber created without a due date is billed one real month', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 3, expiry_time: '00:00', non_payment_profile: 'non-payment' });
+  const planId = makePlan('Prepaid Auto Due', 1200, 30, '10mbps', 'prepaid');
+
+  const created = await call(`/api/ppp/router/${ROUTER_ID}/customers`, {
+    method: 'POST',
+    body: { name: 'Auto Juan', username: 'auto-prepaid', password: 'pw', planId },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const row = customer('auto-prepaid');
+  assert.equal(row.due_date, iso(billing.addMonths(startOfToday, 1)), 'today the 23rd means the 23rd, not the cut-off day');
+  assert.equal(row.profile, '10mbps');
+});
+
+test('paying a prepaid line on Dec 25 makes Jan 25 the new due date', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 3, expiry_time: '00:00', non_payment_profile: 'non-payment' });
+  const planId = makePlan('Dec25 Prepaid', 1200, 30, '10mbps', 'prepaid');
+  const customerId = makeCustomer('late-prepaid', { due_date: '2026-12-23', plan_id: planId, billing_status: 'cut-off', original_profile: '10mbps' });
+
+  const paid = await billing.recordPayment(ROUTER_ID, customerId, { planId, today: new Date(2026, 11, 25) });
+  assert.equal(paid.dueDate, '2027-01-25');
+  assert.equal(paid.billingStatus, 'active');
+  assert.equal(customer('late-prepaid').due_date, '2027-01-25');
+
+  // The same money on the same day on a postpaid plan buys the shared cut-off day.
+  const postId = makePlan('Dec25 Postpaid', 1200, 30, '10mbps', 'postpaid');
+  const postCustomer = makeCustomer('late-postpaid', { due_date: '2026-12-23', plan_id: postId, billing_status: 'cut-off', original_profile: '10mbps' });
+  const postPaid = await billing.recordPayment(ROUTER_ID, postCustomer, { planId: postId, today: new Date(2026, 11, 25) });
+  assert.equal(postPaid.dueDate, '2027-01-01');
+});
+
+test('the customers list carries the plan type so the table can show it', async () => {
+  const planId = makePlan('Typed In List', 900, 30, '10mbps', 'prepaid');
+  makeCustomer('typed-juan', { plan_id: planId, due_date: '2027-01-25', billing_status: 'active' });
+
+  const list = await call(`/api/ppp/router/${ROUTER_ID}/customers`);
+  assert.equal(list.status, 200);
+  assert.equal(list.body.find((c) => c.username === 'typed-juan').plan_type, 'prepaid');
+  assert.equal(list.body.find((c) => c.username === 'typed-juan').plan_name, 'Typed In List');
+});
+
+test('the sweep cuts a prepaid line on its due date but forgives a postpaid one', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 3, expiry_time: '00:00', non_payment_profile: 'non-payment' });
+  const preId = makePlan('Sweep Prepaid', 700, 30, '10mbps', 'prepaid');
+  const postId = makePlan('Sweep Postpaid', 700, 30, '10mbps', 'postpaid');
+  makeCustomer('due-prepaid', { due_date: '2026-11-20 23:59', plan_id: preId, billing_status: 'active' });
+  makeCustomer('due-postpaid', { due_date: '2026-11-20 23:59', plan_id: postId, billing_status: 'active' });
+
+  // Two days after that due date: still a grace day for one, already late for the other.
+  const report = await billing.runCutoffSweep(new Date(2026, 10, 22, 12, 0), ROUTER_ID);
+  assert.equal(customer('due-prepaid').billing_status, 'cut-off', 'prepaid has no grace to sit in');
+  assert.equal(secrets.get('due-prepaid').profile, 'non-payment');
+  assert.equal(customer('due-postpaid').billing_status, 'active');
+  assert.equal(secrets.get('due-postpaid').profile, '10mbps');
+
+  // The sweep report is what the panel logs, so the same two days must show up in
+  // it as one cut and one left alone.
+  assert.ok(report.details.some((d) => d.username === 'due-prepaid' && d.ok), JSON.stringify(report.details));
+  assert.ok(!report.details.some((d) => d.username === 'due-postpaid'), 'a postpaid line inside its grace is not touched');
+});
+

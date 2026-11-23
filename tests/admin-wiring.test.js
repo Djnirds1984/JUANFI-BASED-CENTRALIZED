@@ -63,4 +63,28 @@ test('an unarmed row says why instead of only saying it is unarmed', () => {
   assert.match(body, /_pppBillingEnabled/, 'the cell must know whether billing is on');
   assert.match(body, /billing off/);
   assert.match(body, /router timer not armed/);
+  // Prepaid accounts are armed on the due date itself, so the cell cannot add the
+  // router-wide grace to every row.
+  assert.match(body, /graceDaysFor\(customer\)/);
+});
+
+test('the customer and pay forms show which billing model was picked', () => {
+  // Choosing the plan has to rewrite the due-date explanation, otherwise "prepaid"
+  // is one more word an operator has to already understand.
+  assert.match(appSource, /onchange="App\.renderCustomerDueHint\(\)"/, 'the plan picker must refresh the hint');
+  assert.match(appSource, /id="customer-due-hint"/);
+  assert.match(appSource, /Prepaid plan: the router cuts this line on the due date itself/);
+
+  // The Pay preview mirrors the server, so a prepaid line must not be snapped to
+  // the fixed cut-off day in the text the operator reads before saving.
+  const start = appSource.indexOf('updatePayPreview() {');
+  const preview = appSource.slice(start, appSource.indexOf('\n  },', start));
+  assert.match(preview, /plan_type/, 'the preview has to know the billing model');
+  assert.match(preview, /addMonthsLocal/);
+
+  // An overdue prepaid account is not "in grace", it is late.
+  const badgeStart = appSource.indexOf('renderBillingBadge(customer) {');
+  const badge = appSource.slice(badgeStart, appSource.indexOf('\n  },', badgeStart));
+  assert.match(badge, /graceDaysFor\(customer\)/);
+  assert.match(badge, /'Grace' : 'Overdue'/);
 });

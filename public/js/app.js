@@ -8236,7 +8236,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             ${customers.map((c) => `
               <tr>
                 <td><strong>${this.escapeHtml(c.name || '-')}</strong><br><span style="color:var(--text-muted);font-size:0.85rem">${this.escapeHtml(c.username || '-')}</span>${this.renderInstalledLine(c)}</td>
-                <td>${c.plan_name ? `${this.escapeHtml(c.plan_name)} <span style="color:var(--text-muted);font-size:0.85rem">(${this.formatAmount(c.plan_currency || this.systemCurrency, c.plan_price)})</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>
+                <td>${c.plan_name ? `${this.escapeHtml(c.plan_name)} <span style="color:var(--text-muted);font-size:0.85rem">(${this.formatAmount(c.plan_currency || this.systemCurrency, c.plan_price)})</span><br>${this.renderPlanTypeBadge(c)}` : '<span style="color:var(--text-muted)">-</span>'}</td>
                 <td>${this.escapeHtml(c.profile || '-')}</td>
                 <td>${this.renderDueCell(c)}${this.renderScheduledCell(c)}</td>
                 <td>${this.renderBillingBadge(c)}</td>
@@ -8253,7 +8253,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           </tbody>
         </table>
       </div>
-      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Every account carries its own cut-off timer on the router itself, armed for its due date plus the grace period, so a subscriber is moved to the non-payment profile even when the panel is offline. The panel's own sweep runs every minute as a backstop.</p>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Every account carries its own cut-off timer on the router itself, armed for its due date plus its own grace period - postpaid plans get the configured grace, prepaid plans are cut off on the due date itself - so a subscriber is moved to the non-payment profile even when the panel is offline. The panel's own sweep runs every minute as a backstop.</p>
     `;
   },
 
@@ -8286,7 +8286,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       return '<br><small style="color:var(--warning);font-size:0.78rem" title="Billing is switched off on this router, so the panel arms no cut-off timer and its sweep does not run either. Turn billing on in PPP - Billing Settings, then save the account.">billing off - no cut-off</small>';
     }
     const due = this.parseDue(customer.due_date);
-    const fires = due ? new Date(due.getTime() + (this._pppBillingGrace || 0) * 86400000) : null;
+    // A prepaid account is cut off on the due date itself, so its timer is armed
+    // with nothing added - showing the router grace here would be a lie.
+    const grace = this.graceDaysFor(customer) * 86400000;
+    const fires = due ? new Date(due.getTime() + grace) : null;
     if (fires && fires <= new Date()) {
       return '<br><small style="color:var(--text-muted);font-size:0.78rem" title="The cut-off instant has passed, so there is nothing left to arm; the sweep handles it.">cut-off due</small>';
     }
@@ -8328,6 +8331,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     return match ? `${match[1]}T${match[2]}:${match[3]}` : '';
   },
 
+  // Grace is a property of the plan now, not just of the router: prepaid rows
+  // never get the forgive-the-N-days treatment.
+  graceDaysFor(row) {
+    if (String(row?.plan_type || '').toLowerCase() === 'prepaid') return 0;
+    return Math.max(0, Number(this._pppBillingGrace) || 0);
+  },
+
   renderBillingBadge(customer) {
     const status = customer.billing_status || 'unbilled';
     if (status === 'cut-off') return '<span class="badge badge-offline">Cut-off</span>';
@@ -8336,8 +8346,33 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const due = this.parseDue(customer.due_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (due && due < today) return '<span class="badge badge-offline">Grace</span>';
+    if (due && due < today) {
+      return `<span class="badge badge-offline">${this.graceDaysFor(customer) > 0 ? 'Grace' : 'Overdue'}</span>`;
+    }
     return '<span class="badge badge-online">Paid</span>';
+  },
+
+  // One label everywhere a plan is offered for sale, so the billing model is on
+  // screen at the moment the operator picks it rather than only in the plans tab.
+  planOptionLabel(p) {
+    const prepaid = String(p.plan_type || 'postpaid').toLowerCase() === 'prepaid';
+    const cycle = p.cycle_days >= 365 ? `${Math.round(p.cycle_days / 365)}y` : p.cycle_days >= 28 ? `${Math.round(p.cycle_days / 30)}mo` : `${p.cycle_days}d`;
+    return `${this.escapeHtml(p.name)} - ${this.planMoney(p)}/${cycle}${prepaid ? ' [prepaid]' : ''}`;
+  },
+
+  // Mirror of the server's prepaid arithmetic - the preview must not promise a
+  // date the backend will not produce.
+  addMonthsLocal(date, months) {
+    const day = date.getDate();
+    const next = new Date(date.getFullYear(), date.getMonth() + months, 1);
+    next.setDate(Math.min(day, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()));
+    return next;
+  },
+
+  cycleMonths(cycleDays) {
+    const days = Math.max(1, Math.round(cycleDays) || 30);
+    if (days >= 365) return Math.max(1, Math.round(days / 365));
+    return Math.max(1, Math.round(days / 30));
   },
 
   // Plans carry their own currency code; fall back to the system one.
@@ -8363,7 +8398,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 
     const usable = (plans || []).filter((p) => p.is_active || p.id === customer.plan_id);
     const grace = Number(settings?.grace_days || 0);
-    const planLabels = usable.map((p) => `${this.escapeHtml(p.name)} - ${this.planMoney(p)}/${p.cycle_days >= 28 ? 'month' : `${p.cycle_days}d`} (${this.escapeHtml(p.pppoe_profile)})`);
+    this._pppPlanChoices = usable;
+    this._pppBillingGrace = grace;
+    const planLabels = usable.map((p) => `${this.planOptionLabel(p)} (${this.escapeHtml(p.pppoe_profile)})`);
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
@@ -8374,7 +8411,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="form-group"><label>Password</label><input type="password" name="password" ${isEdit ? 'placeholder="leave empty to keep the current one"' : 'required'} value="${this.escapeHtml(customer.password || '')}"></div>
         ${usable.length
           ? `<div class="form-group"><label>Billing Plan (decides the speed)</label>
-               <select name="planId">${usable.map((p, i) => `<option value="${p.id}" ${String(p.id) === String(customer.plan_id || '') ? 'selected' : ''}>${planLabels[i]}</option>`).join('')}</select>
+               <select name="planId" onchange="App.renderCustomerDueHint()">${usable.map((p, i) => `<option value="${p.id}" ${String(p.id) === String(customer.plan_id || '') ? 'selected' : ''}>${planLabels[i]}</option>`).join('')}</select>
                <small style="color:var(--text-muted)">The plan's PPPoE profile and its rate-limit are handed to this subscriber. Change the speed on the PPPoE Profiles tab.</small></div>`
           : `<div class="form-group"><label>Billing Plan</label>
                <input type="text" name="planId" value="" disabled>
@@ -8385,12 +8422,35 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <div class="form-group"><label>Next Due Date</label>
             <input type="datetime-local" name="dueDate" value="${this.toLocalInput(customer.due_date, { endOfDay: true })}"></div>
         </div>
-        <small style="color:var(--text-muted)">Leave the due date empty to bill one plan cycle from today. The panel arms a cut-off timer on the router for this account at the due date plus the ${grace}-day grace period, so the line is slowed down even when the panel is offline.</small>
+        <small id="customer-due-hint" style="color:var(--text-muted);display:block;margin-top:0.25rem"></small>
+        <small style="color:var(--text-muted);display:block;margin-top:0.25rem">Leave the due date empty to bill one plan cycle from today. The panel arms a cut-off timer on the router for this account, so the line is slowed down even when the panel is offline.</small>
       </form>
     `, [
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
       { label: isEdit ? 'Save Changes' : 'Add Customer', class: 'btn btn-primary', action: () => (isEdit ? this.submitEditCustomer(customerId) : this.submitAddCustomer()) },
     ]);
+    this.renderCustomerDueHint();
+  },
+
+  /**
+   * What the chosen plan's billing model means for the dates above it. Saying
+   * "prepaid" is not enough - the operator has to know the line dies on the day
+   * itself and that a late payment moves the anniversary along with it.
+   */
+  renderCustomerDueHint() {
+    const box = document.getElementById('customer-due-hint');
+    if (!box) return;
+    const select = document.querySelector('#ppp-customer-form select[name="planId"]');
+    const plan = (this._pppPlanChoices || []).find((p) => String(p.id) === String(select && select.value));
+    if (!plan) { box.textContent = ''; return; }
+    if (String(plan.plan_type || 'postpaid').toLowerCase() === 'prepaid') {
+      box.textContent = 'Prepaid plan: the router cuts this line on the due date itself, no grace. Pay late and the next cycle starts from the day the money comes in - due Dec 23, paid Dec 25, next due Jan 25.';
+      return;
+    }
+    const grace = Math.max(0, Number(this._pppBillingGrace) || 0);
+    box.textContent = grace > 0
+      ? `Postpaid plan: ${grace}-day grace after this due date before the line is slowed down, and renewals snap back to the fixed cut-off day.`
+      : 'Postpaid plan: renewals snap back to the fixed cut-off day set in Billing Settings.';
   },
 
   // Shared by add and edit: the fields this form is allowed to touch.
@@ -8832,13 +8892,14 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     container.innerHTML = `${head}
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Plan</th><th>Price</th><th>Cycle</th><th>Binds to Profile</th><th>Description</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+          <thead><tr><th>Plan</th><th>Price</th><th>Cycle</th><th>Billing Type</th><th>Binds to Profile</th><th>Description</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody>
             ${plans.map((p) => `
               <tr>
                 <td><strong>${this.escapeHtml(p.name)}</strong></td>
                 <td>${this.planMoney(p)}</td>
                 <td>${p.cycle_days >= 365 ? `${Math.round(p.cycle_days / 365)} year(s)` : p.cycle_days >= 28 ? `${Math.round(p.cycle_days / 30)} month(s)` : `${p.cycle_days} days`}</td>
+                <td>${this.renderPlanTypeBadge(p)}</td>
                 <td><code>${this.escapeHtml(p.pppoe_profile)}</code></td>
                 <td><small style="color:var(--text-muted)">${this.escapeHtml(p.description || '-')}</small></td>
                 <td><span class="badge ${p.is_active ? 'badge-online' : 'badge-offline'}">${p.is_active ? 'Active' : 'Hidden'}</span></td>
@@ -8851,14 +8912,35 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           </tbody>
         </table>
       </div>
-      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Plans with 28 days or more lock to the cut-off day in Billing Settings. Shorter cycles (weekly, 15 days) simply roll forward by that many days.</p>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">A <strong>postpaid</strong> plan of 28 days or more locks onto the cut-off day in Billing Settings and forgives the grace period. A <strong>prepaid</strong> plan counts its cycle from the day the subscriber actually paid and is cut off on that due date with no grace - activate Nov 23 and it runs to Dec 23; pay on Dec 25 and the new due date is Jan 25. Cycles shorter than 28 days always roll forward by that many days.</p>
     `;
+  },
+
+  // Postpaid is what every plan was before this existed and what the backend
+  // defaults to, so the badge only has to earn its place on the prepaid side.
+  renderPlanTypeBadge(plan) {
+    const prepaid = String(plan?.plan_type || 'postpaid').toLowerCase() === 'prepaid';
+    return `<span class="badge ${prepaid ? 'badge-offline' : 'badge-online'}" title="${prepaid
+      ? 'Cycle counted from the day they pay - cut off on the due date itself, no grace'
+      : 'Fixed cut-off day per month - the grace period applies before the line is slowed down'}">${prepaid ? 'Prepaid' : 'Postpaid'}</span>`;
+  },
+
+  // Spell the consequence out rather than the word: "prepaid" alone does not
+  // tell an operator that a late payer loses the days in between.
+  renderPlanTypeHint() {
+    const box = document.getElementById('plan-type-hint');
+    const select = document.querySelector('#billing-plan-form select[name="planType"]');
+    if (!box || !select) return;
+    box.textContent = select.value === 'prepaid'
+      ? 'Prepaid: no grace period at all, and every payment starts a new cycle from the day the money came in. A monthly plan activated on the 23rd runs to the 23rd; paid on the 25th, the next due date is the 25th.'
+      : 'Postpaid: everyone on this plan owes on the fixed cut-off day from Billing Settings, the grace period is allowed, and paying late does not move the day.';
   },
 
   async showPlanModal(planId = null) {
     const isEdit = planId != null;
     const existing = isEdit ? (this._billingPlans || []).find((p) => p.id === planId) || {} : {};
     const profiles = this._billingProfileNames || (await this.pppProfileNames());
+    const prepaid = String(existing.plan_type || 'postpaid').toLowerCase() === 'prepaid';
 
     const form = `
       <form id="billing-plan-form">
@@ -8874,6 +8956,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             <small style="color:var(--text-muted)">30 monthly, 90 quarterly, 365 yearly</small></div>
         </div>
         ${this.profileField('pppoeProfile', existing.pppoe_profile, profiles, 'Binds to PPPoE Profile')}
+        <div class="form-group"><label>Billing Type</label>
+          <select name="planType" onchange="App.renderPlanTypeHint()">
+            <option value="postpaid" ${prepaid ? '' : 'selected'}>Postpaid - fixed cut-off day, grace allowed</option>
+            <option value="prepaid" ${prepaid ? 'selected' : ''}>Prepaid - cycle from the day they pay, no grace</option>
+          </select>
+          <small style="color:var(--text-muted);display:block;margin-top:0.25rem" id="plan-type-hint"></small>
+        </div>
         <div class="form-group"><label>Description (optional)</label>
           <input type="text" name="description" value="${this.escapeHtml(existing.description || '')}"></div>
         <div class="form-group"><label style="display:flex;gap:0.5rem;align-items:center;text-transform:none">
@@ -8885,6 +8974,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
       { label: isEdit ? 'Save Changes' : 'Create Plan', class: 'btn btn-primary', action: () => this.submitPlan(planId) },
     ]);
+    this.renderPlanTypeHint();
   },
 
   async submitPlan(planId = null) {
@@ -8895,6 +8985,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       currency: (form.currency.value.trim() || 'PHP').toUpperCase(),
       cycleDays: parseInt(form.cycleDays.value, 10) || 30,
       pppoeProfile: form.pppoeProfile.value.trim(),
+      planType: form.planType.value,
       description: form.description.value.trim(),
       isActive: form.isActive.checked ? 1 : 0,
     };
@@ -9054,7 +9145,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <p style="color:var(--text-muted)">Binds <strong>${this.escapeHtml(customer.name || customer.username)}</strong> to a plan and starts the clock from today. No payment is recorded - use this for free trials and postpaid accounts.</p>
         <div class="form-group"><label>Plan</label>
           <select name="planId" onchange="App.updateAssignPreview()">
-            ${plans.map((p) => `<option value="${p.id}" ${p.id === customer.plan_id ? 'selected' : ''}>${this.escapeHtml(p.name)} - ${this.planMoney(p)} / ${p.cycle_days}d</option>`).join('')}
+            ${plans.map((p) => `<option value="${p.id}" ${p.id === customer.plan_id ? 'selected' : ''}>${this.planOptionLabel(p)}</option>`).join('')}
           </select></div>
         <div class="form-group"><label>Cycles</label>
           <input type="number" name="cycles" min="1" max="24" value="1" onchange="App.updateAssignPreview()" oninput="App.updateAssignPreview()"></div>
@@ -9113,7 +9204,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         </p>
         <div class="form-group"><label>Plan</label>
           <select name="planId" onchange="App.updatePayPreview()">
-            ${options.map((p) => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${this.escapeHtml(p.name)} - ${this.planMoney(p)} / ${p.cycle_days}d</option>`).join('')}
+            ${options.map((p) => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${this.planOptionLabel(p)}</option>`).join('')}
           </select></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
           <div class="form-group"><label>Cycles (months)</label>
@@ -9172,20 +9263,26 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     let due = this._payCustomer && this._payCustomer.due_date ? new Date(`${this._payCustomer.due_date}T00:00:00`) : today;
     if (Number.isNaN(due.getTime()) || due < today) due = today;
 
-    if (Number(settings.enabled) === 1 && plan.cycle_days >= 28) {
+    if (Number(settings.enabled) === 1 && plan.cycle_days >= 28 && String(plan.plan_type || 'postpaid').toLowerCase() !== 'prepaid') {
       const cutoffDay = Math.max(1, Math.min(28, parseInt(settings.cutoff_day, 10) || 1));
       for (let i = 0; i < cycles; i++) {
         const lastDay = new Date(due.getFullYear(), due.getMonth() + 1, 0).getDate();
         const candidate = new Date(due.getFullYear(), due.getMonth(), Math.min(cutoffDay, lastDay));
         due = candidate > due ? candidate : new Date(due.getFullYear(), due.getMonth() + 1, Math.min(cutoffDay, lastDay));
       }
+    } else if (String(plan.plan_type || 'postpaid').toLowerCase() === 'prepaid' && plan.cycle_days >= 28) {
+      // Prepaid anniversaries: whole calendar months from the day the money
+      // arrives, clamped to days that really exist - Dec 25 plus a month is
+      // Jan 25, Jan 31 plus a month is Feb 28.
+      due = this.addMonthsLocal(due, this.cycleMonths(plan.cycle_days) * cycles);
     } else {
       due = new Date(due.getFullYear(), due.getMonth(), due.getDate() + plan.cycle_days * cycles);
     }
 
     const profileNote = this._payCustomer && this._payCustomer.billing_status === 'cut-off' ? ' - profile restored to plan' : '';
+    const typeNote = String(plan.plan_type || 'postpaid').toLowerCase() === 'prepaid' ? ' - prepaid, no grace' : '';
     const local = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
-    preview.value = `${local} via profile "${plan.pppoe_profile}"${profileNote}`;
+    preview.value = `${local} via profile "${plan.pppoe_profile}"${profileNote}${typeNote}`;
   },
 
   async submitPayment(customerId) {

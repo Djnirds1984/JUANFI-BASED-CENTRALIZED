@@ -709,6 +709,116 @@ export async function cutOffCustomer(
   };
 }
 
+// ---------------------------------------------------------------- mirror the router back onto the panel
+//
+// Two of the three ways a login changes profile never pass through this server:
+// the account's own /system/scheduler job fires while the panel is restarting or
+// switched off, and an operator can always set a profile in Winbox. /ppp/secret is
+// the only place the subscriber's real speed lives, so the panel asks it what each
+// of its accounts is actually on instead of trusting its own last write.
+
+export interface ReconcileReport {
+  checked: number;
+  updated: Array<{ username: string; from: string; to: string; billingStatus: string }>;
+  skipped?: 'router not connected' | 'no customers';
+  error?: string;
+}
+
+/**
+ * Copy the profile the router has on each known customer back into the panel.
+ * Read-only towards the router: this never pushes anything, it only admits what
+ * the router already did, so a subscriber on the cut-off profile shows as cut off
+ * in the table instead of sitting there looking paid up.
+ */
+export async function reconcileRouterProfiles(routerId: number): Promise<ReconcileReport> {
+  const db = getDb();
+  const report: ReconcileReport = { checked: 0, updated: [] };
+
+  const rows = db
+    .prepare(
+      `SELECT id, username, profile, due_date, billing_status, billing_type, original_profile, scheduled_at
+       FROM ppp_customers WHERE router_id = ?`
+    )
+    .all(routerId) as any[];
+  if (!rows.length) return { ...report, skipped: 'no customers' };
+  if (!mikroTikService.isConnected(routerId)) return { ...report, skipped: 'router not connected' };
+
+  let secrets: any;
+  try {
+    secrets = await mikroTikService.getPppSecrets(routerId);
+  } catch (err) {
+    return { ...report, skipped: 'router not connected', error: (err as Error).message };
+  }
+
+  const liveProfile = new Map<string, string>();
+  for (const secret of Array.isArray(secrets) ? secrets : []) {
+    if (secret && secret.name) liveProfile.set(String(secret.name), String(secret.profile || ''));
+  }
+  const settings = getBillingSettings(routerId);
+  // With billing switched off the panel is only reporting speeds, not judging
+  // them: a hand-assigned slow profile must not turn into a cut-off record.
+  const nonPayment = Number(settings.enabled) === 1 ? String(settings.non_payment_profile || '').trim() : '';
+  const now = new Date();
+
+  for (const row of rows) {
+    // A login the router does not have (a RADIUS-backed secret, or one deleted by
+    // hand) is not a mismatch to fix - we simply have nothing to learn from it.
+    const routerProfile = liveProfile.get(String(row.username));
+    if (!routerProfile) continue;
+    report.checked++;
+    const stored = String(row.profile || '');
+    if (routerProfile === stored) continue;
+
+    let status = String(row.billing_status || 'unbilled');
+    let reArmedAt: string | null = null;
+    // cut  - the router put this login on the slow profile, so the panel admits it
+    //        was cut off even though it was asleep when it happened.
+    // paid - somebody handed the speed back and the paid period still runs, so the
+    //        account is not cut off any more and its own timer gets re-armed.
+    // move - the profile simply changed; the billing record stays as the panel wrote it.
+    let kind: 'cut' | 'paid' | 'move' = 'move';
+
+    if (nonPayment && routerProfile === nonPayment) {
+      kind = 'cut';
+      status = 'cut-off';
+      // The one-shot job has already run; taking it off the router keeps
+      // /system/scheduler showing only the timers that still have to fire.
+      await removeAccountCutoff(routerId, String(row.username));
+    } else if (status === 'cut-off') {
+      const paidUntil = parseDueMoment(row.due_date);
+      // Clearing the flag on an expired line would hand it straight back to the
+      // sweep, which would cut it off again a minute later and overrule whoever
+      // restored it, so an expired account keeps its record and only the profile
+      // is mirrored.
+      if (paidUntil && paidUntil > now) {
+        kind = 'paid';
+        status = 'active';
+        const job = await scheduleAccountCutoff(routerId, String(row.username), row.due_date, { ...settings, billing_type: row.billing_type }, now);
+        reArmedAt = job.scheduledAt;
+      }
+    }
+
+    const originalProfile =
+      kind === 'cut' ? row.original_profile || stored || null
+      : kind === 'paid' ? null
+      : row.original_profile || null;
+    const scheduledAt = kind === 'cut' ? null : kind === 'paid' ? reArmedAt : row.scheduled_at || null;
+
+    db.prepare(
+      `UPDATE ppp_customers
+       SET profile = ?, billing_status = ?, original_profile = ?, scheduled_at = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(routerProfile, status, originalProfile, scheduledAt, row.id);
+
+    report.updated.push({ username: String(row.username), from: stored, to: routerProfile, billingStatus: status });
+  }
+
+  if (report.updated.length) {
+    console.log(`[billing] router mirror on router ${routerId}: ${report.updated.map((u) => `${u.username} ${u.from}->${u.to}`).join(', ')}`);
+  }
+  return report;
+}
+
 // ---------------------------------------------------------------- cut-off sweep
 
 export interface SweepReport {
@@ -740,6 +850,14 @@ export async function runCutoffSweep(now: Date = new Date(), onlyRouterId?: numb
 
   for (const settings of enabled) {
     const routerId = Number(settings.router_id);
+    // The router's own timer may have already done the job while the panel slept,
+    // so take its word for who is on the cut-off profile before deciding who still
+    // needs cutting. Accounts it moved are dropped from this pass by the status.
+    try {
+      await reconcileRouterProfiles(routerId);
+    } catch (err) {
+      console.error(`[billing] could not mirror the router for router ${routerId}:`, (err as Error).message);
+    }
     let due: any[] = [];
     try {
       due = db

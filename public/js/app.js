@@ -8215,9 +8215,42 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       ]);
       this._pppBillingEnabled = Number(settings?.enabled) === 1;
       this._pppBillingGrace = Number(settings?.grace_days || 0);
+      // The profile that means "throttled", so a row sitting on it can be called
+      // out however it got there.
+      this._pppNonPaymentProfile = String(settings?.non_payment_profile || '').trim();
       this.renderPppCustomersTable(container, customers || []);
+      // Somebody is looking at the list, so make it say what the router really
+      // holds: an account's own cut-off timer fires even while this panel is
+      // offline, and a profile changed in Winbox never passes through the server.
+      await this.syncPppFromRouter({ silent: true });
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  /**
+   * Ask the router which profile each of our accounts actually has and mirror the
+   * answer into the panel. Without this the table keeps showing the profile the
+   * subscriber stopped using the moment the router's own timer moved them.
+   */
+  async syncPppFromRouter(opts = {}) {
+    if (this._pppSyncing) return;
+    this._pppSyncing = true;
+    try {
+      const report = await api.reconcileRouterProfiles(this.selectedRouterId);
+      const moved = (report && report.updated) || [];
+      if (!moved.length) {
+        if (!opts.silent) this.toast('Panel already matches the router profiles', 'info');
+        return;
+      }
+      const customers = await api.getPppCustomers(this.selectedRouterId).catch(() => null);
+      if (customers) this.renderPppCustomersTable(document.getElementById('ppp-tab-content'), customers);
+      const names = moved.slice(0, 3).map((u) => `${u.username} ${u.from || '-'} -> ${u.to}`);
+      this.toast(`Router had ${moved.length} account(s) on another profile: ${names.join(', ')}${moved.length > 3 ? ` +${moved.length - 3} more` : ''}`, 'info');
+    } catch (err) {
+      if (!opts.silent) this.toast(err.message, 'error');
+    } finally {
+      this._pppSyncing = false;
     }
   },
 
@@ -8229,6 +8262,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       return;
     }
     container.innerHTML = `
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-bottom:0.75rem">
+        <button class="btn btn-sm btn-outline" onclick="App.syncPppFromRouter()">Sync from Router</button>
+      </div>
       <div class="table-wrapper">
         <table>
           <thead><tr><th>Customer</th><th>Plan</th><th>Profile</th><th>Due Date</th><th>Billing</th><th>Account</th><th style="text-align:right">Actions</th></tr></thead>
@@ -8237,7 +8273,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
               <tr>
                 <td><strong>${this.escapeHtml(c.name || '-')}</strong><br><span style="color:var(--text-muted);font-size:0.85rem">${this.escapeHtml(c.username || '-')}</span>${this.renderInstalledLine(c)}</td>
                 <td>${c.plan_name ? `${this.escapeHtml(c.plan_name)} <span style="color:var(--text-muted);font-size:0.85rem">(${this.formatAmount(c.plan_currency || this.systemCurrency, c.plan_price)})</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>
-                <td>${this.escapeHtml(c.profile || '-')}</td>
+                <td>${this.renderProfileCell(c)}</td>
                 <td>${this.renderDueCell(c)}${this.renderScheduledCell(c)}</td>
                 <td>${this.renderBillingBadge(c)} ${this.renderBillingTypeBadge(c)}</td>
                 <td><span class="badge ${c.disabled ? 'badge-offline' : 'badge-online'}">${c.disabled ? 'Disabled' : 'Enabled'}</span></td>
@@ -8253,8 +8289,21 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           </tbody>
         </table>
       </div>
-      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Every account carries its own cut-off timer on the router itself, armed for its due date plus its own grace period - postpaid accounts get the configured grace, prepaid accounts are cut off on the due date itself - so a subscriber is moved to the non-payment profile even when the panel is offline. The panel's own sweep runs every minute as a backstop.</p>
-    `;
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem">Every account carries its own cut-off timer on the router itself, armed for its due date plus its own grace period - postpaid accounts get the configured grace, prepaid accounts are cut off on the due date itself - so a subscriber is moved to the non-payment profile even when the panel is offline. The panel's own sweep runs every minute as a backstop. The Profile column is the profile the router holds for that login, so an account its own timer moved - or one changed in Winbox - shows up here as it really is.</p>`;
+  },
+
+  /**
+   * What the subscriber is actually running at. Read off /ppp/secret, which means
+   * it can be a profile this panel never set, so sitting on the non-payment
+   * profile is called out whatever moved the account there.
+   */
+  renderProfileCell(customer) {
+    const profile = String(customer.profile || '');
+    if (!profile) return '<span style="color:var(--text-muted)">-</span>';
+    if (this._pppNonPaymentProfile && profile === this._pppNonPaymentProfile) {
+      return `<span style="color:var(--danger)">${this.escapeHtml(profile)}</span><br><small style="color:var(--danger);font-size:0.78rem" title="The router has this login on the non-payment profile, so the subscriber is throttled right now - the panel put it there, the account's own cut-off timer did, or somebody set it in Winbox.">&#9888; cut off</small>`;
+    }
+    return this.escapeHtml(profile);
   },
 
   renderInstalledLine(customer) {

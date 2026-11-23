@@ -15,6 +15,7 @@ import {
   normalizeBillingType,
   parseDueMoment,
   recordPayment,
+  reconcileRouterProfiles,
   removeAccountCutoff,
   runCutoffSweep,
   saveBillingSettings,
@@ -1356,6 +1357,22 @@ router.post('/router/:routerId/billing/sweep', async (req: Request, res: Respons
     res.json({ ...report, details: report.details.filter((d) => d.routerId === routerId) });
   } catch (error: any) {
     console.error('Billing sweep error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Ask the router what profile each of our accounts is really on and copy that
+ * back into the panel. The account's own RouterOS timer cuts people off even
+ * while we are restarting, and Winbox edits never pass through this server, so
+ * this is how the table stops showing a profile the subscriber left behind.
+ */
+router.post('/router/:routerId/billing/reconcile', async (req: Request, res: Response) => {
+  try {
+    const report = await reconcileRouterProfiles(parseInt(req.params.routerId));
+    res.json(report);
+  } catch (error: any) {
+    console.error('Billing reconcile error:', error);
     res.status(500).json({ error: error.message });
   }
 });

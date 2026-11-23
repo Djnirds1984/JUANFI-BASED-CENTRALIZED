@@ -582,6 +582,89 @@ test('startPppBillingSweep installs a timer and stop clears it', () => {
   assert.ok(true);
 });
 
+// ---- mirroring what the router did on its own ------------------------------------
+
+test('the panel admits a cut-off the router applied while it was asleep', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 3, expiry_time: '00:00', non_payment_profile: 'non-payment' });
+  const planId = makePlan('Mirror Plan', 1000, 30, '10mbps');
+  // The account's own scheduler job fired and moved the secret; the panel was not
+  // awake for it, so its row still says the account is on its paid profile.
+  const id = makeCustomer('router-cut', { due_date: '2026-10-01', plan_id: planId, billing_status: 'active', routerProfile: 'non-payment' });
+  db.prepare("UPDATE ppp_customers SET scheduled_at = '2026-10-04 00:00:00' WHERE id = ?").run(id);
+
+  const report = await billing.reconcileRouterProfiles(ROUTER_ID);
+
+  assert.deepEqual(
+    report.updated.find((u) => u.username === 'router-cut'),
+    { username: 'router-cut', from: '10mbps', to: 'non-payment', billingStatus: 'cut-off' }
+  );
+  assert.equal(customer('router-cut').profile, 'non-payment');
+  assert.equal(customer('router-cut').billing_status, 'cut-off');
+  assert.equal(customer('router-cut').original_profile, '10mbps', 'the paid profile is kept so a payment can restore it');
+  assert.equal(customer('router-cut').scheduled_at, null, 'a job that already fired is not still armed');
+  assert.equal(schedulerJobs.has(billing.accountJobName('router-cut')), false, 'the spent one-shot job is taken off the router');
+
+  // Nothing gets pushed back the other way: the sweep has no reason to re-cut an
+  // account the router already moved.
+  const sweep = await billing.runCutoffSweep(new Date(2026, 10, 22));
+  assert.equal(sweep.details.some((d) => d.username === 'router-cut'), false);
+});
+
+test('a profile handed back in Winbox is mirrored without starting a fight', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 0, expiry_time: '00:00', non_payment_profile: 'non-payment' });
+  const planId = makePlan('Hand Back Plan', 1000, 30, '10mbps');
+
+  // Cut off by the panel, then given speed by a person: the secret is back on the
+  // paid profile while our row still holds the slow one.
+  const paidAgain = makeCustomer('back-paid', { due_date: '2099-01-01', plan_id: planId, billing_status: 'cut-off' });
+  db.prepare("UPDATE ppp_customers SET profile = 'non-payment', scheduled_at = NULL WHERE id = ?").run(paidAgain);
+
+  const report = await billing.reconcileRouterProfiles(ROUTER_ID);
+  assert.ok(report.updated.some((u) => u.username === 'back-paid' && u.to === '10mbps'));
+  assert.equal(customer('back-paid').profile, '10mbps');
+  assert.equal(customer('back-paid').billing_status, 'active', 'the paid period still runs, so the account is running again');
+  assert.equal(customer('back-paid').original_profile, null);
+  assert.ok(customer('back-paid').scheduled_at, 'the cut-off timer is armed for the rest of the paid period');
+  assert.ok(schedulerJobs.has(billing.accountJobName('back-paid')));
+
+  // Same story on an expired line, but the record must stay cut-off: clearing it
+  // would hand the account straight back to the sweep and overrule Winbox.
+  const expired = makeCustomer('back-expired', { due_date: '2026-10-01', plan_id: planId, billing_status: 'cut-off' });
+  db.prepare("UPDATE ppp_customers SET profile = 'non-payment' WHERE id = ?").run(expired);
+
+  const sweep = await billing.runCutoffSweep(new Date(2026, 10, 22));
+  assert.equal(customer('back-expired').profile, '10mbps', 'the panel shows the profile the subscriber really has');
+  assert.equal(customer('back-expired').billing_status, 'cut-off');
+  assert.equal(sweep.details.some((d) => d.username === 'back-expired'), false, 'the sweep does not cut them off again');
+  assert.equal(secrets.get('back-expired').profile, '10mbps');
+});
+
+test('a router that is not answering is never guessed about', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 0, non_payment_profile: 'non-payment' });
+  makeCustomer('dark-router', { due_date: '2099-01-01', routerProfile: 'non-payment' });
+
+  routerConnected = false;
+  const report = await billing.reconcileRouterProfiles(ROUTER_ID);
+  routerConnected = true;
+
+  assert.equal(report.skipped, 'router not connected');
+  assert.equal(report.updated.length, 0);
+  assert.equal(customer('dark-router').profile, '10mbps', 'the row keeps the last thing we actually wrote');
+  assert.equal(customer('dark-router').billing_status, 'unbilled');
+});
+
+test('with billing switched off profiles are reported but never judged', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 0, cutoff_day: 1, grace_days: 0, non_payment_profile: 'non-payment' });
+  const id = makeCustomer('hand-slow', { routerProfile: 'non-payment' });
+
+  const report = await billing.reconcileRouterProfiles(ROUTER_ID);
+  assert.ok(report.updated.some((u) => u.username === 'hand-slow' && u.to === 'non-payment'), 'the speed still shows the truth');
+  assert.equal(customer('hand-slow').billing_status, 'unbilled', 'a slow profile set by hand is not a cut-off while billing is off');
+
+  db.prepare('DELETE FROM ppp_customers WHERE id = ?').run(id);
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 0, non_payment_profile: 'non-payment' });
+});
+
 // ---- overview -------------------------------------------------------------------
 
 test('the billing overview counts each state once', async () => {
@@ -681,6 +764,19 @@ test('billing settings reject an empty profile and the sweep endpoint answers', 
 
   const overview = await call(`/api/ppp/router/${ROUTER_ID}/billing/overview`);
   assert.equal(typeof overview.body.total, 'number');
+});
+
+test('the reconcile endpoint tells the panel what the router moved', async () => {
+  billing.saveBillingSettings(ROUTER_ID, { enabled: 1, cutoff_day: 1, grace_days: 0, non_payment_profile: 'non-payment' });
+  makeCustomer('http-mirror', { routerProfile: 'non-payment' });
+
+  const res = await call(`/api/ppp/router/${ROUTER_ID}/billing/reconcile`, { method: 'POST' });
+
+  assert.equal(res.status, 200);
+  assert.ok(res.body.checked >= 1);
+  assert.ok(res.body.updated.some((u) => u.username === 'http-mirror' && u.from === '10mbps' && u.to === 'non-payment'));
+  assert.equal(customer('http-mirror').billing_status, 'cut-off');
+  assert.equal(customer('http-mirror').profile, 'non-payment');
 });
 
 test('PPPoE servers are identified by interface + service name, exactly like RouterOS', async () => {

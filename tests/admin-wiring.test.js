@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const appSource = fs.readFileSync(path.join(root, 'public/js/app.js'), 'utf8');
+const apiSource = fs.readFileSync(path.join(root, 'public/js/api.js'), 'utf8');
 
 /**
  * Table rows in the admin SPA call back into the App object through inline
@@ -98,4 +99,29 @@ test('the customer and pay forms show which billing model was picked', () => {
   const badge = appSource.slice(badgeStart, appSource.indexOf('\n  },', badgeStart));
   assert.match(badge, /graceDaysFor\(customer\)/);
   assert.match(badge, /'Grace' : 'Overdue'/);
+});
+
+test('the customers table shows the profile the router really holds', () => {
+  // A profile the router changed on its own - the account's cut-off timer firing
+  // while the panel was down, or an edit in Winbox - never passes through the
+  // server, so reading the list has to ask the router instead of trusting the row.
+  assert.match(apiSource, /\/ppp\/router\/\$\{routerId\}\/billing\/reconcile/, 'the API client needs the mirror endpoint');
+  assert.match(appSource, /\$\{this\.renderProfileCell\(c\)\}/, 'the Profile column must go through the renderer');
+  assert.match(appSource, /await this\.syncPppFromRouter\(\{ silent: true \}\)/, 'opening the list must reconcile against the router');
+  assert.match(appSource, /onclick="App\.syncPppFromRouter\(\)">Sync from Router</, 'and the operator must be able to ask for it by hand');
+
+  // Sitting on the non-payment profile is the fact that matters, so it is called
+  // out whatever moved the account there.
+  const cellStart = appSource.indexOf('renderProfileCell(customer) {');
+  const cell = appSource.slice(cellStart, appSource.indexOf('\n  },', cellStart));
+  assert.ok(cellStart > 0, 'the profile renderer exists');
+  assert.match(cell, /_pppNonPaymentProfile/, 'the marker has to know which profile means throttled');
+  assert.match(cell, /cut off/);
+
+  const syncStart = appSource.indexOf('async syncPppFromRouter(');
+  const sync = appSource.slice(syncStart, appSource.indexOf('\n  },', syncStart));
+  assert.ok(syncStart > 0, 'the sync method exists');
+  assert.match(sync, /api\.reconcileRouterProfiles/, 'the sync calls the mirror endpoint');
+  assert.match(sync, /renderPppCustomersTable/, 'and repaints the table when the router disagreed');
+  assert.match(sync, /_pppSyncing/, 'a slow router must not be asked twice over');
 });

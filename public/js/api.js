@@ -937,6 +937,12 @@ class ApiClient {
     return this.post(`/ppp/router/${routerId}/billing/sweep`);
   }
 
+  // The router is the one thing that knows what a subscriber is really running
+  // at, so this asks it and lets the panel admit profiles it did not set itself.
+  async reconcileRouterProfiles(routerId) {
+    return this.post(`/ppp/router/${routerId}/billing/reconcile`);
+  }
+
   async assignCustomerPlan(routerId, customerId, data) {
     return this.post(`/ppp/router/${routerId}/customers/${customerId}/plan`, data);
   }

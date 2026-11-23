@@ -12,7 +12,7 @@ import {
   getBillingPlan,
   getBillingSettings,
   listBillingPlans,
-  normalizePlanType,
+  normalizeBillingType,
   parseDueMoment,
   recordPayment,
   removeAccountCutoff,
@@ -61,7 +61,7 @@ router.get('/router/:routerId/customers', (_req: Request, res: Response) => {
     const customers = db
       .prepare(
         `SELECT c.*, p.name AS plan_name, p.price AS plan_price, p.cycle_days AS plan_cycle_days,
-                p.currency AS plan_currency, p.plan_type AS plan_type
+                p.currency AS plan_currency
          FROM ppp_customers c
          LEFT JOIN billing_plans p ON p.id = c.plan_id
          WHERE c.router_id = ? ORDER BY c.created_at DESC`
@@ -109,6 +109,22 @@ function scheduleNotice(skipped?: string): string | undefined {
 }
 
 
+/**
+ * An account is billed either postpaid (fixed cut-off day, grace period) or
+ * prepaid (cycle counted from the day the money arrived, no grace). It is chosen
+ * per subscriber, because two neighbours on the same plan price can be sold
+ * different terms. Anything else is a typo in the form, so it is rejected rather
+ * than filed under postpaid and quietly giving the subscriber grace days nobody
+ * sold them.
+ */
+function readBillingType(value: any): { ok: true; type: string } | { ok: false; error: string } {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return { ok: true, type: 'postpaid' };
+  if (raw !== 'postpaid' && raw !== 'prepaid') return { ok: false, error: 'Billing type is either postpaid or prepaid' };
+  return { ok: true, type: raw };
+}
+
+
 router.post('/router/:routerId/customers', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
@@ -117,6 +133,7 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       username,
       password,
       planId,
+      billingType,
       installDate,
       dueDate,
       profile,
@@ -128,6 +145,11 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
 
     if (!name || !username || !password) {
       res.status(400).json({ error: 'Name, username and password are required' });
+      return;
+    }
+    const type = readBillingType(billingType);
+    if (!type.ok) {
+      res.status(400).json({ error: type.error });
       return;
     }
 
@@ -172,9 +194,9 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
     const settings = getBillingSettings(routerId);
     if (!due && plan) {
       // No explicit due date: give them the plan's own cycle from today. A
-      // prepaid plan counts that cycle in real months from the activation day,
+      // prepaid account counts that cycle in real months from the activation day,
       // so activating on the 23rd lands on the 23rd.
-      due = formatDateOnly(computeDueDate({ anchorDate: null, settings, cycleDays: plan.cycle_days, planType: plan.plan_type }).due);
+      due = formatDateOnly(computeDueDate({ anchorDate: null, settings, cycleDays: plan.cycle_days, billingType: type.type }).due);
     }
 
     let secretOnRouter = false;
@@ -202,8 +224,8 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
 
     try {
       db.prepare(
-        `INSERT INTO ppp_customers (router_id, name, username, password, profile, service, local_address, remote_address, comment, source, plan_id, due_date, install_date, billing_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO ppp_customers (router_id, name, username, password, profile, service, local_address, remote_address, comment, source, plan_id, due_date, install_date, billing_status, billing_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         routerId,
         name,
@@ -219,6 +241,7 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
         due,
         install,
         due ? 'active' : 'unbilled',
+        type.type,
       );
     } catch (error: any) {
       // The login already exists on the router; keeping it while the panel has
@@ -238,7 +261,7 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
     // moved to the non-payment profile at their due moment even if the panel is
     // down when it arrives.
     const created = db.prepare('SELECT id FROM ppp_customers WHERE router_id = ? AND username = ?').get(routerId, username) as any;
-    const job = await scheduleAccountCutoff(routerId, username, due, { ...settings, plan_type: plan?.plan_type });
+    const job = await scheduleAccountCutoff(routerId, username, due, { ...settings, billing_type: type.type });
     if (job.scheduledAt && created?.id) {
       db.prepare("UPDATE ppp_customers SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(job.scheduledAt, created.id);
     }
@@ -248,6 +271,7 @@ router.post('/router/:routerId/customers', async (req: Request, res: Response) =
       scheduledAt: job.scheduledAt,
       dueDate: due,
       profile: effectiveProfile,
+      billingType: type.type,
       warning: job.error
         || scheduleNotice(job.skipped)
         || (secretOnRouter ? undefined : 'router was offline: the login was saved in the panel only'),
@@ -268,6 +292,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       username,
       password,
       planId,
+      billingType,
       installDate,
       dueDate,
       profile,
@@ -300,13 +325,15 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
     }
     const nextProfile = String(plan?.pppoe_profile || profile || customer.profile || '').trim();
 
-    // The plan decides the billing model, not just the speed: a prepaid account
-    // is cut off on its due instant with no grace, so the router timer has to be
-    // armed for that instant instead of the postpaid due-plus-grace one.
-    const billingPlanType = normalizePlanType(
-      plan?.plan_type
-        ?? (customer.plan_id ? getBillingPlan(routerId, Number(customer.plan_id))?.plan_type : undefined)
-    );
+    // The billing model belongs to the account, so an edit that does not mention
+    // it keeps whatever it was sold as. Switching an account to prepaid has to
+    // re-arm its router timer for the due instant itself, with no grace added.
+    const typeEdit = billingType === undefined ? null : readBillingType(billingType);
+    if (typeEdit && !typeEdit.ok) {
+      res.status(400).json({ error: typeEdit.error });
+      return;
+    }
+    const nextBillingType = typeEdit?.type ?? normalizeBillingType(customer.billing_type);
 
     const installProvided = installDate !== undefined && installDate !== null;
     const install = installProvided ? normalizeDateTime(installDate) : null;
@@ -370,6 +397,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
            profile = COALESCE(?, profile), service = COALESCE(?, service), local_address = COALESCE(?, local_address),
            remote_address = COALESCE(?, remote_address), comment = COALESCE(?, comment),
            plan_id = COALESCE(?, plan_id),
+           billing_type = COALESCE(?, billing_type),
            install_date = CASE WHEN ? = 1 THEN ? ELSE install_date END,
            due_date = CASE WHEN ? = 1 THEN ? ELSE due_date END,
            billing_status = COALESCE(?, billing_status),
@@ -379,6 +407,7 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
       name ?? null, username ?? null, password ?? null, nextProfile || null, service ?? null,
       localAddress ?? null, remoteAddress ?? null, comment ?? null,
       plan?.id ?? null,
+      nextBillingType,
       installProvided ? 1 : 0, install,
       dueProvided ? 1 : 0, due,
       nextStatus ?? null,
@@ -389,11 +418,11 @@ router.put('/router/:routerId/customers/:customerId', async (req: Request, res: 
     let scheduledAt: string | null = null;
     let scheduleError: string | undefined;
     let scheduleSkipped: string | undefined;
-    if (dueProvided || plan || nextProfile !== customer.profile) {
-      // The timer belongs to the account, so renaming the login or moving the
-      // due date has to move the timer with it.
+    if (dueProvided || plan || nextProfile !== customer.profile || nextBillingType !== normalizeBillingType(customer.billing_type)) {
+      // The timer belongs to the account, so renaming the login, moving the due
+      // date or changing the billing model has to move the timer with it.
       if (newUsername !== customer.username) await removeAccountCutoff(routerId, customer.username);
-      const job = await scheduleAccountCutoff(routerId, newUsername, saved?.due_date, { ...getBillingSettings(routerId), plan_type: billingPlanType });
+      const job = await scheduleAccountCutoff(routerId, newUsername, saved?.due_date, { ...getBillingSettings(routerId), billing_type: nextBillingType });
       scheduledAt = job.scheduledAt;
       scheduleError = job.error;
       scheduleSkipped = job.skipped;
@@ -1152,31 +1181,16 @@ router.get('/router/:routerId/billing/plans', (req: Request, res: Response) => {
   }
 });
 
-/**
- * A plan is billed either postpaid (fixed cut-off day, grace period) or prepaid
- * (cycle counted from the day the money arrived, no grace). Anything else is a
- * typo in the form, so it is rejected instead of being filed under postpaid and
- * quietly giving the subscriber three days they were never sold.
- */
-function readPlanType(value: any): { ok: true; type: string } | { ok: false; error: string } {
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (!raw) return { ok: true, type: 'postpaid' };
-  if (raw !== 'postpaid' && raw !== 'prepaid') return { ok: false, error: 'Plan type is either postpaid or prepaid' };
-  return { ok: true, type: raw };
-}
-
+// A plan is only ever a price, a cycle and a profile. Whether the subscriber
+// paying it is postpaid or prepaid is decided on the account, so nothing here
+// validates a billing model.
 router.post('/router/:routerId/billing/plans', (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);
-    const { name, price, cycleDays, currency, pppoeProfile, description, isActive, planType } = req.body;
+    const { name, price, cycleDays, currency, pppoeProfile, description, isActive } = req.body;
 
     if (!name || !pppoeProfile) {
       res.status(400).json({ error: 'Plan name and PPPoE profile are required' });
-      return;
-    }
-    const type = readPlanType(planType);
-    if (!type.ok) {
-      res.status(400).json({ error: type.error });
       return;
     }
 
@@ -1187,8 +1201,8 @@ router.post('/router/:routerId/billing/plans', (req: Request, res: Response) => 
     }
 
     db.prepare(
-      `INSERT INTO billing_plans (router_id, name, price, cycle_days, currency, pppoe_profile, description, plan_type, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO billing_plans (router_id, name, price, cycle_days, currency, pppoe_profile, description, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       routerId,
       name,
@@ -1197,11 +1211,10 @@ router.post('/router/:routerId/billing/plans', (req: Request, res: Response) => 
       currency || 'PHP',
       pppoeProfile,
       description || null,
-      type.type,
       isActive === undefined || isActive ? 1 : 0,
     );
 
-    res.status(201).json({ message: `Billing plan created (${type.type})` });
+    res.status(201).json({ message: 'Billing plan created' });
   } catch (error: any) {
     console.error('Create billing plan error:', error);
     res.status(500).json({ error: error.message });
@@ -1212,18 +1225,11 @@ router.put('/router/:routerId/billing/plans/:planId', (req: Request, res: Respon
   try {
     const routerId = parseInt(req.params.routerId);
     const planId = parseInt(req.params.planId);
-    const { name, price, cycleDays, currency, pppoeProfile, description, isActive, planType } = req.body;
+    const { name, price, cycleDays, currency, pppoeProfile, description, isActive } = req.body;
 
     const db = getDb();
     if (!getBillingPlan(routerId, planId)) {
       res.status(404).json({ error: 'Billing plan not found' });
-      return;
-    }
-    // Only rejected when the form actually sent the field, so a partial edit
-    // (price only) keeps whatever billing model the plan already had.
-    const type = planType === undefined ? null : readPlanType(planType);
-    if (type && !type.ok) {
-      res.status(400).json({ error: type.error });
       return;
     }
 
@@ -1235,7 +1241,6 @@ router.put('/router/:routerId/billing/plans/:planId', (req: Request, res: Respon
          currency = COALESCE(?, currency),
          pppoe_profile = COALESCE(?, pppoe_profile),
          description = COALESCE(?, description),
-         plan_type = COALESCE(?, plan_type),
          is_active = COALESCE(?, is_active),
          updated_at = datetime('now')
        WHERE id = ? AND router_id = ?`
@@ -1246,7 +1251,6 @@ router.put('/router/:routerId/billing/plans/:planId', (req: Request, res: Respon
       currency ?? null,
       pppoeProfile ?? null,
       description === undefined ? null : (description || null),
-      type?.type ?? null,
       isActive === undefined ? null : (isActive ? 1 : 0),
       planId,
       routerId,

@@ -32,12 +32,12 @@ export interface BillingPlan {
   pppoe_profile: string;
   description: string | null;
   is_active: number;
-  /** 'postpaid' (fixed cut-off day + grace) or 'prepaid' (cycle from payment, no grace). */
-  plan_type?: string | null;
 }
 
 /**
- * How a plan counts its billing period.
+ * How one account's period is counted. This is a property of the subscriber, not
+ * of the plan: two neighbours on the same price can be billed differently, so a
+ * plan only ever carries a profile and a price.
  *
  * postpaid - the neighbourhood model: everyone owes on the same fixed day of the
  * month, and the grace period is the window in which they can still pay before
@@ -47,7 +47,7 @@ export interface BillingPlan {
  * money actually arrived, and there is no grace at all. Activate Nov 23 and the
  * line runs to Dec 23; pay on Dec 25 and it runs to Jan 25, not Jan 23.
  */
-export type PlanType = 'postpaid' | 'prepaid';
+export type BillingType = 'postpaid' | 'prepaid';
 
 export const DEFAULT_BILLING_SETTINGS: Omit<BillingSettings, 'router_id'> = {
   enabled: 0,
@@ -64,7 +64,7 @@ export const DEFAULT_BILLING_SETTINGS: Omit<BillingSettings, 'router_id'> = {
 const MONTHLY_CYCLE_MIN_DAYS = 28;
 
 /** Anything that is not literally "prepaid" keeps the long-standing postpaid rules. */
-export function normalizePlanType(value: any): PlanType {
+export function normalizeBillingType(value: any): BillingType {
   return String(value || '').trim().toLowerCase() === 'prepaid' ? 'prepaid' : 'postpaid';
 }
 
@@ -190,11 +190,11 @@ export function nextCutoffAfter(date: Date, cutoffDay: number): Date {
 export function planUsesFixedCutoff(
   settings: Pick<BillingSettings, 'enabled'>,
   cycleDays: number,
-  planType?: any
+  billingType?: any
 ): boolean {
   // A prepaid line has no fixed billing day: its anniversary is the day it was
   // activated or the day the money arrived, whichever came later.
-  if (normalizePlanType(planType) === 'prepaid') return false;
+  if (normalizeBillingType(billingType) === 'prepaid') return false;
   return Number(settings.enabled) === 1 && cycleDays >= MONTHLY_CYCLE_MIN_DAYS;
 }
 
@@ -216,7 +216,7 @@ export function computeDueDate(opts: {
   cycleDays: number;
   cycles?: number;
   today?: Date;
-  planType?: any;
+  billingType?: any;
 }): { due: Date; anchor: Date } {
   const today = startOfDay(opts.today || new Date());
   const anchorRaw = parseDateOnly(opts.anchorDate);
@@ -224,14 +224,14 @@ export function computeDueDate(opts: {
   const cycles = Math.max(1, Math.round(opts.cycles || 1));
   const cycleDays = Math.max(1, Math.round(opts.cycleDays) || 30);
 
-  if (normalizePlanType(opts.planType) === 'prepaid') {
+  if (normalizeBillingType(opts.billingType) === 'prepaid') {
     const due = cycleDays >= MONTHLY_CYCLE_MIN_DAYS
       ? addMonths(anchor, cycleMonths(cycleDays) * cycles)
       : addDays(anchor, cycleDays * cycles);
     return { due, anchor };
   }
 
-  if (!planUsesFixedCutoff(opts.settings, cycleDays, opts.planType)) {
+  if (!planUsesFixedCutoff(opts.settings, cycleDays, opts.billingType)) {
     return { due: addDays(anchor, cycleDays * cycles), anchor };
   }
 
@@ -246,12 +246,12 @@ export function computeDueDate(opts: {
 }
 
 /**
- * Grace the account is actually entitled to. Prepaid buys the period outright,
- * so the line is slowed down the moment it runs out - the grace setting belongs
- * to postpaid billing only.
+ * Grace the account is actually entitled to. A prepaid subscriber buys the
+ * period outright, so the line is slowed down the moment it runs out - the grace
+ * setting belongs to postpaid accounts only.
  */
-export function graceDaysFor(planType: any, settings: Pick<BillingSettings, 'grace_days'>): number {
-  if (normalizePlanType(planType) === 'prepaid') return 0;
+export function graceDaysFor(billingType: any, settings: Pick<BillingSettings, 'grace_days'>): number {
+  if (normalizeBillingType(billingType) === 'prepaid') return 0;
   return Math.max(0, Math.round(settings.grace_days) || 0);
 }
 
@@ -439,16 +439,16 @@ export async function scheduleAccountCutoff(
   routerId: number,
   username: string,
   dueDate: string | null | undefined,
-  settings: Pick<BillingSettings, 'enabled' | 'grace_days' | 'expiry_time' | 'non_payment_profile'> & { plan_type?: any },
+  settings: Pick<BillingSettings, 'enabled' | 'grace_days' | 'expiry_time' | 'non_payment_profile'> & { billing_type?: any },
   now: Date = new Date()
 ): Promise<ScheduleResult> {
   if (Number(settings.enabled) !== 1) {
     return { ok: true, scheduledAt: null, skipped: 'billing disabled' };
   }
-  // The account's own plan type decides the grace, so a prepaid subscriber's
+  // The account's own billing model decides the grace, so a prepaid subscriber's
   // router job fires on the due instant with no leeway.
   const moment = dueDate
-    ? expiryMoment(dueDate, settings, graceDaysFor(settings.plan_type, settings))
+    ? expiryMoment(dueDate, settings, graceDaysFor(settings.billing_type, settings))
     : null;
   if (!moment) return { ok: true, scheduledAt: null, skipped: 'no due date' };
   if (moment <= now) return { ok: true, scheduledAt: null, skipped: 'already past' };
@@ -527,13 +527,13 @@ export async function assignPlan(
     cycleDays: plan.cycle_days,
     cycles: opts.cycles || 1,
     today: opts.today,
-    planType: plan.plan_type,
+    billingType: customer.billing_type,
   });
   const dueDate = formatDueKeepingClock(customer.due_date, due);
 
   const routerResult = await applyProfileOnRouter(routerId, customer.username, plan.pppoe_profile);
   await stampSecretComment(routerId, customer.username, plan, dueDate);
-  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, { ...settings, plan_type: plan.plan_type });
+  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, { ...settings, billing_type: customer.billing_type });
 
   db.prepare(
     `UPDATE ppp_customers
@@ -596,7 +596,7 @@ export async function recordPayment(
     cycleDays: plan.cycle_days,
     cycles,
     today: input.today,
-    planType: plan.plan_type,
+    billingType: customer.billing_type,
   });
   const dueDate = formatDueKeepingClock(customer.due_date, due);
   const amount = input.amount === null || input.amount === undefined ? plan.price * cycles : Number(input.amount);
@@ -604,7 +604,7 @@ export async function recordPayment(
   const routerResult = await applyProfileOnRouter(routerId, customer.username, plan.pppoe_profile);
   await stampSecretComment(routerId, customer.username, plan, dueDate);
   // A payment is also a re-arm: the router timer moves out to the new expiry.
-  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, { ...settings, plan_type: plan.plan_type });
+  const job = await scheduleAccountCutoff(routerId, customer.username, dueDate, { ...settings, billing_type: customer.billing_type });
 
   const insertPayment = db.prepare(
     `INSERT INTO ppp_payments (router_id, customer_id, plan_id, amount, cycle_days, payment_method, reference, due_before, due_after, recorded_by, note)
@@ -744,12 +744,11 @@ export async function runCutoffSweep(now: Date = new Date(), onlyRouterId?: numb
     try {
       due = db
         .prepare(
-          `SELECT c.id, c.username, c.due_date, c.profile, c.billing_status, bp.plan_type
-           FROM ppp_customers c
-           LEFT JOIN billing_plans bp ON bp.id = c.plan_id
-           WHERE c.router_id = ? AND c.due_date IS NOT NULL AND c.due_date != ''
-             AND COALESCE(c.billing_status, 'unbilled') NOT IN ('cut-off', 'suspended')
-           ORDER BY c.due_date ASC`
+          `SELECT id, username, due_date, profile, billing_status, billing_type
+           FROM ppp_customers
+           WHERE router_id = ? AND due_date IS NOT NULL AND due_date != ''
+             AND COALESCE(billing_status, 'unbilled') NOT IN ('cut-off', 'suspended')
+           ORDER BY due_date ASC`
         )
         .all(routerId) as any[];
     } catch (err) {
@@ -758,10 +757,10 @@ export async function runCutoffSweep(now: Date = new Date(), onlyRouterId?: numb
     }
 
     for (const row of due) {
-      // Each account is judged on its own plan: prepaid has no grace, so the
-      // sweep catches it the minute the paid period ends instead of three days
+      // Each account is judged on its own billing model: prepaid has no grace, so
+      // the sweep catches it the minute the paid period ends instead of three days
       // later the way a postpaid line is allowed to.
-      const expiry = expiryMoment(row.due_date, settings, graceDaysFor(row.plan_type, settings));
+      const expiry = expiryMoment(row.due_date, settings, graceDaysFor(row.billing_type, settings));
       if (!expiry || expiry > now) continue;
       report.checked++;
 
@@ -842,10 +841,9 @@ export function getBillingOverview(routerId: number, now: Date = new Date()): Bi
 
   const customers = db
     .prepare(
-      `SELECT c.due_date, c.billing_status, bp.plan_type
-       FROM ppp_customers c
-       LEFT JOIN billing_plans bp ON bp.id = c.plan_id
-       WHERE c.router_id = ?`
+      `SELECT due_date, billing_status, billing_type
+       FROM ppp_customers
+       WHERE router_id = ?`
     )
     .all(routerId) as any[];
 
@@ -855,7 +853,7 @@ export function getBillingOverview(routerId: number, now: Date = new Date()): Bi
     if (status === 'cut-off') overview.cutOff++;
     else if (status === 'unbilled' || !row.due_date) overview.unbilled++;
     else {
-      const expiry = expiryMoment(row.due_date, settings, graceDaysFor(row.plan_type, settings));
+      const expiry = expiryMoment(row.due_date, settings, graceDaysFor(row.billing_type, settings));
       if (expiry && expiry > now) {
         overview.active++;
         const due = parseDateOnly(row.due_date);

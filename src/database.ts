@@ -506,9 +506,8 @@ export function initializeDatabase(): void {
 
     -- A monthly plan IS a PPP profile plus a price: paying moves the subscriber
     -- onto pppoe_profile, not paying moves them to the cut-off profile.
-    -- plan_type decides when the clock runs out: postpaid keeps the fixed
-    -- cut-off day plus the grace period, prepaid counts the cycle from the day
-    -- the money arrived and has no grace at all.
+    -- What a plan deliberately does NOT carry is the billing model: whether an
+    -- account is postpaid or prepaid belongs to the subscriber, not to the price.
     CREATE TABLE IF NOT EXISTS billing_plans (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       router_id INTEGER NOT NULL,
@@ -518,7 +517,6 @@ export function initializeDatabase(): void {
       currency TEXT NOT NULL DEFAULT 'PHP',
       pppoe_profile TEXT NOT NULL,
       description TEXT,
-      plan_type TEXT NOT NULL DEFAULT 'postpaid',
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -652,14 +650,26 @@ export function initializeDatabase(): void {
   if (!pppCols.some((c: any) => c.name === 'scheduled_at')) {
     db.exec("ALTER TABLE ppp_customers ADD COLUMN scheduled_at TEXT");
   }
+  // How this particular account is billed, chosen when the line is sold and
+  // changeable per subscriber: postpaid owes on the shared cut-off day and gets
+  // the grace period, prepaid runs a real cycle from the day it paid and is cut
+  // off on the due date itself. Every account that existed before this is
+  // postpaid, which is exactly how it has always been billed.
+  if (!pppCols.some((c: any) => c.name === 'billing_type')) {
+    db.exec("ALTER TABLE ppp_customers ADD COLUMN billing_type TEXT NOT NULL DEFAULT 'postpaid'");
+  }
 
-  // Plans gained a billing model: postpaid keeps the fixed cut-off day and the
-  // grace period, prepaid counts its cycle from the day the money arrived and
-  // is cut off with no grace. Every plan already in the database was billed the
-  // first way, so that is what the column defaults to.
+  // The billing model briefly lived on billing_plans. It never belonged there -
+  // two subscribers on the same price can be billed differently - so databases
+  // created while it was there lose the column. Older SQLite builds without
+  // DROP COLUMN simply leave it unused.
   const planCols = db.prepare("PRAGMA table_info('billing_plans')").all() as any[];
-  if (planCols.length && !planCols.some((c: any) => c.name === 'plan_type')) {
-    db.exec("ALTER TABLE billing_plans ADD COLUMN plan_type TEXT NOT NULL DEFAULT 'postpaid'");
+  if (planCols.length && planCols.some((c: any) => c.name === 'plan_type')) {
+    try {
+      db.exec('ALTER TABLE billing_plans DROP COLUMN plan_type');
+    } catch (err) {
+      console.warn('[db] could not drop billing_plans.plan_type (harmless, the column is unused):', (err as Error).message);
+    }
   }
 
   const sessCols = db.prepare("PRAGMA table_info('radius_sessions')").all() as any[];

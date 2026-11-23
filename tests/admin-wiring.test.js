@@ -69,17 +69,28 @@ test('an unarmed row says why instead of only saying it is unarmed', () => {
 });
 
 test('the customer and pay forms show which billing model was picked', () => {
-  // Choosing the plan has to rewrite the due-date explanation, otherwise "prepaid"
-  // is one more word an operator has to already understand.
+  // The model is chosen on the account, and picking it has to rewrite the
+  // due-date explanation, otherwise "prepaid" is one more word an operator has to
+  // already understand.
+  assert.match(appSource, /select name="billingType" onchange="App\.renderCustomerDueHint\(\)"/, 'the account picker must refresh the hint');
   assert.match(appSource, /onchange="App\.renderCustomerDueHint\(\)"/, 'the plan picker must refresh the hint');
   assert.match(appSource, /id="customer-due-hint"/);
-  assert.match(appSource, /Prepaid plan: the router cuts this line on the due date itself/);
+  assert.match(appSource, /Prepaid account: the router cuts this line on the due date itself/);
+
+  // A plan is a price and a cycle. Offering a billing model on the plans form
+  // would put the terms back where the operator said they do not belong.
+  assert.doesNotMatch(appSource, /name="planType"/, 'the plan form must not pick a billing model');
+  assert.doesNotMatch(appSource, /<th>Billing Type<\/th>/, 'the plans table must not carry a billing model column');
+
+  // The account badge has to come off the account itself, since two subscribers
+  // on one plan can be billed differently.
+  assert.match(appSource, /\$\{this\.renderBillingTypeBadge\(c\)\}/);
 
   // The Pay preview mirrors the server, so a prepaid line must not be snapped to
   // the fixed cut-off day in the text the operator reads before saving.
   const start = appSource.indexOf('updatePayPreview() {');
   const preview = appSource.slice(start, appSource.indexOf('\n  },', start));
-  assert.match(preview, /plan_type/, 'the preview has to know the billing model');
+  assert.match(preview, /billing_type/, 'the preview has to know the account\'s billing model');
   assert.match(preview, /addMonthsLocal/);
 
   // An overdue prepaid account is not "in grace", it is late.

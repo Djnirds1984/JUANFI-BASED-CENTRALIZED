@@ -11,6 +11,8 @@ import { initializeAdmin } from './services/auth';
 import { startMonitoring, stopMonitoring, reconnectRouters } from './services/monitor';
 import { startActiveDeviceSync, stopActiveDeviceSync } from './services/activeDevices';
 import { startPppBillingSweep, stopPppBillingSweep } from './services/pppBilling';
+import { startCafeTicker, stopCafeTicker } from './services/cafe';
+import { startCafeDiscovery, stopCafeDiscovery } from './services/cafeDiscovery';
 import { mikroTikService } from './services/mikrotik';
 import { startRadiusServer, stopRadiusServer, hasRadiusClients } from './services/radiusServer';
 import * as turso from './services/turso';
@@ -34,6 +36,7 @@ import settingsRoutes from './api/settings';
 import chatRoutes from './api/chat';
 import salesRoutes from './api/sales';
 import walletRoutes from './api/wallet';
+import cafeRoutes from './api/cafe';
 
 const app = express();
 const server = http.createServer(app);
@@ -89,6 +92,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/cafe', cafeRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -151,6 +155,10 @@ async function bootstrap(): Promise<void> {
     console.log('Starting PPP billing sweep...');
     startPppBillingSweep(60);
 
+    console.log('Starting pisonet meter...');
+    startCafeTicker(10);
+    startCafeDiscovery();
+
     console.log('Checking Turso cloud sync...');
     const tursoPull = await turso.pullIfLocalEmpty();
     console.log(`[Turso] ${tursoPull.message}`);
@@ -183,6 +191,8 @@ function shutdown(): void {
   stopMonitoring();
   stopActiveDeviceSync();
   stopPppBillingSweep();
+  stopCafeTicker();
+  stopCafeDiscovery();
   stopRadiusServer();
   mikroTikService.disconnectAll();
   closeDb();

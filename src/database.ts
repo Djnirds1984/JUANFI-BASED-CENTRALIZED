@@ -558,6 +558,84 @@ export function initializeDatabase(): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ppp_payments_customer ON ppp_payments(customer_id, created_at);
+
+    -- Pisonet: a Windows desktop is sold minutes at a time, so the panel, not the
+    -- hotspot session, owns the countdown. The machine is left bypassed on the
+    -- router (it never has to log in) and the agent on the PC is what locks it.
+    CREATE TABLE IF NOT EXISTS cafe_settings (
+      router_id INTEGER PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'PHP',
+      rate_list TEXT NOT NULL DEFAULT '',
+      default_minutes INTEGER NOT NULL DEFAULT 60,
+      admin_password_hash TEXT NOT NULL DEFAULT '',
+      pause_on_admin INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS cafe_machines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      mac_address TEXT NOT NULL DEFAULT '',
+      ip_address TEXT NOT NULL DEFAULT '',
+      hostname TEXT NOT NULL DEFAULT '',
+      device_id INTEGER,
+      token TEXT NOT NULL DEFAULT '',
+      -- 'client' is a paying customer sitting in front of the lock screen, 'admin'
+      -- is the shop owner who unlocked the machine to service it.
+      mode TEXT NOT NULL DEFAULT 'client',
+      -- expires_at is the whole truth about the paid time: a deadline in UTC.
+      -- Extending a running session pushes it out, and while an admin has the
+      -- machine unlocked paused_at holds the instant the meter stopped so the
+      -- remaining time survives being handed to the shop owner and back.
+      expires_at TEXT,
+      paused_at TEXT,
+      running INTEGER NOT NULL DEFAULT 0,
+      agent_version TEXT NOT NULL DEFAULT '',
+      boot_id TEXT NOT NULL DEFAULT '',
+      last_seen TEXT,
+      unlocked_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cafe_machines_mac ON cafe_machines(router_id, mac_address) WHERE mac_address <> '';
+    CREATE INDEX IF NOT EXISTS idx_cafe_machines_token ON cafe_machines(token);
+
+    -- Beacons from an agent that is installed but has not been added to the shop
+    -- yet. This is how the Add dialog can say "the app is already on this PC".
+    CREATE TABLE IF NOT EXISTS cafe_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      hostname TEXT NOT NULL,
+      ip_address TEXT NOT NULL DEFAULT '',
+      mac_address TEXT NOT NULL DEFAULT '',
+      agent_version TEXT NOT NULL DEFAULT '',
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      added INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cafe_candidates_host ON cafe_candidates(hostname, ip_address);
+
+    -- One row per sold minute block: what started it, what extended it, what
+    -- locked it. The sales report reads this.
+    CREATE TABLE IF NOT EXISTS cafe_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      machine_id INTEGER NOT NULL,
+      event TEXT NOT NULL,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      detail TEXT,
+      operator TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cafe_sessions_machine ON cafe_sessions(machine_id, created_at);
   `);
 
   const columns = db.prepare("PRAGMA table_info('routers')").all() as any[];

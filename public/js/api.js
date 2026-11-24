@@ -966,6 +966,85 @@ class ApiClient {
   async getRouterInterfaces(routerId) {
     return this.get(`/interfaces/router/${routerId}/interfaces`);
   }
+
+  // ---- Pisonet (pay-per-minute Windows desktops) ----
+
+  async getCafeMachines(routerId) {
+    return this.get(`/cafe/router/${routerId}/machines`);
+  }
+
+  async getCafeSettings(routerId) {
+    return this.get(`/cafe/router/${routerId}/cafe/settings`);
+  }
+
+  async saveCafeSettings(routerId, settings) {
+    return this.put(`/cafe/router/${routerId}/cafe/settings`, settings);
+  }
+
+  async saveCafeAdminPassword(routerId, password) {
+    return this.put(`/cafe/router/${routerId}/cafe/admin-password`, { password });
+  }
+
+  // Desktops that already run the agent but are not in the shop list yet.
+  async getCafeCandidates(routerId, seconds) {
+    return this.get(`/cafe/router/${routerId}/cafe/candidates?seconds=${seconds || 300}`);
+  }
+
+  async resolveCafeMac(routerId, ip) {
+    return this.post(`/cafe/router/${routerId}/cafe/resolve-mac`, { ip });
+  }
+
+  async addCafeMachine(routerId, data) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines`, data);
+  }
+
+  async updateCafeMachine(routerId, id, data) {
+    return this.put(`/cafe/router/${routerId}/cafe/machines/${id}`, data);
+  }
+
+  async removeCafeMachine(routerId, id) {
+    return this.delete(`/cafe/router/${routerId}/cafe/machines/${id}`);
+  }
+
+  async startCafeMachine(routerId, id, data) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/start`, data);
+  }
+
+  async lockCafeMachine(routerId, id) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/lock`);
+  }
+
+  async unlockCafeMachine(routerId, id) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/unlock`);
+  }
+
+  async releaseCafeMachine(routerId, id) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/release`);
+  }
+
+  async resetCafeMachine(routerId, id) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/reset`);
+  }
+
+  async pushCafeBypass(routerId, id, off) {
+    return this.post(`/cafe/router/${routerId}/cafe/machines/${id}/bypass`, { off: !!off });
+  }
+
+  async getCafeToken(routerId, id) {
+    return this.get(`/cafe/router/${routerId}/cafe/machines/${id}/token`);
+  }
+
+  async syncCafeBindings(routerId) {
+    return this.post(`/cafe/router/${routerId}/cafe/sync`);
+  }
+
+  async getCafeSummary(routerId, days) {
+    return this.get(`/cafe/router/${routerId}/cafe/summary?days=${days || 1}`);
+  }
+
+  async getCafeSetup() {
+    return this.get('/cafe/setup');
+  }
 }
 
 window.api = new ApiClient();

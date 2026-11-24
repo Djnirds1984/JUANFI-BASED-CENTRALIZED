@@ -166,6 +166,7 @@ const App = {
     }
     this.clearHotspotPollers();
     this.clearPppPollers();
+    this.clearCafePollers();
     this.clearRadiusPollers();
     this.clearChatPollers();
     this.currentPage = page;
@@ -185,6 +186,7 @@ const App = {
       monitoring: 'Monitoring',
       portal: 'Portal',
       subvendo: 'SubVendo',
+      pisonet: 'Pisonet',
       sales: 'Sales Report',
       wallet: 'Customers / Wallet',
       payments: 'Online Payment',
@@ -214,6 +216,7 @@ const App = {
         case 'chat': await this.renderChat(); break;
         case 'portal': await this.renderPortal(); break;
         case 'subvendo': await this.renderSubVendo(); break;
+        case 'pisonet': await this.renderPisonet(); break;
         case 'sales': await this.renderSalesReport(); break;
         case 'wallet': await this.renderWallet(); break;
         case 'payments': await this.renderOnlinePayment(); break;
@@ -8061,6 +8064,687 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       this.toast('Config saved and pushed to router', 'success');
     } catch (err) {
       this.toast('Failed: ' + err.message, 'error');
+    }
+  },
+
+  // ====================================================== Pisonet
+  //
+  // Pay-per-minute Windows desktops. The router only makes the PC invisible to
+  // the hotspot (an IP binding of type=bypassed); the countdown, the lock and the
+  // admin handover all live between this page and the agent on the desktop.
+
+  async renderPisonet() {
+    const content = document.getElementById('page-content');
+    const routers = await api.getRouters();
+    const usable = routers.filter((r) => r.connected);
+    if (!usable.length) {
+      content.innerHTML = '<div class="empty-state"><h3>No connected routers</h3><p>Connect the shop router first to manage its desktops.</p></div>';
+      return;
+    }
+    if (!this.selectedRouterId || !usable.find((r) => r.id === this.selectedRouterId)) {
+      this.selectedRouterId = usable[0].id;
+    }
+    this.pisonetTab = this.pisonetTab || 'desktops';
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Pisonet</h3>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+            <select id="pisonet-router-select" class="btn btn-outline">
+              ${usable.map((r) => `<option value="${r.id}" ${r.id === this.selectedRouterId ? 'selected' : ''}>${this.escapeHtml(r.name)}</option>`).join('')}
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="App.showAddPcModal()">Add PC</button>
+          </div>
+        </div>
+        <div class="tabs">
+          <button class="tab ${this.pisonetTab === 'desktops' ? 'active' : ''}" data-tab="desktops">Desktops</button>
+          <button class="tab ${this.pisonetTab === 'rates' ? 'active' : ''}" data-tab="rates">Rates</button>
+          <button class="tab ${this.pisonetTab === 'setup' ? 'active' : ''}" data-tab="setup">Client Setup</button>
+        </div>
+        <div id="pisonet-tab-content">Loading...</div>
+      </div>
+    `;
+
+    document.getElementById('pisonet-router-select').addEventListener('change', (e) => {
+      this.selectedRouterId = parseInt(e.target.value);
+      this.loadPisonetTab();
+    });
+    document.querySelectorAll('#page-content .tabs .tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        this.pisonetTab = tab.dataset.tab;
+        document.querySelectorAll('#page-content .tabs .tab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.loadPisonetTab();
+      });
+    });
+    this.loadPisonetTab();
+  },
+
+  async loadPisonetTab() {
+    const container = document.getElementById('pisonet-tab-content');
+    if (!container) return;
+    this.clearCafePollers();
+    container.innerHTML = 'Loading...';
+    try {
+      if (this.pisonetTab === 'rates') await this.loadCafeRates(container);
+      else if (this.pisonetTab === 'setup') await this.loadCafeSetup(container);
+      else await this.loadCafeMachines(container);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
+  clearCafePollers() {
+    if (this._cafeInterval) {
+      clearInterval(this._cafeInterval);
+      this._cafeInterval = null;
+    }
+  },
+
+  async loadCafeMachines(container) {
+    if (!container) container = document.getElementById('pisonet-tab-content');
+    this.clearCafePollers();
+
+    let payload;
+    let summary = { amount: 0, minutes: 0, sales: 0 };
+    try {
+      [payload, summary] = await Promise.all([
+        api.getCafeMachines(this.selectedRouterId),
+        api.getCafeSummary(this.selectedRouterId, 1).catch(() => summary),
+      ]);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+      return;
+    }
+
+    this._cafeRates = payload.rates || [];
+    this._cafeSettings = payload.settings || {};
+    this._cafeCurrency = payload.settings?.currency || 'PHP';
+    const machines = payload.machines || [];
+    // Kept so the Sell and Edit dialogs can name the desktop without a second call.
+    this._cafeMachines = machines;
+
+    container.innerHTML = `
+      ${this.renderCafeKpis(machines, summary)}
+      ${Number(payload.settings?.enabled) === 1 ? '' : '<p style="color:var(--text-muted);margin:0 0 .75rem">Automatic cut-off is off for pisonet on this router. Adding a desktop still bypasses it and starts its timer.</p>'}
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Desktop</th>
+              <th>Identity</th>
+              <th>Agent</th>
+              <th>In Use</th>
+              <th>Time Left</th>
+              <th>Last Seen</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="cafe-tbody">${this.renderCafeRows(machines)}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem">
+        <button class="btn btn-sm btn-outline" onclick="App.syncCafeBindingsNow()">Re-check Bypasses</button>
+      </div>
+    `;
+
+    // A pisonet table nobody refreshes is a table that lies about money, so it
+    // re-reads itself while the operator is looking at it.
+    this._cafeInterval = setInterval(async () => {
+      if (!document.getElementById('cafe-tbody')) {
+        this.clearCafePollers();
+        return;
+      }
+      try {
+        const fresh = await api.getCafeMachines(this.selectedRouterId);
+        this._cafeRates = fresh.rates || this._cafeRates;
+        this.refreshCafeRows(fresh.machines || []);
+      } catch (err) {
+        console.error('pisonet refresh failed:', err);
+      }
+    }, 3000);
+  },
+
+  renderCafeKpis(machines, summary) {
+    const online = machines.filter((m) => m.online).length;
+    const playing = machines.filter((m) => m.running && m.mode !== 'admin').length;
+    const admin = machines.filter((m) => m.mode === 'admin').length;
+    const cards = [
+      { label: 'Today\u2019s sales', value: `${this._cafeCurrency || ''} ${(Number(summary.amount) || 0).toFixed(2)}`, sub: `${summary.sales || 0} sell${summary.sales === 1 ? '' : 's'} · ${summary.minutes || 0} min sold`, cls: 'kpi-success' },
+      { label: 'Desktops in use', value: String(playing), sub: `${machines.length} registered`, cls: 'kpi-primary' },
+      { label: 'Agents online', value: String(online), sub: admin ? `${admin} unlocked for service` : 'all on the customer clock', cls: 'kpi-violet' },
+    ];
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem;margin-bottom:1rem">${cards.map((c) => `
+      <div class="stat-card ${c.cls}">
+        <div class="stat-label">${c.label}</div>
+        <div class="stat-value">${this.escapeHtml(c.value)}</div>
+        <div class="stat-sub">${this.escapeHtml(c.sub)}</div>
+      </div>`).join('')}</div>`;
+  },
+
+  renderCafeRows(machines) {
+    if (!machines || !machines.length) {
+      return '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:2rem">No desktops yet. Use Add PC to pick one from the router.</td></tr>';
+    }
+    return machines.map((m) => `
+      <tr data-cafe-id="${parseInt(m.id, 10) || 0}" data-cafe-state="${this.cafeStateKey(m)}">
+        <td><strong>${this.escapeHtml(m.name)}</strong></td>
+        <td>
+          <code>${this.escapeHtml(m.mac_address || 'no MAC')}</code><br>
+          <span style="color:var(--text-muted);font-size:.85em">${this.escapeHtml(m.ip_address || '-')} · ${this.escapeHtml(m.hostname || 'no hostname')}</span>
+        </td>
+        <td data-field="agent">${this.renderAgentCell(m)}</td>
+        <td data-field="mode">${this.renderCafeModeBadge(m)}</td>
+        <td data-field="time">${this.renderCafeTimeCell(m)}</td>
+        <td data-field="seen">${this.escapeHtml(m.last_seen || 'never')}</td>
+        <td style="text-align:right" data-field="actions">${this.renderCafeActions(m)}</td>
+      </tr>
+    `).join('');
+  },
+
+  cafeStateKey(m) {
+    return `${m.mode || 'client'}:${m.running ? 1 : 0}:${m.online ? 1 : 0}`;
+  },
+
+  formatClock(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(total / 3600);
+    const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+    const ss = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  },
+
+  renderAgentCell(m) {
+    if (!m.online) return '<span class="badge badge-offline">offline</span>';
+    return `<span class="badge badge-online">live</span> <span style="color:var(--text-muted);font-size:.85em">v${this.escapeHtml(m.agent_version || '?')}</span>`;
+  },
+
+  renderCafeModeBadge(m) {
+    if (m.mode === 'admin') return '<span class="badge badge-warning" title="Unlocked for servicing. A reboot puts it back on the customer clock.">admin</span>';
+    if (m.running && m.seconds_left > 0) return '<span class="badge badge-online" title="A customer is paying for this time">playing</span>';
+    if (m.seconds_left > 0) return '<span class="badge badge-warning" title="Time is banked but the meter is stopped">paused</span>';
+    return '<span class="badge badge-expired" title="Locked, waiting for time to be sold">locked</span>';
+  },
+
+  renderCafeTimeCell(m) {
+    const left = Math.max(0, Number(m.seconds_left) || 0);
+    if (!left) return '<span style="color:var(--text-muted)">00:00</span>';
+    const cls = left <= 60 ? 'countdown-critical' : left <= 300 ? 'countdown-warning' : '';
+    return `<span class="${cls}" style="font-variant-numeric:tabular-nums;font-weight:600">${this.formatClock(left)}</span>`;
+  },
+
+  renderCafeActions(m) {
+    const id = parseInt(m.id, 10) || 0;
+    const sold = m.running && m.seconds_left > 0;
+    const primary = m.mode === 'admin'
+      ? `<button class="btn btn-sm btn-primary" onclick="App.cafeRelease(${id})">Back to Service</button>`
+      : `<button class="btn btn-sm ${sold ? 'btn-outline' : 'btn-primary'}" onclick="App.showCafeSellModal(${id})">${sold ? 'Add Time' : 'Start'}</button>`;
+    const lock = m.mode === 'admin' ? ''
+      : m.running
+        ? ` <button class="btn btn-sm btn-outline" onclick="App.cafeLock(${id})">Lock</button>`
+        : '';
+    const admin = m.mode === 'admin' ? ''
+      : ` <button class="btn btn-sm btn-outline" onclick="App.cafeAdmin(${id})" title="Unlock this desktop so it can be serviced">Admin</button>`;
+    return `${primary}${lock}${admin} <button class="btn btn-sm btn-outline" onclick="App.showCafeMore(${id})">⋯</button>`;
+  },
+
+  refreshCafeRows(machines) {
+    this._cafeMachines = machines;
+    const tbody = document.getElementById('cafe-tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr[data-cafe-id]'));
+    const keys = machines.map((m) => `${m.id}:${this.cafeStateKey(m)}`).join('|');
+    const live = rows.map((r) => `${r.dataset.cafeId}:${r.dataset.cafeState}`).join('|');
+    // A state change alters the buttons, so only a rebuild keeps it honest.
+    if (keys !== live) {
+      tbody.innerHTML = this.renderCafeRows(machines);
+      return;
+    }
+    rows.forEach((row, index) => {
+      const m = machines[index];
+      if (!m) return;
+      const time = row.querySelector('[data-field="time"]');
+      if (time) time.innerHTML = this.renderCafeTimeCell(m);
+      const seen = row.querySelector('[data-field="seen"]');
+      if (seen) seen.textContent = m.last_seen || 'never';
+      const agent = row.querySelector('[data-field="agent"]');
+      if (agent) agent.innerHTML = this.renderAgentCell(m);
+    });
+  },
+
+  async cafeAction(name, fn, ok) {
+    try {
+      await fn();
+      this.toast(ok || 'Done', 'success');
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast(`${name} failed: ${err.message}`, 'error');
+    }
+  },
+
+  cafeLock(id) {
+    this.cafeAction('Lock', () => api.lockCafeMachine(this.selectedRouterId, id), 'Desktop locked, banked time kept');
+  },
+
+  cafeAdmin(id) {
+    this.cafeAction('Admin unlock', () => api.unlockCafeMachine(this.selectedRouterId, id), 'Handed to admin, the meter is paused');
+  },
+
+  cafeRelease(id) {
+    this.cafeAction('Release', () => api.releaseCafeMachine(this.selectedRouterId, id), 'Back on the customer clock');
+  },
+
+  cafeReset(id) {
+    if (!confirm('Clear all paid time on this desktop?')) return;
+    this.cafeAction('Reset', () => api.resetCafeMachine(this.selectedRouterId, id), 'Time cleared');
+  },
+
+  async cafeRemove(id) {
+    if (!confirm('Remove this desktop? Its router bypass is removed too.')) return;
+    this.cafeAction('Remove', () => api.removeCafeMachine(this.selectedRouterId, id), 'Desktop removed');
+  },
+
+  async syncCafeBindingsNow() {
+    this.toast('Re-checking the router bypasses...', 'info');
+    try {
+      const report = await api.syncCafeBindings(this.selectedRouterId);
+      if (report.skipped) this.toast(`Skipped: ${report.skipped}`, 'error');
+      else this.toast(`${report.fixed} bypass(es) written, ${report.checked} desktops checked`, 'success');
+    } catch (err) {
+      this.toast('Sync failed: ' + err.message, 'error');
+    }
+  },
+
+  /**
+   * Sell time. The rate buttons come from the Rates tab so the shop keeps one
+   * price list, and a custom amount is always available for the friend who asks
+   * for "twenty minutes, boss".
+   */
+  showCafeSellModal(id) {
+    const machine = (this._cafeMachines || []).find((m) => Number(m.id) === Number(id));
+    const rates = this._cafeRates || [];
+    const name = machine ? machine.name : `#${id}`;
+    const banked = machine ? this.formatClock(machine.seconds_left) : '00:00';
+    const buttons = rates.map((r) => `
+      <button class="btn btn-outline" style="min-width:8rem" onclick="App.cafeSell(${id}, ${r.minutes}, ${r.amount}, this)">
+        ${this.escapeHtml(r.label)}<br><span style="font-size:.85em;opacity:.8">${this.escapeHtml(this._cafeCurrency || '')} ${r.amount}</span>
+      </button>`).join('');
+
+    this.openModal(`Sell time - ${name}`, `
+      <p style="margin-top:0">${this.escapeHtml(name)} has <strong>${banked}</strong> banked.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem">${buttons || '<span style="color:var(--text-muted)">No rates configured yet.</span>'}</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Minutes</label>
+          <input type="number" id="cafe-custom-minutes" min="1" max="1440" value="${this._cafeSettings?.default_minutes || 60}">
+        </div>
+        <div class="form-group">
+          <label>Amount collected</label>
+          <input type="number" id="cafe-custom-amount" min="0" step="0.01" value="0">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="App.cafeSellCustom(${id}, this)">Add Custom Time</button>
+    `, [{ label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() }]);
+  },
+
+  async cafeSell(id, minutes, amount, el) {
+    if (el) el.disabled = true;
+    const machine = (this._cafeMachines || []).find((m) => Number(m.id) === Number(id));
+    try {
+      await api.startCafeMachine(this.selectedRouterId, id, { minutes, amount });
+      this.toast(`+${minutes} min on ${machine ? machine.name : 'PC'}`, 'success');
+      this.closeModal();
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast('Could not sell time: ' + err.message, 'error');
+      if (el) el.disabled = false;
+    }
+  },
+
+  async cafeSellCustom(id, trigger) {
+    const minutes = parseInt(document.getElementById('cafe-custom-minutes').value, 10);
+    const amount = parseFloat(document.getElementById('cafe-custom-amount').value) || 0;
+    if (!minutes || minutes < 1) {
+      this.toast('Enter how many minutes to add', 'error');
+      return;
+    }
+    if (trigger) trigger.disabled = true;
+    try {
+      await api.startCafeMachine(this.selectedRouterId, id, { minutes, amount });
+      this.toast(`+${minutes} min sold`, 'success');
+      this.closeModal();
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast('Could not sell time: ' + err.message, 'error');
+      if (trigger) trigger.disabled = false;
+    }
+  },
+
+  showCafeMore(id) {
+    this.openModal('Desktop', `
+      <p>Everything else about this desktop.</p>
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        <button class="btn btn-outline" onclick="App.showCafeToken(${id})">Show machine token</button>
+        <button class="btn btn-outline" onclick="App.cafePushBypass(${id})">Re-write the router bypass</button>
+        <button class="btn btn-outline" onclick="App.editCafeMachine(${id})">Rename / change MAC</button>
+        <button class="btn btn-danger" onclick="App.closeModal();App.cafeRemove(${id})">Remove desktop</button>
+      </div>
+    `, [{ label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() }]);
+  },
+
+  async showCafeToken(id) {
+    try {
+      const { token } = await api.getCafeToken(this.selectedRouterId, id);
+      this.openModal('Machine token', `
+        <p>Paste this into <code>config.ini</code> on the desktop as <code>Token=${token}</code> if it cannot claim its own token.</p>
+        <input class="form-group" style="width:100%" readonly value="${this.escapeHtml(token)}" onclick="this.select()">
+      `, [{ label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() }]);
+    } catch (err) {
+      this.toast('Could not read the token: ' + err.message, 'error');
+    }
+  },
+
+  async cafePushBypass(id) {
+    try {
+      const result = await api.pushCafeBypass(this.selectedRouterId, id);
+      this.toast(result.synced ? 'Bypass is on the router' : `Bypass not applied: ${result.error}`, result.synced ? 'success' : 'error');
+    } catch (err) {
+      this.toast('Bypass failed: ' + err.message, 'error');
+    }
+  },
+
+  async editCafeMachine(id) {
+    const m = (this._cafeMachines || []).find((row) => Number(row.id) === Number(id)) || {};
+    this.openModal('Edit desktop', `
+      <div class="form-group">
+        <label>Name shown on the lock screen</label>
+        <input type="text" id="cafe-edit-name" value="${this.escapeHtml(m.name || '')}">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>MAC address</label>
+          <input type="text" id="cafe-edit-mac" value="${this.escapeHtml(m.mac_address || '')}" placeholder="AA:BB:CC:DD:EE:FF">
+        </div>
+        <div class="form-group">
+          <label>IP address</label>
+          <input type="text" id="cafe-edit-ip" value="${this.escapeHtml(m.ip_address || '')}">
+        </div>
+      </div>
+    `, [
+      { label: 'Cancel', class: 'btn btn-outline', action: () => this.closeModal() },
+      {
+        label: 'Save',
+        class: 'btn btn-primary',
+        action: async () => {
+          try {
+            await api.updateCafeMachine(this.selectedRouterId, id, {
+              name: document.getElementById('cafe-edit-name').value,
+              macAddress: document.getElementById('cafe-edit-mac').value,
+              ipAddress: document.getElementById('cafe-edit-ip').value,
+            });
+            this.closeModal();
+            this.toast('Desktop saved', 'success');
+            this.loadPisonetTab();
+          } catch (err) {
+            this.toast('Save failed: ' + err.message, 'error');
+          }
+        },
+      },
+    ]);
+  },
+
+  // ---- Add PC ----
+  //
+  // The shop owner should not have to read a MAC off a sticker. The router
+  // already lists everything plugged into it, and an installed agent shouts its
+  // own hostname, so the two together say which of these desktops are ready to
+  // be sold time on.
+  async showAddPcModal() {
+    this.openModal('Add a desktop', '<p style="margin:0">Reading the router...</p>', []);
+    let devices = [];
+    let candidates = [];
+    let existing = [];
+    try {
+      [devices, candidates, existing] = await Promise.all([
+        api.getActiveDevices(this.selectedRouterId).then((rows) => this.mapActiveDevices(rows)).catch(() => []),
+        api.getCafeCandidates(this.selectedRouterId, 600).then((r) => r.candidates || []).catch(() => []),
+        api.getCafeMachines(this.selectedRouterId).then((r) => r.machines || []).catch(() => []),
+      ]);
+    } catch (err) {
+      this.openModal('Add a desktop', `<p style="margin:0">Could not read the router: ${this.escapeHtml(err.message)}</p>`, [{ label: 'Close', class: 'btn btn-outline', action: () => this.closeModal() }]);
+      return;
+    }
+
+    const key = (mac) => String(mac || '').toUpperCase().replace(/[^0-9A-F]/g, '');
+    const knownMacs = new Set(existing.map((m) => key(m.mac_address)).filter(Boolean));
+    const knownHosts = new Set(existing.map((m) => String(m.hostname || '').toLowerCase()).filter(Boolean));
+    // An agent that already beaconed is proof the app is installed, and it knows
+    // its own hostname better than a DHCP lease does.
+    const agentByHost = new Map(candidates.map((c) => [String(c.hostname || '').toLowerCase(), c]));
+    const agentByIp = new Map(candidates.map((c) => [String(c.ip_address || ''), c]));
+    const agentByMac = new Map(candidates.map((c) => [key(c.mac_address), c]).filter(([k]) => k));
+
+    const rows = devices.map((d) => {
+      const mac = key(d['mac-address']);
+      const host = String(d['host-name'] || '').toLowerCase();
+      const agent = agentByMac.get(mac) || agentByIp.get(d.address) || (host && host !== '-' ? agentByHost.get(host) : null);
+      const added = (mac && knownMacs.has(mac)) || knownHosts.has(host);
+      return {
+        name: (agent && agent.hostname && agent.hostname !== '?' ? agent.hostname : (host !== '-' ? host : '')) || d.address || mac || 'unnamed',
+        mac: d['mac-address'] || (agent ? agent.mac_address : ''),
+        ip: d.address || (agent ? agent.ip_address : ''),
+        hostname: agent ? agent.hostname : (host !== '-' ? host : ''),
+        deviceId: parseInt(d.id, 10) || null,
+        candidateId: agent ? agent.id : null,
+        agent: !!agent,
+        added,
+        live: d['is-active'] === true,
+      };
+    });
+
+    // A PC whose agent is talking but that the hotspot has never seen still
+    // deserves to be addable - it is bypassed, so it may never log in at all.
+    for (const c of candidates) {
+      const mac = key(c.mac_address);
+      if (rows.some((r) => (mac && r.mac && key(r.mac) === mac) || (r.ip && r.ip === c.ip_address))) continue;
+      rows.push({
+        name: c.hostname && c.hostname !== '?' ? c.hostname : c.ip_address,
+        mac: c.mac_address, ip: c.ip_address, hostname: c.hostname, deviceId: null, candidateId: c.id,
+        agent: true, added: knownMacs.has(mac), live: false,
+      });
+    }
+
+    rows.sort((a, b) => (Number(b.agent) - Number(a.agent)) || String(a.name).localeCompare(String(b.name)));
+    this._cafeDetect = rows;
+
+    const body = `
+      <p style="margin-top:0">Devices the router can see, and whether the JuanFi agent on that PC has already introduced itself.</p>
+      <div class="table-wrapper" style="max-height:50vh;overflow:auto">
+        <table>
+          <thead><tr><th>Desktop</th><th>MAC / IP</th><th>Agent</th><th style="text-align:right"></th></tr></thead>
+          <tbody>
+            ${rows.length ? rows.map((r, i) => `
+              <tr>
+                <td><strong>${this.escapeHtml(r.name)}</strong>${r.live ? ' <span class="badge badge-online" style="opacity:.85">online</span>' : ''}</td>
+                <td><code style="font-size:.85em">${this.escapeHtml(r.mac || 'no MAC')}</code><br><span style="color:var(--text-muted);font-size:.85em">${this.escapeHtml(r.ip || '-')}</span></td>
+                <td>${r.added
+                  ? '<span class="badge badge-offline">already added</span>'
+                  : r.agent
+                    ? '<span class="badge badge-online">installed</span>'
+                    : '<span class="badge badge-warning" title="No agent has beaconed from this address. Install JuanFiCafe.exe on it.">not installed</span>'}</td>
+                <td style="text-align:right">${r.added
+                  ? ''
+                  : `<button class="btn btn-sm btn-primary" onclick="App.addDetectedPc(${i}, this)">Add</button>`}</td>
+              </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem">Nothing on this router yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="form-row" style="margin-top:1rem">
+        <div class="form-group">
+          <label>Or type one in</label>
+          <input type="text" id="cafe-manual-name" placeholder="PC-01">
+        </div>
+        <div class="form-group">
+          <label>MAC</label>
+          <input type="text" id="cafe-manual-mac" placeholder="AA:BB:CC:DD:EE:FF">
+        </div>
+        <div class="form-group" style="align-self:flex-end">
+          <button class="btn btn-outline" onclick="App.addManualPc(this)">Add</button>
+        </div>
+      </div>
+    `;
+    this.openModal('Add a desktop', body, [{ label: 'Done', class: 'btn btn-outline', action: () => { this.closeModal(); this.loadPisonetTab(); } }]);
+  },
+
+  async addDetectedPc(index, el) {
+    const row = (this._cafeDetect || [])[index];
+    if (!row) return;
+    if (el) el.disabled = true;
+    try {
+      const result = await api.addCafeMachine(this.selectedRouterId, {
+        name: row.name, macAddress: row.mac, ipAddress: row.ip, hostname: row.hostname,
+        deviceId: row.deviceId, candidateId: row.candidateId,
+      });
+      this.toast(`${row.name} added and bypassed`, 'success');
+      this.closeModal();
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast('Could not add it: ' + err.message, 'error');
+      if (el) el.disabled = false;
+    }
+  },
+
+  async addManualPc(el) {
+    const name = String(document.getElementById('cafe-manual-name').value || '').trim();
+    const mac = String(document.getElementById('cafe-manual-mac').value || '').trim();
+    if (!name && !mac) {
+      this.toast('Give it a name or a MAC address', 'error');
+      return;
+    }
+    if (el) el.disabled = true;
+    try {
+      await api.addCafeMachine(this.selectedRouterId, { name: name || mac, macAddress: mac });
+      this.toast(`${name || mac} added`, 'success');
+      this.closeModal();
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast('Could not add it: ' + err.message, 'error');
+      if (el) el.disabled = false;
+    }
+  },
+
+  // ---- Rates ----
+
+  async loadCafeRates(container) {
+    let payload;
+    try {
+      payload = await api.getCafeSettings(this.selectedRouterId);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+      return;
+    }
+    const s = payload.settings || {};
+    container.innerHTML = `
+      <p style="margin-top:0">Each line is <code>Label#Minutes#Price</code>, and the Sell buttons follow this order.</p>
+      <div class="form-group">
+        <label>Price list</label>
+        <textarea id="cafe-rate-list" rows="6" style="width:100%;font-family:monospace">${this.escapeHtml(s.rate_list || '')}</textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Currency</label>
+          <input type="text" id="cafe-currency" value="${this.escapeHtml(s.currency || 'PHP')}">
+        </div>
+        <div class="form-group">
+          <label>Default custom-minutes</label>
+          <input type="number" id="cafe-default-minutes" min="1" max="1440" value="${Number(s.default_minutes) || 60}">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="App.saveCafeRates()">Save Rates</button>
+    `;
+  },
+
+  async saveCafeRates() {
+    try {
+      await api.saveCafeSettings(this.selectedRouterId, {
+        rate_list: document.getElementById('cafe-rate-list').value,
+        currency: document.getElementById('cafe-currency').value,
+        default_minutes: document.getElementById('cafe-default-minutes').value,
+      });
+      this.toast('Rates saved', 'success');
+      this.loadPisonetTab();
+    } catch (err) {
+      this.toast('Save failed: ' + err.message, 'error');
+    }
+  },
+
+  // ---- Client Setup ----
+
+  async loadCafeSetup(container) {
+    let setup = {};
+    let candidates = [];
+    try {
+      [setup, candidates] = await Promise.all([
+        api.getCafeSetup().catch(() => ({})),
+        api.getCafeCandidates(this.selectedRouterId, 600).then((r) => r.candidates || []).catch(() => []),
+      ]);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+      return;
+    }
+    container.innerHTML = `
+      <h4 style="margin-top:0">1. Put the agent on the desktop</h4>
+      <p>Run this in PowerShell on the PC, or download <code>JuanFiCafe.exe</code> and copy it there.</p>
+      <div class="form-group">
+        <input type="text" readonly style="width:100%;font-family:monospace" value="${this.escapeHtml(setup.installLine || '')}" onclick="this.select()">
+      </div>
+      <h4>2. Tell it where the panel is</h4>
+      <p>The agent looks for this panel on the LAN by itself. If a desktop is behind something that blocks that, drop a <code>config.ini</code> next to the exe:</p>
+      <pre class="form-group" style="white-space:pre-wrap;margin:0;padding:.75rem">${this.escapeHtml(setup.configIni || '')}</pre>
+      <h4>3. Add the desktop here</h4>
+      <p>Press <strong>Add PC</strong> above. A desktop that has run the agent shows as <em>installed</em> and claims its own token, so nothing has to be typed on it.</p>
+      <h4>Installed but not added (${candidates.length})</h4>
+      ${candidates.length ? `
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Hostname</th><th>IP</th><th>MAC</th><th>Agent</th><th>Last seen</th></tr></thead>
+            <tbody>${candidates.map((c) => `
+              <tr>
+                <td>${this.escapeHtml(c.hostname)}</td>
+                <td>${this.escapeHtml(c.ip_address || '-')}</td>
+                <td><code>${this.escapeHtml(c.mac_address || '-')}</code></td>
+                <td>${this.escapeHtml(c.agent_version || '-')}</td>
+                <td>${this.escapeHtml(c.last_seen || '')}</td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>` : '<p style="color:var(--text-muted)">Nothing is waiting to be added right now.</p>'}
+      <h4>Admin unlock on the keyboard</h4>
+      <p>The shop owner presses <strong>Ctrl+Alt+F12</strong> on a desktop and types the admin password to service the machine - update a game, install a patch - without burning the customer's time. Restarting the PC always brings the lock screen straight back.</p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Admin password</label>
+          <input type="password" id="cafe-admin-password" placeholder="set once for this router">
+        </div>
+        <div class="form-group" style="align-self:flex-end">
+          <button class="btn btn-outline" onclick="App.saveCafeAdminPassword()">Save Password</button>
+        </div>
+      </div>
+    `;
+  },
+
+  async saveCafeAdminPassword() {
+    const value = String(document.getElementById('cafe-admin-password').value || '');
+    if (!value) {
+      this.toast('Type the password you want, or clear it on the server first', 'error');
+      return;
+    }
+    try {
+      await api.saveCafeAdminPassword(this.selectedRouterId, value);
+      document.getElementById('cafe-admin-password').value = '';
+      this.toast('Admin password saved', 'success');
+    } catch (err) {
+      this.toast('Save failed: ' + err.message, 'error');
     }
   },
 

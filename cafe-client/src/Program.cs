@@ -21,7 +21,16 @@ namespace JuanFiCafe
             bool fresh;
             using (Mutex mutex = new Mutex(true, "JuanFiCafeAgent.SingleInstance", out fresh))
             {
-                if (!fresh) return; // already running on this desktop
+                if (!fresh)
+                {
+                    // Double-clicked while the autostart copy is already live. Say
+                    // so - an exe that vanishes without a word reads as broken.
+                    MessageBox.Show(
+                        "The JuanFi Pisonet agent is already running on this PC.\r\n\r\n"
+                        + "Ctrl+Alt+F12 opens the admin unlock.",
+                        "JuanFi Pisonet", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
 
                 Config.Load();
 
@@ -35,8 +44,11 @@ namespace JuanFiCafe
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                // Built before the loop starts: the constructor arms the agent, so
+                // the poll thread can post UI work the moment it wakes up.
+                Controller controller = new Controller();
                 Agent.Start();
-                Application.Run(new Controller());
+                Application.Run(controller);
             }
         }
     }
@@ -54,17 +66,13 @@ namespace JuanFiCafe
             ClientSize = new Size(0, 0);
             Visible = false;
             Agent.ui = this;
-        }
 
-        protected override void SetVisibleCore(bool value)
-        {
-            // Message loop without a window the customer can find.
-            base.SetVisibleCore(false);
-        }
-
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
+            // A form that is never allowed visible never fires Load - its handle
+            // is not even created - so nothing may depend on OnLoad to boot the
+            // agent. Create the hidden handle here instead: it is the door the
+            // poll thread posts through, and without it every state change the
+            // panel reports is silently dropped.
+            CreateHandle();
             Native.AdminHotkey += new Action(Agent.AdminRequested);
             Native.InstallHooks();
             pump.Interval = 400;
@@ -72,6 +80,12 @@ namespace JuanFiCafe
             pump.Start();
             Agent.Restore();
             Agent.Wake();
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            // Message loop without a window the customer can find.
+            base.SetVisibleCore(false);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)

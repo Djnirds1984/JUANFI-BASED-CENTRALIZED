@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 
@@ -167,7 +168,12 @@ namespace JuanFiCafe
                     udp.Client.SendTimeout = 1000;
                     udp.Client.ReceiveTimeout = 1200;
                     byte[] probe = Encoding.ASCII.GetBytes(Hunt);
-                    udp.Send(probe, probe.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
+                    foreach (string target in BroadcastTargets())
+                    {
+                        // One dead adapter must not cancel the hunt on the others.
+                        try { udp.Send(probe, probe.Length, new IPEndPoint(IPAddress.Parse(target), DiscoveryPort)); }
+                        catch { }
+                    }
 
                     DateTime until = DateTime.Now.AddMilliseconds(1500);
                     while (DateTime.Now < until)
@@ -187,6 +193,7 @@ namespace JuanFiCafe
                         // Bare host:port from an older panel - assume http.
                         return "http://" + parts[1].TrimEnd('/');
                     }
+                    Log.Write("discovery: no panel answered " + BroadcastTargets().Count + " broadcast tries");
                 }
             }
             catch (Exception err)
@@ -194,6 +201,42 @@ namespace JuanFiCafe
                 Log.Write("discovery failed: " + err.Message);
             }
             return "";
+        }
+
+        /// On a multi-homed PC (Ethernet + Wi-Fi + VPN boxes like ZeroTier or
+        /// Radmin) a bare 255.255.255.255 shout only leaves one interface, and it
+        /// is often the wrong one, so the panel never hears it. Aim at every
+        /// attached subnet's own broadcast address instead, plus the global one
+        /// for the plain single-NIC cafe desktop.
+        static List<string> BroadcastTargets()
+        {
+            List<string> targets = new List<string>();
+            try
+            {
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+                    IPInterfaceProperties props = ni.GetIPProperties();
+                    if (props == null) continue;
+                    foreach (UnicastIPAddressInformation ua in props.UnicastAddresses)
+                    {
+                        if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                        if (IPAddress.IsLoopback(ua.Address)) continue;
+                        byte[] ip = ua.Address.GetAddressBytes();
+                        byte[] mask = ua.IPv4Mask == null ? new byte[0] : ua.IPv4Mask.GetAddressBytes();
+                        if (mask.Length != 4) continue;
+                        byte[] bcast = new byte[4];
+                        for (int i = 0; i < 4; i++) bcast[i] = (byte)(ip[i] | (byte)~mask[i]);
+                        string value = new IPAddress(bcast).ToString();
+                        if (!targets.Contains(value)) targets.Add(value);
+                    }
+                }
+            }
+            catch { }
+            if (!targets.Contains("255.255.255.255")) targets.Add("255.255.255.255");
+            return targets;
         }
 
         /// Confirm a hand-typed address really is a JuanFi panel before the agent

@@ -8,6 +8,8 @@ import { authMiddleware } from '../middleware/auth';
 import { config } from '../config';
 import { getDb } from '../database';
 import { mikrotikTimeToSeconds, secondsToLimitUptime, generateSessionToken } from '../services/deviceSessions';
+import { grantMinutesToMac } from '../services/timeCredit';
+import { getTrialSettings, claimTrial, releaseTrialClaim } from '../services/trial';
 
 const router = Router();
 
@@ -62,7 +64,7 @@ router.get('/vendo-config', (req: Request, res: Response) => {
     // portal shows is built from multiVendoAddresses. When those disagree the
     // phone talks to a machine that is not there, so resolve the default against
     // the list before the portal ever sees it.
-    res.json(resolveVendorIp({
+    const cfg: any = resolveVendorIp({
       isMultiVendo: getBool('isMultiVendo'),
       multiVendoOption: getNum('multiVendoOption'),
       multiVendoAddresses: addresses,
@@ -72,7 +74,18 @@ router.get('/vendo-config', (req: Request, res: Response) => {
       loginOption: getNum('loginOption'),
       dataRateOption: getBool('dataRateOption'),
       macAsVoucherCode: getBool('macAsVoucherCode'),
-    }));
+    });
+
+    // Panel-tracked free trial (TRIAL button). Lives in system_settings, not
+    // the NodeMCU config file, and rides along here so the portal needs no
+    // second pre-login fetch.
+    try {
+      const trial = getTrialSettings();
+      cfg.trialEnabled = trial.enabled;
+      cfg.trialMinutes = trial.minutes;
+    } catch { /* button stays hidden */ }
+
+    res.json(cfg);
   } catch (error: any) {
     console.error('vendo-config error:', error);
     res.status(500).json({ error: error.message });
@@ -523,6 +536,68 @@ router.post('/resume', async (req: Request, res: Response) => {
 
     console.log(`portal resume: ${username} on router ${routerId} with ${remaining}s`);
     res.json({ success: true, remainingSeconds: remaining, username, expiresAt: expiryAt });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/portal/trial — the portal TRIAL button. The router's own trial
+// login is removed by the panel on radius routers (it bypasses RADIUS: the
+// device goes "connected" with zero tracked time), so the trial is granted as
+// REAL MAC-account time — the exact coin-insert path (creditMacAccount +
+// CoA). One claim per device per day; the grant stacks on any leftover time.
+router.post('/trial', async (req: Request, res: Response) => {
+  try {
+    const macNoColon = String(req.body?.mac || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    const routerId = parseInt(String(req.body?.routerId || '1'), 10);
+    if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
+      res.status(400).json({ error: 'Valid MAC is required' });
+      return;
+    }
+    const db = getDb();
+    const routerRow = db.prepare(
+      'SELECT id, auth_mode, radius_local_users FROM routers WHERE id = ? AND is_active = 1'
+    ).get(routerId) as any;
+    if (!routerRow) {
+      res.status(404).json({ error: 'Router not found or not active' });
+      return;
+    }
+    const trial = getTrialSettings(db);
+    if (!trial.enabled || trial.minutes <= 0) {
+      res.status(400).json({ error: 'Free trial is not available right now' });
+      return;
+    }
+
+    const claim = claimTrial(db, routerId, macNoColon);
+    if (!claim.claimed) {
+      res.status(429).json({ error: 'Trial already used today. Please come back tomorrow or buy a voucher.' });
+      return;
+    }
+
+    try {
+      // Treat it like a top-up: never kick a live session, CoA the added time
+      // in place (a device can claim the trial while still connected).
+      const grant = await grantMinutesToMac({
+        db,
+        routerId,
+        macNoColon,
+        durationMinutes: trial.minutes,
+        authMode: routerRow.auth_mode || 'api',
+        hybridLocalUsers: Number(routerRow.radius_local_users) === 1,
+        logTag: 'trial',
+      });
+      console.log(`trial: ${macNoColon} on router ${routerId} +${trial.minutes}min (total ${grant.remainingSeconds}s)`);
+      res.json({
+        success: true,
+        minutes: trial.minutes,
+        remainingSeconds: grant.remainingSeconds,
+        username: grant.accountUsername,
+      });
+    } catch (grantErr: any) {
+      // A transient failure must not burn the device's trial for the day.
+      releaseTrialClaim(db, routerId, macNoColon, claim);
+      res.status(500).json({ error: grantErr.message || 'Trial grant failed' });
+    }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -7371,6 +7371,8 @@ Then join your network:
 
   generalSettingsHtml(settings) {
     const active = settings.currency || 'PHP';
+    const trialOn = settings.trial_enabled !== false;
+    const trialMinutes = settings.trial_minutes || 15;
     return `
       <div class="card" style="max-width:680px">
         <div class="card-header">
@@ -7383,6 +7385,18 @@ Then join your network:
               ${this.currencies.map((c) => `<option value="${c.code}" ${c.code === active ? 'selected' : ''}>${c.code} — ${this.escapeHtml(c.name)} (${c.symbol})</option>`).join('')}
             </select>
             <small style="display:block;margin-top:0.4rem;color:var(--text-muted)">Used for price displays across the panel, such as RADIUS profile prices.</small>
+          </div>
+          <div style="margin:1rem 0;padding:1rem 1.25rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
+            <div style="font-size:0.6875rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem">Portal Free Trial</div>
+            <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
+              <input type="checkbox" id="system-trial-enabled" ${trialOn ? 'checked' : ''}>
+              <label for="system-trial-enabled" style="margin:0">Show the TRIAL button on the customer portal</label>
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem">
+              <label for="system-trial-minutes" style="margin:0;white-space:nowrap">Trial minutes</label>
+              <input type="number" id="system-trial-minutes" class="form-control" style="max-width:120px" min="1" max="1440" value="${trialMinutes}">
+              <small style="color:var(--text-muted)">per device, once per day (tracked through RADIUS like a coin insert)</small>
+            </div>
           </div>
           <div style="margin:1rem 0 1.25rem;padding:1rem 1.25rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
             <div style="font-size:0.6875rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted)">Preview</div>
@@ -7645,8 +7659,17 @@ Then join your network:
   async saveSystemSettings() {
     const select = document.getElementById('system-currency');
     if (!select) return;
+    const payload = { currency: select.value };
+    const trialOn = document.getElementById('system-trial-enabled');
+    const trialMins = document.getElementById('system-trial-minutes');
+    if (trialOn) payload.trial_enabled = trialOn.checked;
+    if (trialMins) payload.trial_minutes = parseInt(trialMins.value, 10);
+    if (trialMins && (!Number.isFinite(payload.trial_minutes) || payload.trial_minutes < 1 || payload.trial_minutes > 1440)) {
+      this.toast('Trial minutes must be between 1 and 1440', 'error');
+      return;
+    }
     try {
-      const settings = await api.updateSystemSettings({ currency: select.value });
+      const settings = await api.updateSystemSettings(payload);
       this._systemSettings = settings;
       this.systemCurrency = settings.currency || 'PHP';
       this.toast(`Currency set to ${this.systemCurrency}`, 'success');

@@ -31,7 +31,7 @@ function readSettings() {
   const db = getDb();
   db.prepare('INSERT OR IGNORE INTO system_settings (id) VALUES (1)').run();
   const row = db
-    .prepare('SELECT currency, company_name, logo_path, insert_coin_sound, coin_drop_sound, updated_at FROM system_settings WHERE id = 1')
+    .prepare('SELECT currency, company_name, logo_path, insert_coin_sound, coin_drop_sound, trial_enabled, trial_minutes, updated_at FROM system_settings WHERE id = 1')
     .get() as any;
   return {
     currency: row?.currency || 'PHP',
@@ -39,6 +39,8 @@ function readSettings() {
     logo_path: row?.logo_path || '',
     insert_coin_sound: row?.insert_coin_sound || '',
     coin_drop_sound: row?.coin_drop_sound || '',
+    trial_enabled: Number(row?.trial_enabled ?? 1) === 1,
+    trial_minutes: parseInt(String(row?.trial_minutes ?? ''), 10) || 15,
     updated_at: row?.updated_at || null,
   };
 }
@@ -162,6 +164,23 @@ router.put('/', (req: Request, res: Response) => {
       }
       updates.push('company_name = ?');
       params.push(companyName);
+    }
+
+    // Portal free trial (TRIAL button). Minutes are clamped to a sane range so
+    // a typo cannot hand out a week of "free" time.
+    if (req.body?.trial_enabled !== undefined) {
+      updates.push('trial_enabled = ?');
+      params.push(req.body.trial_enabled ? 1 : 0);
+    }
+
+    if (req.body?.trial_minutes !== undefined) {
+      const trialMinutes = parseInt(String(req.body.trial_minutes), 10);
+      if (!Number.isFinite(trialMinutes) || trialMinutes < 1 || trialMinutes > 1440) {
+        res.status(400).json({ error: 'Trial minutes must be between 1 and 1440' });
+        return;
+      }
+      updates.push('trial_minutes = ?');
+      params.push(trialMinutes);
     }
 
     if (!updates.length) {

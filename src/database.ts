@@ -326,6 +326,18 @@ export function initializeDatabase(): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Panel-tracked free trial (the portal TRIAL button). The router's own
+    -- trial login bypasses RADIUS entirely (ghost "connected" devices with no
+    -- tracked time), so the panel strips it and hands the trial out as real
+    -- MAC-account time instead. One claim per device per day.
+    CREATE TABLE IF NOT EXISTS trial_claims (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      mac_address TEXT NOT NULL,
+      claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(router_id, mac_address)
+    );
+
     CREATE TABLE IF NOT EXISTS chat_threads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       mac TEXT NOT NULL,
@@ -681,6 +693,14 @@ export function initializeDatabase(): void {
   }
   if (!sysCols.some((c: any) => c.name === 'coin_drop_sound')) {
     db.exec("ALTER TABLE system_settings ADD COLUMN coin_drop_sound TEXT NOT NULL DEFAULT ''");
+  }
+  // Free-trial offer shown as the portal TRIAL button (tracked via RADIUS/coin
+  // account path). On by default: the operator can turn it off per shop.
+  if (!sysCols.some((c: any) => c.name === 'trial_enabled')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN trial_enabled INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!sysCols.some((c: any) => c.name === 'trial_minutes')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN trial_minutes INTEGER NOT NULL DEFAULT 15");
   }
 
   const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];

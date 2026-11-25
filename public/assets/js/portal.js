@@ -162,6 +162,11 @@ function setupEventListeners() {
 	document.getElementById('payGcashBtnConnected').addEventListener('click', function() { showPayRates(); });
 	document.getElementById('eloadCloseBtn').addEventListener('click', function() { hideModal('eloadModal'); });
 
+	// TRIAL button (panel-tracked free time). Guarded: portal.html is admin-
+	// editable and an older copy may not have the button at all.
+	var trialBtnEl = document.getElementById('trialBtn');
+	if (trialBtnEl) trialBtnEl.addEventListener('click', function() { doTrial(); });
+
 	// Connected panel
 	document.getElementById('extendBtn').addEventListener('click', function() {
 		isExtendMode = true;
@@ -544,6 +549,18 @@ function loadVendoConfig() {
 			populateVendoSelect('vendoSelected', 'vendoSelectDiv', cfg);
 			populateVendoSelect('connectedVendoSelected', 'connectedVendoSelectDiv', cfg);
 			updateActionButtons();
+			// Free trial offer from the panel (System Settings). The claim check
+			// is server-side (once per device per day) - a used trial hides itself
+			// after the 429 instead of taunting the customer all day.
+			var trialBtn = document.getElementById('trialBtn');
+			if (trialBtn) {
+				if (cfg.trialEnabled && cfg.trialMinutes > 0 && localStorage.getItem('trialUsedToday') !== todayStamp()) {
+					trialBtn.style.display = '';
+					trialBtn.textContent = 'FREE TRIAL (' + cfg.trialMinutes + ' MIN)';
+				} else {
+					trialBtn.style.display = 'none';
+				}
+			}
 		})
 		.catch(function() {});
 }
@@ -778,6 +795,51 @@ function redeemVoucher(code) {
 		}
 	}).catch(function() {
 		alert('Voucher redemption failed. Please try again.');
+	});
+}
+
+// ---- FREE TRIAL ----
+// The panel credits trial minutes onto this device's MAC account (same tracked
+// path as a coin insert - the router's own trial login bypasses RADIUS and is
+// removed on radius routers), then logs in as the MAC exactly like redeemVoucher
+// does. Once per device per day, enforced server-side.
+function todayStamp() {
+	// Local YYYY-MM-DD - must match the server's claim day boundary.
+	var d = new Date();
+	var p = function(n) { return (n < 10 ? '0' : '') + n; };
+	return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+function doTrial() {
+	if (!mac || !routerId) { alert('Missing device parameters. Please access the portal through the MikroTik redirect.'); return; }
+	var btn = document.getElementById('trialBtn');
+	if (btn) { btn.disabled = true; btn.textContent = 'PLEASE WAIT...'; }
+	fetch('/api/portal/trial', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mac: mac, routerId: routerId }),
+	}).then(function(r) {
+		return r.json().then(function(d) { return { ok: r.ok, d: d }; });
+	}).then(function(res) {
+		if (res.ok && res.d && res.d.success) {
+			try { localStorage.setItem('trialUsedToday', todayStamp()); } catch (e) {}
+			document.getElementById('voucherInput').value = macVoucherCode();
+			doLogin();
+			showConnectedState(res.d.remainingSeconds);
+			setTimeout(function() { syncSessionTime(); }, 2500);
+			setTimeout(function() { syncSessionTime(); }, 8000);
+			alert('Enjoy your free ' + (res.d.minutes || '') + ' minutes!');
+		} else {
+			if (btn) { btn.disabled = false; btn.textContent = 'FREE TRIAL'; }
+			if (res.d && res.d.error && /already used today/i.test(res.d.error)) {
+				try { localStorage.setItem('trialUsedToday', todayStamp()); } catch (e) {}
+				if (btn) btn.style.display = 'none';
+			}
+			alert('Trial: ' + ((res.d && res.d.error) || 'not available'));
+		}
+	}).catch(function() {
+		if (btn) { btn.disabled = false; btn.textContent = 'FREE TRIAL'; }
+		alert('Trial request failed. Please try again.');
 	});
 }
 

@@ -1701,16 +1701,36 @@ class MikroTikService {
       // REST exposes the server pool as 'pool'; the 8728 API uses 'address-pool'.
       const serverPool = (server: any) => String(server.pool || server['address-pool'] || '');
       let serverError = '';
-      try {
-        if (isRestApi) {
-          await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
-            name: serverName,
-            interface: config.interface,
-            profile: profileName,
-            pool: poolName,
-            disabled: false,
-          });
-        } else {
+      if (isRestApi) {
+        // RouterOS builds disagree on the hotspot server pool parameter: the
+        // REST read output calls it 'pool', but some v7 builds reject that as
+        // "unknown parameter pool" and only accept 'address-pool'. Send
+        // address-pool first, then drop whatever parameter a build rejects by
+        // name and retry instead of failing the whole setup.
+        const addBody: Record<string, any> = {
+          name: serverName,
+          interface: config.interface,
+          profile: profileName,
+          'address-pool': poolName,
+          disabled: false,
+        };
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', addBody);
+            break;
+          } catch (err: any) {
+            const msg = String(err?.message || '');
+            const unknown = msg.match(/unknown parameter\s+([A-Za-z0-9-]+)/i);
+            if (unknown && unknown[1] in addBody && attempt < 3) {
+              delete addBody[unknown[1]];
+              continue;
+            }
+            if (skipIfExists(err)) { serverError = msg; break; }
+            throw err;
+          }
+        }
+      } else {
+        try {
           const client = this.getClient(routerId);
           await client.write('/ip/hotspot/add', [
             `=name=${serverName}`,
@@ -1719,10 +1739,10 @@ class MikroTikService {
             `=address-pool=${poolName}`,
             `=disabled=no`,
           ]);
+        } catch (err: any) {
+          if (!skipIfExists(err)) throw err;
+          serverError = err.message;
         }
-      } catch (err: any) {
-        if (!skipIfExists(err)) throw err;
-        serverError = err.message;
       }
       // Some RouterOS builds drop profile/pool/disabled on REST add (the
       // server arrives disabled with no profile and no address pool). Verify
@@ -1749,7 +1769,7 @@ class MikroTikService {
             ]);
           }
         };
-        for (const field of isRestApi ? ['pool', 'address-pool'] : ['address-pool']) {
+        for (const field of isRestApi ? ['address-pool', 'pool'] : ['address-pool']) {
           if (!needsHeal()) break;
           try {
             await setServer(field);

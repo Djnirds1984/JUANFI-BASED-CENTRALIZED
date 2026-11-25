@@ -74,10 +74,14 @@ function fakeRouter(options = {}) {
     }
     if (method === 'GET' && path === '/ip/hotspot') return state.hotspotServers;
     if (method === 'POST' && path === '/ip/hotspot/add') {
+      // This build's write side only accepts one of the two pool names.
+      if (options.hotspotRejectsAddressPool && body['address-pool'] !== undefined) fail('unknown parameter address-pool');
+      if (options.hotspotRejectsPoolParam && body.pool !== undefined) fail('unknown parameter pool');
       const row = { '.id': id(), name: body.name, interface: body.interface };
       if (!options.hotspotAddDropsProfile) {
         row.profile = body.profile;
-        row.pool = body.pool;
+        const poolValue = body['address-pool'] !== undefined ? body['address-pool'] : body.pool;
+        if (poolValue !== undefined) row.pool = poolValue;
         row.disabled = body.disabled === false ? 'false' : 'true';
       } else {
         // The reported bug: server created disabled, profile and pool not applied.
@@ -89,6 +93,8 @@ function fakeRouter(options = {}) {
     if (method === 'PATCH' && path.startsWith('/ip/hotspot/')) {
       const row = state.hotspotServers.find((s) => s['.id'] === path.split('/').pop());
       if (!row) fail('no such item');
+      if (options.hotspotRejectsAddressPool && body['address-pool'] !== undefined) fail('unknown parameter address-pool');
+      if (options.hotspotRejectsPoolParam && body.pool !== undefined) fail('unknown parameter pool');
       if (body.profile !== undefined) row.profile = body.profile;
       if (body.disabled !== undefined) row.disabled = body.disabled === false ? 'false' : 'true';
       if (body.pool !== undefined) row.pool = body.pool;
@@ -184,6 +190,19 @@ test('server created disabled without a profile or pool is healed to hsprof1 + p
   assert.equal(state.hotspotServers[0].disabled, 'false');
   assert.ok(result.serverRepaired, 'repair should be reported');
   assert.ok(state.calls.some((c) => c.startsWith('PATCH /ip/hotspot/')), 'heal must PATCH the server');
+});
+
+test('a build that rejects "address-pool" on add is retried and the pool is healed via "pool"', async () => {
+  const state = fakeRouter({ hotspotRejectsAddressPool: true });
+  const result = await mt.setupHotspot(1, { ...baseConfig });
+
+  // The add must have been retried without the rejected parameter, and the
+  // heal pass must have linked the pool through the accepted name.
+  assert.equal(state.calls.filter((c) => c === 'POST /ip/hotspot/add').length, 2);
+  assert.equal(state.hotspotServers.length, 1);
+  assert.equal(state.hotspotServers[0].pool, 'hs-pool-bridge-lan');
+  assert.equal(state.hotspotServers[0].disabled, 'false');
+  assert.ok(result.serverRepaired, 'pool link should be reported as repaired');
 });
 
 test('missing pool fails loudly instead of leaving a DHCP server on "unknown"', async () => {

@@ -1420,6 +1420,24 @@ class MikroTikService {
     }
   }
 
+  /**
+   * RouterOS assumes /32 when no mask is given, which leaves the hotspot
+   * interface without a subnetwork (no DHCP leases, no gateway). Fill in /24
+   * the way the setup wizard's placeholder suggests, and reject masks that
+   * cannot carry clients before anything is written to the router.
+   */
+  private normalizeHotspotCidr(value: string): string {
+    const input = String(value || '').trim();
+    const match = input.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?:\/(\d{1,2}))?$/);
+    if (!match) throw new Error(`Invalid hotspot address '${input}' - expected 10.0.100.1/24`);
+    if (match[1].split('.').some((o) => Number(o) > 255)) throw new Error(`Invalid hotspot address '${input}'`);
+    const prefix = match[2] === undefined ? 24 : parseInt(match[2], 10);
+    if (prefix < 8 || prefix > 30) {
+      throw new Error(`Invalid network mask /${prefix} on '${input}' - a hotspot needs a usable subnet (/8 to /30)`);
+    }
+    return `${match[1]}/${prefix}`;
+  }
+
   async setupHotspot(routerId: number, config: {
     interface: string;
     address: string;
@@ -1439,9 +1457,20 @@ class MikroTikService {
       return msg.includes('already have such') || msg.includes('already exists') || msg.includes('duplicate') || msg.includes('such name exists') || msg.includes('with such') || msg.includes('unknown parameter');
     };
 
+    // RouterOS assumes /32 when the mask is omitted, which leaves the hotspot
+    // interface with no usable subnetwork: clients get no DHCP lease and no
+    // gateway. Normalize before anything is written. Older panel runs may also
+    // have left a bare /32 behind; step 1 verifies and repairs it in place.
+    config = {
+      ...config,
+      address: this.normalizeHotspotCidr(config.address),
+      poolStart: String(config.poolStart || '').trim().replace(/\/\d+$/, ''),
+      poolEnd: String(config.poolEnd || '').trim().replace(/\/\d+$/, ''),
+    };
+
     try {
       // Step 1: Add IP address to interface
-      const addressName = `${config.interface}-hotspot`;
+      let addressError = '';
       try {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/address/add', {
@@ -1457,14 +1486,38 @@ class MikroTikService {
             `=comment=Hotspot`,
           ]);
         }
-        results.address = addressName;
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
-        results.address = `${addressName} (already exists)`;
+        addressError = err.message;
       }
+
+      // Verify the interface really carries the address WITH its mask; an
+      // exists-error is only acceptable if the existing entry is correct.
+      const addressRows: any[] = isRestApi
+        ? await this.restApiCall(routerConfig!, 'GET', '/ip/address')
+        : await this.getClient(routerId).write('/ip/address/print');
+      const bareIp = config.address.replace(/\/\d+$/, '');
+      const addrRow = (Array.isArray(addressRows) ? addressRows : []).find(
+        (a: any) => a.interface === config.interface && String(a.address || '').replace(/\/\d+$/, '') === bareIp
+      );
+      if (!addrRow) {
+        throw new Error(`Address ${config.address} is missing on interface ${config.interface}${addressError ? ` (${addressError})` : ''}`);
+      }
+      if (addrRow.address !== config.address) {
+        // Heal a leftover bare /32 (or any wrong mask) in place.
+        const previousAddress = addrRow.address;
+        if (isRestApi) {
+          await this.restApiCall(routerConfig!, 'PATCH', `/ip/address/${addrRow['.id']}`, { address: config.address });
+        } else {
+          await this.getClient(routerId).write('/ip/address/set', [`.id=${addrRow['.id']}`, `=address=${config.address}`]);
+        }
+        results.addressRepaired = `${previousAddress} -> ${config.address}`;
+      }
+      results.address = `${config.interface} ${config.address}`;
 
       // Step 2: Create address pool
       const poolName = `hs-pool-${config.interface}`;
+      let poolError = '';
       try {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/pool/add', {
@@ -1478,14 +1531,30 @@ class MikroTikService {
             `=ranges=${config.poolStart}-${config.poolEnd}`,
           ]);
         }
-        results.pool = poolName;
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
-        results.pool = `${poolName} (already exists)`;
+        poolError = err.message;
       }
+      // A DHCP server pointed at a pool that does not exist shows "unknown" and
+      // hands out nothing, so prove the pool is really on the router.
+      const poolRows: any[] = isRestApi
+        ? await this.restApiCall(routerConfig!, 'GET', '/ip/pool')
+        : await this.getClient(routerId).write('/ip/pool/print');
+      if (!(Array.isArray(poolRows) && poolRows.some((p: any) => p.name === poolName))) {
+        throw new Error(`Address pool '${poolName}' is missing on the router${poolError ? ` (${poolError})` : ''}`);
+      }
+      results.pool = poolName;
 
-      // Step 3: Create DHCP server on the interface
+      // Step 3: Create DHCP server on the interface, linked to the pool
       const dhcpName = `dhcp-${config.interface}`;
+      let dhcpError = '';
+      const listDhcpServers = async (): Promise<any[]> => {
+        const rows: any[] = isRestApi
+          ? await this.restApiCall(routerConfig!, 'GET', '/ip/dhcp-server')
+          : await this.getClient(routerId).write('/ip/dhcp-server/print');
+        return Array.isArray(rows) ? rows : [];
+      };
+      const linkedPool = (server: any) => String(server['address-pool'] || server.pool || '');
       try {
         if (isRestApi) {
           await this.restApiCall(routerConfig!, 'POST', '/ip/dhcp-server/add', {
@@ -1493,7 +1562,6 @@ class MikroTikService {
             interface: config.interface,
             'address-pool': poolName,
             'lease-time': '10m',
-            'authoritative': 'yes',
           });
         } else {
           const client = this.getClient(routerId);
@@ -1502,14 +1570,39 @@ class MikroTikService {
             `=interface=${config.interface}`,
             `=address-pool=${poolName}`,
             `=lease-time=10m`,
-            `=authoritative=yes`,
           ]);
         }
-        results.dhcp = dhcpName;
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
-        results.dhcp = `${dhcpName} (already exists)`;
+        dhcpError = err.message;
       }
+      // REST property names differ across RouterOS builds (address-pool vs
+      // pool); make sure the server is really linked before continuing.
+      let dhcpRow = (await listDhcpServers()).find((s: any) => s.name === dhcpName);
+      if (!dhcpRow) {
+        throw new Error(`DHCP server '${dhcpName}' was not created${dhcpError ? ` (${dhcpError})` : ''}`);
+      }
+      if (linkedPool(dhcpRow) !== poolName) {
+        const setPool = async (field: string) => {
+          if (isRestApi) {
+            await this.restApiCall(routerConfig!, 'PATCH', `/ip/dhcp-server/${dhcpRow!['.id']}`, { [field]: poolName });
+          } else {
+            await this.getClient(routerId).write('/ip/dhcp-server/set', [`.id=${dhcpRow!['.id']}`, `=address-pool=${poolName}`]);
+          }
+        };
+        for (const field of isRestApi ? ['address-pool', 'pool'] : ['address-pool']) {
+          if (linkedPool(dhcpRow) === poolName) break;
+          try {
+            await setPool(field);
+            dhcpRow = (await listDhcpServers()).find((s: any) => s.name === dhcpName) || dhcpRow;
+          } catch { /* try the next property name */ }
+        }
+        if (!dhcpRow || linkedPool(dhcpRow) !== poolName) {
+          throw new Error(`DHCP server '${dhcpName}' is not linked to pool '${poolName}' (router reports '${dhcpRow ? linkedPool(dhcpRow) || 'unknown' : 'missing'}')`);
+        }
+        results.dhcpRepaired = `${dhcpName} pool -> ${poolName}`;
+      }
+      results.dhcp = dhcpName;
 
       // Step 4: Create DHCP network (gateway + DNS for clients)
       try {

@@ -3018,8 +3018,15 @@ const App = {
 
     const saveCurrentStep = () => {
       if (step.current === 0) { const el = document.getElementById('hs-wiz-interface'); data.interface = el ? el.value : ''; }
-      else if (step.current === 1) { const el = document.getElementById('hs-wiz-address'); data.address = el ? el.value : ''; }
-      else if (step.current === 2) { const s = document.getElementById('hs-wiz-pool-start'); const e = document.getElementById('hs-wiz-pool-end'); data.poolStart = s ? s.value : ''; data.poolEnd = e ? e.value : ''; }
+      else if (step.current === 1) {
+        const el = document.getElementById('hs-wiz-address');
+        let v = (el ? el.value : '').trim();
+        // RouterOS treats a bare address as /32 - no subnet, no DHCP leases.
+        // Complete it the way the placeholder suggests.
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) v += '/24';
+        data.address = v;
+      }
+      else if (step.current === 2) { const s = document.getElementById('hs-wiz-pool-start'); const e = document.getElementById('hs-wiz-pool-end'); data.poolStart = (s ? s.value : '').trim(); data.poolEnd = (e ? e.value : '').trim(); }
       else if (step.current === 3) { const el = document.getElementById('hs-wiz-dns'); data.dnsServers = el ? el.value : ''; }
       else if (step.current === 4) { const el = document.getElementById('hs-wiz-dns-name'); data.dnsName = el ? el.value : ''; }
       else if (step.current === 5) { const u = document.getElementById('hs-wiz-user'); const p = document.getElementById('hs-wiz-pass'); data.adminUsername = u ? u.value : ''; data.adminPassword = p ? p.value : ''; }
@@ -3035,6 +3042,19 @@ const App = {
         [!data.dnsName, 'Please enter a DNS name'],
         [!data.adminUsername || !data.adminPassword, 'Please enter admin username and password'],
       ];
+      if (step.current === 1) {
+        const m = data.address.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+        const prefix = m ? parseInt(m[2], 10) : 0;
+        if (!m || m[1].split('.').some((o) => Number(o) > 255) || prefix < 8 || prefix > 30) {
+          this.toast('Enter a valid address with mask, e.g. 10.0.100.1/24', 'error');
+          return false;
+        }
+      }
+      if (step.current === 2) {
+        const ipv4 = /^(\d{1,3}(\.\d{1,3}){3})$/;
+        const bad = [data.poolStart, data.poolEnd].some((v) => !ipv4.test(v) || v.split('.').some((o) => Number(o) > 255));
+        if (bad) { this.toast('Pool addresses must be plain IPv4 addresses, e.g. 10.0.100.10', 'error'); return false; }
+      }
       const fail = checks[step.current];
       if (fail && fail[0]) { this.toast(fail[1], 'error'); return false; }
       return true;

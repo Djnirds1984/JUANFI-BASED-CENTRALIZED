@@ -117,6 +117,16 @@ test('a live session on an expired account is kicked', async () => {
   const log = db.prepare("SELECT * FROM radius_logs WHERE message LIKE 'Expiry kick:%'").get();
   assert.ok(log, 'the kick is written to the RADIUS log the panel shows');
   assert.equal(String(log.username).toUpperCase(), 'EC9A0C150B4F');
+
+  // The row is closed so the next tick does not kick a session that is gone.
+  const session = db.prepare('SELECT status, terminate_cause FROM radius_sessions WHERE session_id = ?').get('8000000c');
+  assert.equal(session.status, 'stopped');
+  assert.equal(session.terminate_cause, 'Session-Timeout');
+
+  // A second pass has nothing left to do and writes no second log line.
+  const again = await runHotspotExpirySweep();
+  assert.equal(again.kicked, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM radius_logs WHERE message LIKE \'Expiry kick:%\'').get().n, 1);
 });
 
 test('a session with remaining time is left alone', async () => {

@@ -210,6 +210,23 @@ export async function runHotspotExpirySweep(now: Date = new Date(), onlyRouterId
       report.details.push({ routerId, username: target.username, sessionId: target.sessionId, ok, reason: target.reason });
 
       if (ok) {
+        // The kick is final: close the row, otherwise a session whose
+        // Accounting-Stop never arrived stays 'active' and the next pass
+        // (after the cooldown) would kick the same dead session again and
+        // again, refilling the panel log with repeats of the same event.
+        // `router-...` pseudo ids and API '*' ids have no row to close.
+        if (target.sessionId && !target.sessionId.startsWith('*') && !target.sessionId.startsWith('router-')) {
+          try {
+            db.prepare(
+              `UPDATE radius_sessions
+               SET status = 'stopped', stopped_at = datetime('now'), updated_at = datetime('now'),
+                   terminate_cause = 'Session-Timeout'
+               WHERE router_id = ? AND session_id = ? AND status = 'active'`
+            ).run(routerId, target.sessionId);
+          } catch (err) {
+            console.error(`[expiry] could not close session ${target.sessionId}:`, (err as Error).message);
+          }
+        }
         logRadiusEvent('accounting', `Expiry kick: ${target.reason} - session dropped`, routerId, target.username, nasIp);
         console.log(`[expiry] kicked ${target.username} on router ${routerId}: ${target.reason}`);
       }

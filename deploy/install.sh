@@ -36,57 +36,66 @@ apt-get install -y -qq curl build-essential git sqlite3 acl python3 > /dev/null 
 # Check Node.js installation
 echo "[3/9] Checking Node.js installation..."
 
-# Try to find node using which, then check common locations
-NODE_PATH=""
-if command -v node &>/dev/null; then
-    NODE_PATH=$(which node)
-else
-    # Check common installation locations
+# Try to find node using which, then common locations, then any nvm install.
+# (Deliberately not named NODE_PATH - that is a real Node.js environment
+# variable and exporting it from here would break module resolution later.)
+NODE_BIN=""
+find_node() {
+    if command -v node &>/dev/null; then
+        NODE_BIN=$(which node)
+        return 0
+    fi
     for path in /usr/bin/node /usr/local/bin/node; do
         if [ -x "$path" ]; then
-            NODE_PATH="$path"
-            break
+            NODE_BIN="$path"
+            return 0
         fi
     done
-    
-    # Check nvm installations
-    if [ -z "$NODE_PATH" ]; then
-        # Try to load nvm if it exists
-        if [ -f "$HOME/.nvm/nvm.sh" ]; then
-            export NVM_DIR="$HOME/.nvm"
-            . "$NVM_DIR/nvm.sh" &>/dev/null
-            if command -v node &>/dev/null; then
-                NODE_PATH=$(which node)
+    # nvm keeps real binaries under ~/.nvm/versions/node/*/bin even when it was
+    # never loaded into this shell - which is always the case under sudo
+    for home in /home/* /root; do
+        for bin in "$home/.nvm/versions/node"/*/bin/node; do
+            if [ -x "$bin" ]; then
+                NODE_BIN="$bin"
+                return 0
             fi
-        elif [ -f "/root/.nvm/nvm.sh" ]; then
-            export NVM_DIR="/root/.nvm"
-            . "$NVM_DIR/nvm.sh" &>/dev/null
-            if command -v node &>/dev/null; then
-                NODE_PATH=$(which node)
-            fi
-        fi
-    fi
-fi
+        done
+    done
+    return 1
+}
 
-if [ -n "$NODE_PATH" ]; then
-    NODE_VERSION=$("$NODE_PATH" -v | cut -d'.' -f1 | sed 's/v//')
-    if [ "$NODE_VERSION" -lt "$NODE_MIN_VERSION" ]; then
-        echo "  ERROR: Node.js version too old ($("$NODE_PATH" -v)). Need v$NODE_MIN_VERSION or higher."
-        echo "  Install Node.js manually and re-run this script."
+find_node || true
+
+# A freshly flashed SBC/mini PC has no Node at all - install it instead of
+# dying here. Same source the ISO post-install uses, so every box lands on
+# the v20 LTS the app is developed against.
+if [ -z "$NODE_BIN" ]; then
+    echo "  Node.js not found - installing Node.js 20.x from NodeSource..."
+    if curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1 && \
+       apt-get install -y -qq nodejs > /dev/null 2>&1; then
+        hash -r 2>/dev/null || true
+        find_node || true
+    fi
+    if [ -z "$NODE_BIN" ]; then
+        echo "  ERROR: automatic Node.js install failed (no internet, or this"
+        echo "  distro is not Debian/Ubuntu). Install Node.js v$NODE_MIN_VERSION+ manually,"
+        echo "  then re-run this script:"
+        echo "    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
+        echo "  Or with nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && nvm install 20"
         exit 1
     fi
-    echo "  Node.js $("$NODE_PATH" -v) found at $NODE_PATH - OK"
-    # Add to PATH for this script
-    export PATH="$(dirname $NODE_PATH):$PATH"
-else
-    echo "  ERROR: Node.js not found in common locations."
-    echo "  Install Node.js v$NODE_MIN_VERSION+ manually, then re-run this script:"
-    echo "    - Using nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && nvm install 20"
-    echo ""
-    echo "  If Node.js is already installed, find its location with: which node"
-    echo "  Then add it to the script's search path or create a symlink in /usr/local/bin/"
+    echo "  Node.js installed automatically - OK"
+fi
+
+NODE_VERSION=$("$NODE_BIN" -v | cut -d'.' -f1 | sed 's/v//')
+if [ "$NODE_VERSION" -lt "$NODE_MIN_VERSION" ]; then
+    echo "  ERROR: Node.js version too old ($("$NODE_BIN" -v)). Need v$NODE_MIN_VERSION or higher."
+    echo "  Install Node.js manually and re-run this script."
     exit 1
 fi
+echo "  Node.js $("$NODE_BIN" -v) found at $NODE_BIN - OK"
+# Add to PATH for this script
+export PATH="$(dirname "$NODE_BIN"):$PATH"
 
 echo "  Node.js: $(node -v 2>/dev/null || echo 'not installed')"
 echo "  npm: $(npm -v 2>/dev/null || echo 'not installed')"
@@ -198,7 +207,7 @@ echo "[6/9] Installing systemd service..."
 cp "$SCRIPT_DIR/deploy/mikrotik-controller.service" /etc/systemd/system/
 # The unit ships with /usr/bin/node; hosts using nvm or a non-standard prefix
 # would fail at EXEC with status=203, so point it at the binary we detected.
-sed -i "s|^ExecStart=/usr/bin/node |ExecStart=$NODE_PATH |" /etc/systemd/system/$APP_NAME.service
+sed -i "s|^ExecStart=/usr/bin/node |ExecStart=$NODE_BIN |" /etc/systemd/system/$APP_NAME.service
 systemctl daemon-reload
 systemctl enable "$APP_NAME"
 

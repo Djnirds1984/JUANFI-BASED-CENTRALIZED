@@ -4,14 +4,16 @@ import os from 'os';
 dotenv.config();
 
 // Fallback when CONTROLLER_LAN_IP is not set: pick the first non-internal
-// IPv4 address, skipping virtual interfaces (ZeroTier, Docker, WireGuard).
+// IPv4 address, skipping virtual interfaces (ZeroTier, Docker, WireGuard)
+// and link-local APIPA addresses (a boot race where DHCP has not leased yet
+// would otherwise bake 169.254.x into every stub and walled-garden rule).
 function detectLanIp(): string {
   const skip = /^(zt|zabra|docker|veth|br-|tailscale|wg|ham|lo)/i;
   const ifaces = os.networkInterfaces();
   const names = Object.keys(ifaces).sort((a, b) => (skip.test(a) ? 1 : 0) - (skip.test(b) ? 1 : 0));
   for (const name of names) {
     for (const iface of ifaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
+      if (iface.family === 'IPv4' && !iface.internal && !String(iface.address).startsWith('169.254.')) {
         return iface.address;
       }
     }

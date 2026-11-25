@@ -1,6 +1,10 @@
 [Unit]
 Description=MikroTik Controller Server
-After=network.target
+# network.target only means "stack up", not "address leased": starting on it
+# raced DHCP on a wired mini PC, so the boot-time LAN-IP probe found nothing,
+# walled-garden maintenance disabled itself and stubs pointed at localhost.
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple

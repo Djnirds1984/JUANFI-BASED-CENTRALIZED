@@ -15,6 +15,7 @@ import { startCafeTicker, stopCafeTicker } from './services/cafe';
 import { startCafeDiscovery, stopCafeDiscovery } from './services/cafeDiscovery';
 import { mikroTikService } from './services/mikrotik';
 import { startRadiusServer, stopRadiusServer, hasRadiusClients } from './services/radiusServer';
+import { startHotspotExpirySweep, stopHotspotExpirySweep } from './services/hotspotExpiry';
 import * as turso from './services/turso';
 
 import authRoutes from './api/auth';
@@ -155,6 +156,9 @@ async function bootstrap(): Promise<void> {
     console.log('Starting PPP billing sweep...');
     startPppBillingSweep(60);
 
+    console.log('Starting hotspot expiry sweep...');
+    startHotspotExpirySweep(30);
+
     console.log('Starting pisonet meter...');
     startCafeTicker(10);
     startCafeDiscovery();
@@ -191,6 +195,7 @@ function shutdown(): void {
   stopMonitoring();
   stopActiveDeviceSync();
   stopPppBillingSweep();
+  stopHotspotExpirySweep();
   stopCafeTicker();
   stopCafeDiscovery();
   stopRadiusServer();

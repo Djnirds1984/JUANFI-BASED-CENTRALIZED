@@ -550,6 +550,13 @@ router.post('/trial', async (req: Request, res: Response) => {
   try {
     const macNoColon = String(req.body?.mac || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
     const routerId = parseInt(String(req.body?.routerId || '1'), 10);
+    // The portal knows the device's own address (it arrives in the redirect),
+    // and it is the only client identity that survives a randomized MAC. The
+    // panel itself sees 127.0.0.1 through nginx, so req.ip is useless here.
+    // Only a private address is accepted: anything else cannot be a hotspot
+    // client and would just be a way to skip the per-line claim.
+    const rawIp = String(req.body?.ip || '').trim();
+    const clientIp = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(rawIp) ? rawIp : '';
     if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
       res.status(400).json({ error: 'Valid MAC is required' });
       return;
@@ -568,7 +575,7 @@ router.post('/trial', async (req: Request, res: Response) => {
       return;
     }
 
-    const claim = claimTrial(db, routerId, macNoColon);
+    const claim = claimTrial(db, routerId, macNoColon, clientIp);
     if (!claim.claimed) {
       res.status(429).json({ error: 'Trial already used today. Please come back tomorrow or buy a voucher.' });
       return;
@@ -595,7 +602,7 @@ router.post('/trial', async (req: Request, res: Response) => {
       });
     } catch (grantErr: any) {
       // A transient failure must not burn the device's trial for the day.
-      releaseTrialClaim(db, routerId, macNoColon, claim);
+      releaseTrialClaim(db, routerId, macNoColon, claim, clientIp);
       res.status(500).json({ error: grantErr.message || 'Trial grant failed' });
     }
   } catch (error: any) {

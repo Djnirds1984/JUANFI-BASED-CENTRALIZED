@@ -85,7 +85,7 @@ const lastCoASent = new Map<string, { value: number; at: number }>();
 
 const MAX_LOG_ENTRIES = 500;
 
-function logRadiusEvent(
+export function logRadiusEvent(
   logType: string,
   message: string,
   routerId?: number,

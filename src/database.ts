@@ -338,6 +338,17 @@ export function initializeDatabase(): void {
       UNIQUE(router_id, mac_address)
     );
 
+    -- Second key for the same daily trial: a phone can present a fresh random
+    -- MAC at every connection, but it keeps its DHCP address for the visit, so
+    -- one claim per line closes the "free trial on demand" loop.
+    CREATE TABLE IF NOT EXISTS trial_ip_claims (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      ip_address TEXT NOT NULL,
+      claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(router_id, ip_address)
+    );
+
     CREATE TABLE IF NOT EXISTS chat_threads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       mac TEXT NOT NULL,
@@ -702,6 +713,12 @@ export function initializeDatabase(): void {
   if (!sysCols.some((c: any) => c.name === 'trial_minutes')) {
     db.exec("ALTER TABLE system_settings ADD COLUMN trial_minutes INTEGER NOT NULL DEFAULT 15");
   }
+  // The trial length is the operator's call (Panel Settings). Only absurd
+  // values are healed here: one day is the most the field accepts
+  // (MAX_TRIAL_MINUTES in services/trial.ts), so a typo cannot hand out a week
+  // of free internet.
+  db.exec('UPDATE system_settings SET trial_minutes = 1440 WHERE trial_minutes > 1440');
+  db.exec('UPDATE system_settings SET trial_minutes = 15 WHERE trial_minutes IS NULL OR trial_minutes < 1');
 
   const deviceCols = db.prepare("PRAGMA table_info('active_devices')").all() as any[];
   if (!deviceCols.some((c: any) => c.name === 'custom_hostname')) {

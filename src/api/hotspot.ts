@@ -162,7 +162,18 @@ router.delete('/router/:routerId/:mikrotikUserId', async (req: Request, res: Res
     const routerRow = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
 
     if (routerRow?.auth_mode === 'radius') {
+      // Read the username first: deleting the row must also drop the live
+      // session, otherwise RADIUS keeps honouring the Session-Timeout it
+      // already granted and the device stays online with no account.
+      const doomed = db
+        .prepare('SELECT username FROM hotspot_users WHERE id = ? AND router_id = ?')
+        .get(mikrotikUserId, routerId) as any;
       db.prepare('DELETE FROM hotspot_users WHERE id = ? AND router_id = ?').run(mikrotikUserId, routerId);
+      if (doomed?.username) {
+        mikroTikService
+          .kickActiveSession(routerId, { username: String(doomed.username) })
+          .catch((err: Error) => console.error('Delete hotspot user: kick failed:', err.message));
+      }
       res.json({ message: 'Hotspot user removed successfully' });
       return;
     }

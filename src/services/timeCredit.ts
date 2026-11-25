@@ -53,21 +53,31 @@ export function creditMacAccount(db: any, routerId: number, macNoColon: string, 
   // Match tolerating the router's username casing / MAC separators so we
   // update the EXISTING account instead of inserting a duplicate row (which
   // left the real account disabled/expired and auth kept failing).
+  //
+  // EVERY row of that identity is credited, not just the newest one: RADIUS
+  // authenticates against one row while the panel/device list may read another,
+  // so a duplicate left behind (e.g. `ec:9a:0c:15:0b:4f` next to
+  // `EC9A0C150B4F`) used to keep the OLD expiry - the device then surfed on a
+  // fresh Session-Timeout while the panel showed it as expired with 0 time.
+  const macKey = /^[0-9A-Fa-f]{12}$/.test(String(macNoColon || '')) ? String(macNoColon).toUpperCase() : '';
+  const macColon = String(macNoColon || '').toLowerCase().match(/.{2}/g)?.join(':') || '';
   let accountUsername = macNoColon;
-  let existing = db.prepare(
-    `SELECT id, expiry_at, paused FROM hotspot_users
+
+  const findRows = (name: string) => db.prepare(
+    `SELECT id, username, expiry_at, paused FROM hotspot_users
      WHERE router_id = ?
        AND (LOWER(username) = LOWER(?)
-            OR UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?)
-     ORDER BY id DESC LIMIT 1`
-  ).get(routerId, macNoColon, macNoColon) as any;
+            OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC`
+  ).all(routerId, name, macKey, macKey) as any[];
+
+  let rows = findRows(macNoColon);
 
   // After a roam the device presents a NEW MAC while the account keeps the
   // ORIGINAL username (token binding). Resolve the same identity check-session
   // uses so the coin stacks onto the real account (and its frozen paused
   // balance) instead of creating a duplicate account for the new MAC.
-  const macColon = macNoColon.toLowerCase().match(/.{2}/g)?.join(':') || '';
-  if (!existing && macColon) {
+  if (!rows.length && macColon) {
     const bound = db.prepare(
       `SELECT username FROM device_sessions
        WHERE router_id = ? AND mac_address = ? AND username <> ''
@@ -75,10 +85,7 @@ export function creditMacAccount(db: any, routerId: number, macNoColon: string, 
     ).get(routerId, macColon) as any;
     if (bound && bound.username) {
       accountUsername = String(bound.username).trim().toUpperCase();
-      existing = db.prepare(
-        `SELECT id, expiry_at, paused FROM hotspot_users WHERE router_id = ? AND username = ?
-         ORDER BY id DESC LIMIT 1`
-      ).get(routerId, accountUsername) as any;
+      rows = findRows(accountUsername);
     }
   }
 
@@ -86,19 +93,22 @@ export function creditMacAccount(db: any, routerId: number, macNoColon: string, 
   let hadRemaining = false;
   const now = new Date();
   const addMs = duration * 60 * 1000;
+  const expiryMsOf = (value: any) => {
+    const ms = value ? new Date(String(value).replace(' ', 'T') + 'Z').getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  };
 
-  if (existing) {
+  if (rows.length) {
     // ALWAYS stack onto unused time - whether or not the portal flagged this
     // as an "extend". A new coin insert must ADD to any remaining time, never
     // reset it (otherwise the leftover time is lost before the new time is
-    // applied - the captive-popup "time disappears then adds" bug).
-    let currentExpiry = existing.expiry_at
-      ? new Date(String(existing.expiry_at).replace(' ', 'T') + 'Z').getTime()
-      : 0;
+    // applied - the captive-popup "time disappears then adds" bug). The best
+    // row wins: a stale duplicate must not eat the customer's balance.
+    let currentExpiry = rows.reduce((best, row) => Math.max(best, expiryMsOf(row.expiry_at)), 0);
     // Paused account: pause cleared expiry_at and froze the balance in
     // device_sessions. Stack the coin onto that frozen balance (and unpause
     // via the UPDATE below) so no paid time is lost.
-    if (existing.paused) {
+    if (rows.some((row) => Number(row.paused) === 1)) {
       const sess = db.prepare(
         `SELECT remaining_seconds FROM device_sessions
          WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))
@@ -116,16 +126,27 @@ export function creditMacAccount(db: any, routerId: number, macNoColon: string, 
     db.prepare(
       `UPDATE hotspot_users SET disabled = 0, paused = 0, expiry_at = ?, updated_at = datetime('now'),
         source = ?, profile = COALESCE(NULLIF(profile, ''), ?),
-        radius_profile_id = COALESCE(radius_profile_id, ?) WHERE id = ?`
+        radius_profile_id = COALESCE(radius_profile_id, ?)
+       WHERE router_id = ?
+         AND (LOWER(username) = LOWER(?)
+              OR LOWER(username) = LOWER(?)
+              OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))`
     ).run(
       expiryAt,
       authMode === 'radius' ? 'radius' : 'api',
       defaultProfile?.name || 'default',
       defaultProfile?.id ?? null,
-      existing.id
+      routerId,
+      accountUsername,
+      macNoColon,
+      macKey,
+      macKey
     );
   } else {
     expiryAt = new Date(now.getTime() + addMs).toISOString().replace('T', ' ').slice(0, 19);
+    // Canonical identity: the MAC without separators. A colon-shaped username
+    // creates a SECOND row for the same device, and whichever row RADIUS picks
+    // then disagrees with the panel about the time left.
     db.prepare(
       `INSERT INTO hotspot_users (router_id, username, password, profile, comment, disabled, expiry_at, source, radius_profile_id)
        VALUES (?, ?, '', ?, 'Coin-insert MAC user', 0, ?, ?, ?)`
@@ -137,6 +158,24 @@ export function creditMacAccount(db: any, routerId: number, macNoColon: string, 
       defaultProfile?.id ?? null
     );
   }
+
+  // Show the credited time in the panel straight away. Without this the device
+  // list keeps the old balance (often 0 / "expired") while the router already
+  // hands out a fresh Session-Timeout - exactly the "zero time but online"
+  // report.
+  const remainingSeconds = Math.max(
+    1,
+    Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+  );
+  try {
+    db.prepare(
+      `UPDATE device_sessions SET remaining_seconds = ?, total_seconds = MAX(total_seconds, ?)
+       WHERE router_id = ? AND (mac_address = ? OR (username <> '' AND UPPER(username) = ?))`
+    ).run(remainingSeconds, remainingSeconds, routerId, macColon, accountUsername);
+  } catch (err: any) {
+    console.warn('mac-credit: could not refresh device_sessions:', err.message);
+  }
+
   return { expiryAt, hadRemaining, accountUsername };
 }
 

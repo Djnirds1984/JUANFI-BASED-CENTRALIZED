@@ -50,6 +50,11 @@ test('trial settings default to enabled with sane minutes', () => {
   assert.equal(off.enabled, false);
   assert.equal(off.minutes, 1440, 'absurd minutes are clamped to one day');
 
+  // Any sane value the operator sets is handed out as-is - the length is the
+  // shop's policy, not the code's.
+  db.prepare('UPDATE system_settings SET trial_minutes = 120 WHERE id = 1').run();
+  assert.equal(getTrialSettings(db).minutes, 120);
+
   db.prepare('UPDATE system_settings SET trial_minutes = 0 WHERE id = 1').run();
   assert.equal(getTrialSettings(db).minutes, 15, 'zero/unset falls back to the default');
 });

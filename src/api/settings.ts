@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '../database';
 import { authMiddleware } from '../middleware/auth';
+import { MAX_TRIAL_MINUTES } from '../services/trial';
 
 const router = Router();
 
@@ -167,7 +168,8 @@ router.put('/', (req: Request, res: Response) => {
     }
 
     // Portal free trial (TRIAL button). Minutes are clamped to a sane range so
-    // a typo cannot hand out a week of "free" time.
+    // a typo cannot hand out a week of "free" time - and so the grant matches
+    // what the portal button advertises (MAX_TRIAL_MINUTES).
     if (req.body?.trial_enabled !== undefined) {
       updates.push('trial_enabled = ?');
       params.push(req.body.trial_enabled ? 1 : 0);
@@ -175,8 +177,8 @@ router.put('/', (req: Request, res: Response) => {
 
     if (req.body?.trial_minutes !== undefined) {
       const trialMinutes = parseInt(String(req.body.trial_minutes), 10);
-      if (!Number.isFinite(trialMinutes) || trialMinutes < 1 || trialMinutes > 1440) {
-        res.status(400).json({ error: 'Trial minutes must be between 1 and 1440' });
+      if (!Number.isFinite(trialMinutes) || trialMinutes < 1 || trialMinutes > MAX_TRIAL_MINUTES) {
+        res.status(400).json({ error: `Trial minutes must be between 1 and ${MAX_TRIAL_MINUTES}` });
         return;
       }
       updates.push('trial_minutes = ?');

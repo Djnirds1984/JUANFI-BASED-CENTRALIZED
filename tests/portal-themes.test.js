@@ -272,6 +272,9 @@ function soundsApi(initial = {}) {
       if (name === 'fs') return fakeFs;
       if (name === '../database') return { getDb: () => fakeDb };
       if (name === '../middleware/auth') return { authMiddleware() {} };
+      // settings.ts validates the trial ceiling against the real constant; the
+      // sandbox has no module tree of its own to resolve it from.
+      if (name === '../services/trial') return { MAX_TRIAL_MINUTES: 1440 };
       return require(name);
     },
   });

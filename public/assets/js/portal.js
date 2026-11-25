@@ -817,7 +817,9 @@ function doTrial() {
 	fetch('/api/portal/trial', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ mac: mac, routerId: routerId }),
+		// ip lets the server refuse a second trial from the same hotspot address,
+		// which is what a phone with a randomized MAC looks like.
+		body: JSON.stringify({ mac: mac, routerId: routerId, ip: ip }),
 	}).then(function(r) {
 		return r.json().then(function(d) { return { ok: r.ok, d: d }; });
 	}).then(function(res) {

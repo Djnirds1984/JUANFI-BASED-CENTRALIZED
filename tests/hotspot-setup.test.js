@@ -77,9 +77,10 @@ function fakeRouter(options = {}) {
       const row = { '.id': id(), name: body.name, interface: body.interface };
       if (!options.hotspotAddDropsProfile) {
         row.profile = body.profile;
+        row.pool = body.pool;
         row.disabled = body.disabled === false ? 'false' : 'true';
       } else {
-        // The reported bug: server created disabled, profile not applied.
+        // The reported bug: server created disabled, profile and pool not applied.
         row.disabled = 'true';
       }
       state.hotspotServers.push(row);
@@ -90,6 +91,8 @@ function fakeRouter(options = {}) {
       if (!row) fail('no such item');
       if (body.profile !== undefined) row.profile = body.profile;
       if (body.disabled !== undefined) row.disabled = body.disabled === false ? 'false' : 'true';
+      if (body.pool !== undefined) row.pool = body.pool;
+      if (body['address-pool'] !== undefined) row.pool = body['address-pool'];
       return row;
     }
     if (method === 'GET' && path === '/ip/hotspot/user/profile') return state.userProfiles;
@@ -129,11 +132,12 @@ test('bare address gets a /24 instead of RouterOS defaulting to /32', async () =
   // DHCP network must be the NETWORK address of that /24, gateway .1
   assert.equal(state.networks[0].address, '10.0.100.0/24');
   assert.equal(state.networks[0].gateway, '10.0.100.1');
-  // Server is created on hsprof1 and ENABLED, not left disabled.
+  // Server is created on hsprof1, ENABLED, with its own address pool.
   assert.equal(state.hotspotProfiles[0].name, 'hsprof1');
   assert.equal(state.hotspotServers[0].profile, 'hsprof1');
   assert.equal(state.hotspotServers[0].disabled, 'false');
-  assert.match(result.server, /profile hsprof1, enabled/);
+  assert.equal(state.hotspotServers[0].pool, 'hs-pool-bridge-lan');
+  assert.match(result.server, /profile hsprof1, pool hs-pool-bridge-lan, enabled/);
 });
 
 test('a leftover bare /32 address is repaired in place', async () => {
@@ -170,12 +174,13 @@ test('an existing hsprof1 is chosen over the first profile (default)', async () 
   assert.ok(!state.calls.includes('POST /ip/hotspot/profile/add'), 'existing profile must be reused');
 });
 
-test('server created disabled without a profile is healed to hsprof1 + enabled', async () => {
+test('server created disabled without a profile or pool is healed to hsprof1 + pool + enabled', async () => {
   const state = fakeRouter({ hotspotAddDropsProfile: true });
   const result = await mt.setupHotspot(1, { ...baseConfig });
 
   assert.equal(state.hotspotServers.length, 1);
   assert.equal(state.hotspotServers[0].profile, 'hsprof1');
+  assert.equal(state.hotspotServers[0].pool, 'hs-pool-bridge-lan');
   assert.equal(state.hotspotServers[0].disabled, 'false');
   assert.ok(result.serverRepaired, 'repair should be reported');
   assert.ok(state.calls.some((c) => c.startsWith('PATCH /ip/hotspot/')), 'heal must PATCH the server');

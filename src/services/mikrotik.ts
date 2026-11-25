@@ -1687,7 +1687,9 @@ class MikroTikService {
         results.profile = `${profileName} (already exists)`;
       }
 
-      // Step 6: Create the hotspot server - linked to the profile and ENABLED.
+      // Step 6: Create the hotspot server - profile, its OWN address pool,
+      // and ENABLED. The data comes from the setup run, not from the profile
+      // (hsprof1 usually has no pool of its own).
       const serverName = `hotspot-${config.interface}`;
       const listHotspotServers = async (): Promise<any[]> => {
         const rows: any[] = isRestApi
@@ -1696,6 +1698,8 @@ class MikroTikService {
         return Array.isArray(rows) ? rows : [];
       };
       const isEnabled = (server: any) => !(server.disabled === true || server.disabled === 'true' || server.disabled === 'yes');
+      // REST exposes the server pool as 'pool'; the 8728 API uses 'address-pool'.
+      const serverPool = (server: any) => String(server.pool || server['address-pool'] || '');
       let serverError = '';
       try {
         if (isRestApi) {
@@ -1703,6 +1707,7 @@ class MikroTikService {
             name: serverName,
             interface: config.interface,
             profile: profileName,
+            pool: poolName,
             disabled: false,
           });
         } else {
@@ -1711,6 +1716,7 @@ class MikroTikService {
             `=name=${serverName}`,
             `=interface=${config.interface}`,
             `=profile=${profileName}`,
+            `=address-pool=${poolName}`,
             `=disabled=no`,
           ]);
         }
@@ -1718,27 +1724,46 @@ class MikroTikService {
         if (!skipIfExists(err)) throw err;
         serverError = err.message;
       }
-      // Some RouterOS builds drop profile/disabled on REST add (the server is
-      // created disabled with no profile). Verify and heal before moving on.
+      // Some RouterOS builds drop profile/pool/disabled on REST add (the
+      // server arrives disabled with no profile and no address pool). Verify
+      // and heal before moving on.
       let serverRow = (await listHotspotServers()).find((s: any) => s.name === serverName);
       if (!serverRow) {
         throw new Error(`Hotspot server '${serverName}' was not created${serverError ? ` (${serverError})` : ''}`);
       }
-      if (serverRow.profile !== profileName || !isEnabled(serverRow)) {
-        if (isRestApi) {
-          await this.restApiCall(routerConfig!, 'PATCH', `/ip/hotspot/${serverRow['.id']}`, { profile: profileName, disabled: false });
-        } else {
-          await this.getClient(routerId).write('/ip/hotspot/set', [`.id=${serverRow['.id']}`, `=profile=${profileName}`, `=disabled=no`]);
+      const needsHeal = () => serverRow.profile !== profileName || !isEnabled(serverRow) || serverPool(serverRow) !== poolName;
+      if (needsHeal()) {
+        const setServer = async (poolField: string) => {
+          if (isRestApi) {
+            await this.restApiCall(routerConfig!, 'PATCH', `/ip/hotspot/${serverRow['.id']}`, {
+              profile: profileName,
+              disabled: false,
+              [poolField]: poolName,
+            });
+          } else {
+            await this.getClient(routerId).write('/ip/hotspot/set', [
+              `.id=${serverRow['.id']}`,
+              `=profile=${profileName}`,
+              `=disabled=no`,
+              `=address-pool=${poolName}`,
+            ]);
+          }
+        };
+        for (const field of isRestApi ? ['pool', 'address-pool'] : ['address-pool']) {
+          if (!needsHeal()) break;
+          try {
+            await setServer(field);
+            serverRow = (await listHotspotServers()).find((s: any) => s.name === serverName) || serverRow;
+          } catch { /* try the next property name */ }
         }
-        serverRow = (await listHotspotServers()).find((s: any) => s.name === serverName) || serverRow;
-        if (serverRow.profile !== profileName || !isEnabled(serverRow)) {
+        if (needsHeal()) {
           throw new Error(
-            `Hotspot server '${serverName}' is ${isEnabled(serverRow) ? 'enabled' : 'disabled'} with profile '${serverRow.profile || 'none'}' - expected '${profileName}' enabled`
+            `Hotspot server '${serverName}' is ${isEnabled(serverRow) ? 'enabled' : 'disabled'} with profile '${serverRow.profile || 'none'}' and pool '${serverPool(serverRow) || 'none'}' - expected '${profileName}' on '${poolName}' enabled`
           );
         }
-        results.serverRepaired = `${serverName} -> profile ${profileName}, enabled`;
+        results.serverRepaired = `${serverName} -> profile ${profileName}, pool ${poolName}, enabled`;
       }
-      results.server = `${serverName} (profile ${profileName}, enabled)`;
+      results.server = `${serverName} (profile ${profileName}, pool ${poolName}, enabled)`;
 
       // Step 7: Create user profile
       const userProfileName = `hsuser-${config.interface}`;

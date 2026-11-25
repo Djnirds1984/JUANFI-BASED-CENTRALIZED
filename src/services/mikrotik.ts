@@ -1636,10 +1636,13 @@ class MikroTikService {
         results.dhcpNetwork = `${config.address} (already exists)`;
       }
 
-      // Step 5: Use existing hotspot profile or create new one
-      let profileName = `hsprof-${config.interface}`;
+      // Step 5: Use an existing hotspot profile or create one. The RouterOS
+      // wizard's own profile is 'hsprof1' and is the one that carries proper
+      // captive-portal settings, so prefer it by name instead of whichever
+      // profile happens to come first (often the bare 'default' profile,
+      // which leaves the server without portal behaviour).
+      let profileName = 'hsprof1';
       try {
-        // Try to fetch existing profiles
         let existingProfiles: any[] = [];
         if (isRestApi) {
           existingProfiles = await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot/profile');
@@ -1647,13 +1650,20 @@ class MikroTikService {
           const client = this.getClient(routerId);
           existingProfiles = await client.write('/ip/hotspot/profile/print');
         }
-        
-        // Use first existing profile if available
-        if (Array.isArray(existingProfiles) && existingProfiles.length > 0) {
-          profileName = existingProfiles[0].name;
+
+        const profiles = Array.isArray(existingProfiles) ? existingProfiles : [];
+        const usable = profiles.filter((p: any) => p.name && p.name !== 'default');
+        const pick =
+          profiles.find((p: any) => p.name === 'hsprof1') ||
+          profiles.find((p: any) => p.name === `hsprof-${config.interface}`) ||
+          usable[0];
+
+        if (pick) {
+          profileName = pick.name;
           results.profile = `${profileName} (existing)`;
         } else {
-          // No existing profiles, create new one
+          // Only 'default' (or nothing) on the router: create hsprof1 with the
+          // pool and DNS of this setup run.
           if (isRestApi) {
             await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/profile/add', {
               name: profileName,
@@ -1677,36 +1687,58 @@ class MikroTikService {
         results.profile = `${profileName} (already exists)`;
       }
 
-      // Step 6: Create hotspot server
+      // Step 6: Create the hotspot server - linked to the profile and ENABLED.
       const serverName = `hotspot-${config.interface}`;
+      const listHotspotServers = async (): Promise<any[]> => {
+        const rows: any[] = isRestApi
+          ? await this.restApiCall(routerConfig!, 'GET', '/ip/hotspot')
+          : await this.getClient(routerId).write('/ip/hotspot/print');
+        return Array.isArray(rows) ? rows : [];
+      };
+      const isEnabled = (server: any) => !(server.disabled === true || server.disabled === 'true' || server.disabled === 'yes');
+      let serverError = '';
       try {
         if (isRestApi) {
-          const createResult = await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
+          await this.restApiCall(routerConfig!, 'POST', '/ip/hotspot/add', {
             name: serverName,
             interface: config.interface,
             profile: profileName,
+            disabled: false,
           });
-          if (createResult && createResult['.id']) {
-            try {
-              await this.restApiCall(routerConfig!, 'PUT', `/ip/hotspot/${createResult['.id']}`, {
-                pool: poolName,
-              });
-            } catch { /* pool linked through profile */ }
-          }
         } else {
           const client = this.getClient(routerId);
           await client.write('/ip/hotspot/add', [
             `=name=${serverName}`,
             `=interface=${config.interface}`,
-            `=address-pool=${poolName}`,
             `=profile=${profileName}`,
+            `=disabled=no`,
           ]);
         }
-        results.server = serverName;
       } catch (err: any) {
         if (!skipIfExists(err)) throw err;
-        results.server = `${serverName} (already exists)`;
+        serverError = err.message;
       }
+      // Some RouterOS builds drop profile/disabled on REST add (the server is
+      // created disabled with no profile). Verify and heal before moving on.
+      let serverRow = (await listHotspotServers()).find((s: any) => s.name === serverName);
+      if (!serverRow) {
+        throw new Error(`Hotspot server '${serverName}' was not created${serverError ? ` (${serverError})` : ''}`);
+      }
+      if (serverRow.profile !== profileName || !isEnabled(serverRow)) {
+        if (isRestApi) {
+          await this.restApiCall(routerConfig!, 'PATCH', `/ip/hotspot/${serverRow['.id']}`, { profile: profileName, disabled: false });
+        } else {
+          await this.getClient(routerId).write('/ip/hotspot/set', [`.id=${serverRow['.id']}`, `=profile=${profileName}`, `=disabled=no`]);
+        }
+        serverRow = (await listHotspotServers()).find((s: any) => s.name === serverName) || serverRow;
+        if (serverRow.profile !== profileName || !isEnabled(serverRow)) {
+          throw new Error(
+            `Hotspot server '${serverName}' is ${isEnabled(serverRow) ? 'enabled' : 'disabled'} with profile '${serverRow.profile || 'none'}' - expected '${profileName}' enabled`
+          );
+        }
+        results.serverRepaired = `${serverName} -> profile ${profileName}, enabled`;
+      }
+      results.server = `${serverName} (profile ${profileName}, enabled)`;
 
       // Step 7: Create user profile
       const userProfileName = `hsuser-${config.interface}`;

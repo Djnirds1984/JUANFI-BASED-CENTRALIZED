@@ -129,6 +129,18 @@ test('a live session on an expired account is kicked', async () => {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM radius_logs WHERE message LIKE \'Expiry kick:%\'').get().n, 1);
 });
 
+test('without a reachable router the kick stays pending and the row is kept', async () => {
+  connected = false;
+  insertAccount({ username: 'EC9A0C150B4F', expiryAt: '2026-11-25 18:57:10' });
+  insertSession({ username: 'EC9A0C150B4F', sessionId: '8000000c' });
+
+  const report = await runHotspotExpirySweep();
+
+  assert.equal(report.kicked, 0);
+  assert.equal(report.pending, 1);
+  assert.equal(db.prepare('SELECT status FROM radius_sessions WHERE session_id = ?').get('8000000c').status, 'active');
+});
+
 test('a session with remaining time is left alone', async () => {
   insertAccount({ username: 'EC9A0C150B4F', expiryAt: minutesFromNow(30) });
   insertSession({ username: 'EC9A0C150B4F' });

@@ -192,18 +192,29 @@ export async function runHotspotExpirySweep(now: Date = new Date(), onlyRouterId
       const cooldownKey = `${routerId}:${target.username.toLowerCase()}`;
       if (!cooldownPassed(cooldownKey, nowMs)) continue;
 
-      let ok = false;
+      // Two paths, and the router API wins: a Disconnect-Request is fire-and-
+      // forget UDP, so "sent" only proves we tried. The API removal is the one
+      // that actually empties /ip/hotspot/active, so it decides `ok` whenever
+      // the router is reachable - otherwise a device kept surfing after a
+      // "successful" kick and the next sync re-created its session row.
+      let disconnectSent = false;
       if (target.sessionId && !target.sessionId.startsWith('*') && isRadiusRunning() && nasIp) {
         sendDisconnectRequest(routerId, target.sessionId, nasIp, target.username);
-        ok = true;
+        disconnectSent = true;
       }
-      if (!ok && mikroTikService.isConnected(routerId)) {
+
+      // null = the API could not be asked; true/false = the router answered.
+      let apiDone: boolean | null = null;
+      if (mikroTikService.isConnected(routerId)) {
         try {
-          ok = await mikroTikService.kickActiveSession(routerId, { username: target.username });
+          await mikroTikService.kickActiveSession(routerId, { username: target.username });
+          apiDone = true;
         } catch (err) {
+          apiDone = false;
           console.error(`[expiry] could not kick ${target.username} on router ${routerId}:`, (err as Error).message);
         }
       }
+      const ok = apiDone === true || (apiDone === null && disconnectSent);
 
       if (ok) report.kicked++;
       else report.pending++;

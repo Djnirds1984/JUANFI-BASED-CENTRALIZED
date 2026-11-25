@@ -1049,7 +1049,11 @@ class MikroTikService {
     for (const conn of Array.isArray(connections) ? connections : []) {
       const connMac = String(conn.mac || '').toLowerCase();
       const connUser = String(conn.user || '');
-      if ((mac && connMac === mac) || (username && connUser === username)) {
+      // Case-insensitive on the username: the router keeps `ec9a0c150b4f`
+      // while the panel stores `EC9A0C150B4F`, and an exact compare silently
+      // left that device online after its time ran out.
+      if ((mac && connMac === mac) ||
+          (username && connUser.toLowerCase() === username.toLowerCase())) {
         try {
           await this.removeActiveConnection(routerId, conn['.id']);
           removed++;

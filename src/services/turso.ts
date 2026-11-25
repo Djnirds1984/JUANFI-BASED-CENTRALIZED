@@ -89,6 +89,8 @@ const TABLE_SCHEMAS: Record<string, string> = {
       expiry_at TEXT,
       price REAL NOT NULL DEFAULT 0,
       shared_users INTEGER NOT NULL DEFAULT 1,
+      paused INTEGER NOT NULL DEFAULT 0,
+      grace_used_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -144,11 +146,39 @@ const TABLE_SCHEMAS: Record<string, string> = {
   `,
 };
 
-async function ensureTables(client: Client): Promise<void> {
+// Literal-only defaults can be used in ALTER TABLE ADD COLUMN; expression
+// defaults like (datetime('now')) cannot, so those columns are added bare.
+function literalDefault(dflt: unknown): string | null {
+  if (dflt === null || dflt === undefined) return null;
+  const s = String(dflt).trim();
+  if (/^-?\d+(\.\d+)?$/.test(s) || /^'(.|\n)*'$/.test(s)) return s;
+  return null;
+}
+
+export async function ensureTables(client: Client): Promise<void> {
+  const localDb = getDb();
   for (const table of SYNC_TABLES) {
     const schema = TABLE_SCHEMAS[table];
     if (schema) {
       await client.execute(schema);
+    }
+    // Heal schema drift: panels upgrade over their old cloud database, so a
+    // table created weeks ago may lack columns the local schema added since
+    // (hotspot_users.paused/grace_used_at). Without this the sync INSERT
+    // fails with "table hotspot_users has no column named paused".
+    const localCols = localDb.prepare(`PRAGMA table_info('${table}')`).all() as any[];
+    const cloudResult = await client.execute(`PRAGMA table_info(${table})`);
+    const cloudCols = new Set((cloudResult.rows as any[]).map((c) => String(c.name)));
+    for (const col of localCols) {
+      if (cloudCols.has(col.name)) continue;
+      const dflt = literalDefault(col.dflt_value);
+      // NOT NULL without a usable default cannot be added to a populated table.
+      if (col.notnull === 1 && dflt === null) continue;
+      await client.execute(
+        `ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type || 'TEXT'}` +
+          `${col.notnull === 1 ? ' NOT NULL' : ''}${dflt !== null ? ` DEFAULT ${dflt}` : ''}`
+      );
+      console.log(`[Turso] Cloud schema healed: ${table}.${col.name} added`);
     }
   }
 }
@@ -229,6 +259,10 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       return { success: false, message: 'Turso not configured', counts: {} };
     }
 
+    // A fresh (or never-synced) cloud database has no tables at all; without
+    // this the SELECT below throws "no such table: hotspot_users".
+    await ensureTables(client);
+
     const localDb = getDb();
     const routerId = getLocalRouterId(localDb);
     const counts: Record<string, number> = {};
@@ -267,6 +301,14 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
 
     // Push restored users/vouchers to the MikroTik router
     const syncResult = await syncUsersToRouter();
+
+    if (SYNC_TABLES.every((t) => (counts[t] || 0) === 0)) {
+      return {
+        success: true,
+        message: 'Cloud database is empty — tables are ready. Use Sync to Cloud first to upload this panel\'s data.',
+        counts,
+      };
+    }
 
     const parts = [`Merged ${SYNC_TABLES.length} tables from Turso (centralized)`];
     if (syncResult.skipped) {

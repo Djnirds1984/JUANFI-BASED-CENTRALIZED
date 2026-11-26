@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
+import { isAutoPauseOfflineEnabled } from './sessionSettings';
 
 /**
  * Roaming device sessions.
@@ -558,6 +559,61 @@ export function updateSessionState(params: {
 }
 
 /**
+ * Auto-pause a device that dropped off the router (RADIUS > Session Settings).
+ *
+ * Without this the account keeps its wall-clock `expiry_at`, so bought time
+ * drains while the phone is away and the customer pays for time nobody used.
+ * Freezing mirrors the portal's /pause exactly (disabled account, `paused`
+ * flag, expiry cleared, balance stored in device_sessions) so the portal then
+ * offers RESUME with the frozen balance.
+ *
+ * The caller guarantees the session has no live connection, so no router kick
+ * is needed. Returns true when the account was paused.
+ */
+function autoPauseOfflineSession(db: any, session: any, now: string): boolean {
+  if (!isAutoPauseOfflineEnabled()) return false;
+
+  const nameKey = String(session.username || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+  const acct = db.prepare(
+    `SELECT id, username, disabled, paused, expiry_at FROM hotspot_users
+     WHERE router_id = ?
+       AND (LOWER(username) = LOWER(?)
+            OR (? <> '' AND UPPER(REPLACE(REPLACE(username, ':', ''), '-', '')) = ?))
+     ORDER BY id DESC LIMIT 1`
+  ).get(session.router_id, session.username, nameKey.length === 12 ? nameKey : '', nameKey) as any;
+
+  // Nothing to freeze: no account behind the session, the account is already
+  // paused (frozen earlier) or was disabled on purpose (logout / admin).
+  if (!acct) return false;
+  if (Number(acct.paused) === 1) return false;
+  if (Number(acct.disabled) === 1) return false;
+
+  let remaining = Math.max(0, Math.floor(Number(session.remaining_seconds) || 0));
+  if (acct.expiry_at) {
+    const expiryMs = new Date(String(acct.expiry_at).replace(' ', 'T') + 'Z').getTime();
+    if (Number.isFinite(expiryMs)) {
+      const left = Math.max(0, Math.floor((expiryMs - Date.now()) / 1000));
+      // Whichever clock ran out first wins, so a pause never hands back more
+      // time than the customer still had.
+      remaining = remaining > 0 ? Math.min(remaining, left) : left;
+    }
+  }
+  if (remaining <= 0) return false;
+
+  db.transaction(() => {
+    db.prepare(
+      "UPDATE hotspot_users SET disabled = 1, paused = 1, expiry_at = NULL, updated_at = datetime('now') WHERE id = ?"
+    ).run(acct.id);
+    db.prepare(
+      "UPDATE device_sessions SET remaining_seconds = ?, status = 'paused', is_online = 0, last_seen = ? WHERE id = ?"
+    ).run(remaining, now, session.id);
+  })();
+
+  console.log(`auto-pause (offline): ${acct.username} on router ${session.router_id} frozen at ${remaining}s`);
+  return true;
+}
+
+/**
  * Keep every session in sync with the live MikroTik sessions (runs from the
  * existing 5s background loop). While a device is offline its remaining time
  * freezes (pause semantics), matching the portal's pause/logout flow.
@@ -602,6 +658,9 @@ export function syncSessionsWithDevices(routerId: number, live: any[]): void {
          WHERE id = ?`
       ).run(remaining, status, now, String(conn.server || ''), session.id);
     } else if (session.is_online === 1) {
+      // Offline with time left: freeze the paid balance (opt-in, RADIUS >
+      // Session Settings) instead of letting the wall clock keep draining.
+      if (session.remaining_seconds > 0) autoPauseOfflineSession(db, session, now);
       const status = session.remaining_seconds <= 0 ? 'expired' : 'paused';
       db.prepare('UPDATE device_sessions SET is_online = 0, status = ?, last_seen = ? WHERE id = ?')
         .run(status, now, session.id);

@@ -733,6 +733,12 @@ export function initializeDatabase(): void {
   if (!sysCols.some((c: any) => c.name === 'trial_minutes')) {
     db.exec("ALTER TABLE system_settings ADD COLUMN trial_minutes INTEGER NOT NULL DEFAULT 15");
   }
+  // Freeze a customer's paid time when their device drops off the hotspot
+  // (RADIUS > Session Settings). Off by default: pausing on every brief Wi-Fi
+  // drop changes how billing behaves, so the operator opts in.
+  if (!sysCols.some((c: any) => c.name === 'auto_pause_offline')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN auto_pause_offline INTEGER NOT NULL DEFAULT 0");
+  }
   // The trial length is the operator's call (Panel Settings). Only absurd
   // values are healed here: one day is the most the field accepts
   // (MAX_TRIAL_MINUTES in services/trial.ts), so a typo cannot hand out a week

@@ -27,14 +27,27 @@ export interface AirCoinsSaleRow {
   createdAt: string;
 }
 
+/** Panel-recorded coin sales for one machine (the `aircoins_sales` ledger). */
+export interface VendoLedgerTotals {
+  sales: number;
+  coins: number;
+  minutes: number;
+  customers: number;
+}
+
 export interface VendoSalesRow {
   id: number;
   name: string;
   ip: string;
+  firmware: 'aircoins' | 'juanfi';
   online: boolean;
   lifetimeCoins: number;
   currentCoins: number;
   customerCount: number;
+  /** Sales recorded by the panel inside the report range. */
+  range: VendoLedgerTotals;
+  /** Sales recorded by the panel since the ledger began. */
+  ledger: VendoLedgerTotals;
   error?: string;
 }
 
@@ -68,6 +81,9 @@ export interface SalesReport {
     lifetimeCoins: number;
     currentCoins: number;
     customerCount: number;
+    rangeCoins: number;
+    rangeMinutes: number;
+    rangeSales: number;
     devices: VendoSalesRow[];
   };
   totals: {
@@ -105,23 +121,41 @@ export function normalizeRange(from?: string, to?: string): { from: string; to: 
   return { from: f, to: t };
 }
 
+const emptyLedger = (): VendoLedgerTotals => ({ sales: 0, coins: 0, minutes: 0, customers: 0 });
+
 /** Fetch coin counters from every sub-vendo in parallel; offline devices are
- *  reported with online=false instead of failing the whole report. */
-export async function fetchVendoSales(devices: NodeMcuDevice[]): Promise<SalesReport['vendo']> {
+ *  reported with online=false instead of failing the whole report. The ledger
+ *  maps carry the panel-side sales, so each row can show its own revenue even
+ *  when the board keeps no counters of its own. */
+export async function fetchVendoSales(
+  devices: NodeMcuDevice[],
+  rangeLedger: Map<number, VendoLedgerTotals> = new Map(),
+  allLedger: Map<number, VendoLedgerTotals> = new Map(),
+): Promise<SalesReport['vendo']> {
   const rows: VendoSalesRow[] = await Promise.all(
     devices.map(async (d): Promise<VendoSalesRow> => {
-      const base = { id: d.id, name: d.name, ip: d.ip };
+      const firmware = firmwareTypeOf(d);
+      const base = {
+        id: d.id,
+        name: d.name,
+        ip: d.ip,
+        firmware,
+        range: rangeLedger.get(Number(d.id)) || emptyLedger(),
+        ledger: allLedger.get(Number(d.id)) || emptyLedger(),
+      };
       // An AirCoins box serves no page, so its counters come from the reports it
       // already sends - otherwise every one of them would show up as offline.
-      if (firmwareTypeOf(d) === 'aircoins') {
+      if (firmware === 'aircoins') {
         const status = getStatus(Number(d.id));
         const online = statusIsOnline(status, getSettings(Number(d.id)).pollSeconds);
+        // A box that never kept its own counters still has the panel ledger, so
+        // the lifetime figures are whichever of the two is further along.
         return {
           ...base,
           online,
-          lifetimeCoins: status ? Number(status.coins) || 0 : 0,
+          lifetimeCoins: Math.max(Number(status?.coins) || 0, base.ledger.coins),
           currentCoins: status ? Number(status.bank) || 0 : 0,
-          customerCount: status ? Number(status.customers) || 0 : 0,
+          customerCount: Math.max(Number(status?.customers) || 0, base.ledger.customers),
           error: online ? undefined : 'not reporting yet',
         };
       }
@@ -140,13 +174,15 @@ export async function fetchVendoSales(devices: NodeMcuDevice[]): Promise<SalesRe
     })
   );
 
-  const online = rows.filter((r) => r.online);
   return {
     deviceCount: rows.length,
-    onlineCount: online.length,
-    lifetimeCoins: online.reduce((s, r) => s + r.lifetimeCoins, 0),
-    currentCoins: online.reduce((s, r) => s + r.currentCoins, 0),
-    customerCount: online.reduce((s, r) => s + r.customerCount, 0),
+    onlineCount: rows.filter((r) => r.online).length,
+    lifetimeCoins: rows.reduce((s, r) => s + r.lifetimeCoins, 0),
+    currentCoins: rows.filter((r) => r.online).reduce((s, r) => s + r.currentCoins, 0),
+    customerCount: rows.reduce((s, r) => s + r.customerCount, 0),
+    rangeCoins: rows.reduce((s, r) => s + r.range.coins, 0),
+    rangeMinutes: rows.reduce((s, r) => s + r.range.minutes, 0),
+    rangeSales: rows.reduce((s, r) => s + r.range.sales, 0),
     devices: rows,
   };
 }
@@ -187,7 +223,34 @@ export async function buildSalesReport(
      ORDER BY paid_at DESC, id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
 
-  const vendo = await fetchVendoSales(vendoDevices ?? loadVendoDevices());
+  // The same ledger, grouped per machine: this is what lets the device table
+  // show each vendo's own takings instead of the board-side counters, which an
+  // AirCoins box never maintained.
+  const ledgerColumns = `
+    SELECT device_id,
+           SUM(CASE WHEN status IN ('ok', 'unassigned') THEN 1 ELSE 0 END) AS sales,
+           SUM(CASE WHEN status IN ('ok', 'unassigned') THEN coins ELSE 0 END) AS coins,
+           SUM(CASE WHEN status = 'ok' THEN minutes ELSE 0 END) AS minutes,
+           COUNT(DISTINCT CASE WHEN status IN ('ok', 'unassigned') AND mac <> '' THEN mac END) AS customers
+    FROM aircoins_sales`;
+  const groupLedger = (list: any[]): Map<number, VendoLedgerTotals> => {
+    const map = new Map<number, VendoLedgerTotals>();
+    for (const row of list) {
+      map.set(Number(row.device_id), {
+        sales: Number(row.sales) || 0,
+        coins: Number(row.coins) || 0,
+        minutes: Number(row.minutes) || 0,
+        customers: Number(row.customers) || 0,
+      });
+    }
+    return map;
+  };
+  const rangeLedger = groupLedger(
+    db.prepare(`${ledgerColumns} WHERE date(created_at) BETWEEN ? AND ? GROUP BY device_id`).all(from, to) as any[]
+  );
+  const allLedger = groupLedger(db.prepare(`${ledgerColumns} GROUP BY device_id`).all() as any[]);
+  
+  const vendo = await fetchVendoSales(vendoDevices ?? loadVendoDevices(), rangeLedger, allLedger);
 
   // AirCoins sales are logged per sale, so unlike the JuanFi counters they can
   // be filtered by date. Only coins that were actually banked - credited to a PC

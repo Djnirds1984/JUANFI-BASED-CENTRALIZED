@@ -9,6 +9,55 @@ const router = Router();
 
 router.use(authMiddleware);
 
+/**
+ * Overview tiles: who is online right now, what the shop has taken in and how
+ * much traffic the network has carried. Every figure is an aggregate over the
+ * panel's own tables - the same rows the RADIUS tab and the Sales Report read -
+ * so the three pages always agree.
+ */
+function buildOverviewStats(db: any) {
+  const scalar = (sql: string): number => {
+    const row = db.prepare(sql).get() as any;
+    return Number(row?.v) || 0;
+  };
+  const sum = (table: string, column: string, where: string) =>
+    scalar(`SELECT COALESCE(SUM(${column}), 0) AS v FROM ${table} WHERE ${where}`);
+
+  // A sale is realized once the voucher is redeemed, the payment is paid or the
+  // coins are banked; a coin row still waiting for a retry is the same money.
+  const vouchers = sum('vouchers', 'price', 'is_used = 1');
+  const gcash = sum('payments', 'amount', "status = 'paid'");
+  const coins = sum('aircoins_sales', 'coins', "status IN ('ok', 'unassigned')");
+
+  // Bytes the users pulled (input) and pushed (output), summed over every
+  // session the panel has recorded.
+  const traffic = db.prepare(
+    `SELECT COUNT(*) AS sessions,
+            COALESCE(SUM(input_octets), 0) AS download,
+            COALESCE(SUM(output_octets), 0) AS upload
+     FROM radius_sessions`
+  ).get() as any;
+
+  return {
+    onlineUsers: scalar("SELECT COUNT(*) AS v FROM active_devices WHERE status = 'active'"),
+    sales: {
+      total: vouchers + gcash + coins,
+      today:
+        sum('vouchers', 'price', "is_used = 1 AND date(used_at) = date('now')") +
+        sum('payments', 'amount', "status = 'paid' AND date(paid_at) = date('now')") +
+        sum('aircoins_sales', 'coins', "status IN ('ok', 'unassigned') AND date(created_at) = date('now')"),
+      vouchers,
+      gcash,
+      coins,
+    },
+    traffic: {
+      sessions: Number(traffic?.sessions) || 0,
+      download: Number(traffic?.download) || 0,
+      upload: Number(traffic?.upload) || 0,
+    },
+  };
+}
+
 router.get('/system', (req: Request, res: Response) => {
   try {
     const totalMem = os.totalmem();
@@ -204,6 +253,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       totalRouters: routers.length,
       connectedRouters: summary.filter((s) => s.connected).length,
       routers: summary,
+      stats: buildOverviewStats(db),
     });
   } catch (error) {
     console.error('Get summary error:', error);

@@ -637,6 +637,16 @@ class ApiClient {
     return this.get(`/sales/report?${params.toString()}`);
   }
 
+  async deleteAirCoinsSale(id) { return this.delete(`/sales/aircoins/${id}`); }
+
+  async deleteAirCoinsSales(from, to) {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const qs = params.toString();
+    return this.delete(`/sales/aircoins${qs ? `?${qs}` : ''}`);
+  }
+
   // --- Customer wallet (staff side) ---
   async getWalletSummary() { return this.get('/wallet/admin/summary'); }
   async getWalletSettings() { return this.get('/wallet/admin/settings'); }
@@ -802,6 +812,15 @@ class ApiClient {
 
   async getRadiusSessionStats(routerId) {
     return this.get(`/radius-sessions/router/${routerId}/stats`);
+  }
+
+  // --- RADIUS Session Settings (auto-pause when a device goes offline) ---
+  async getRadiusSessionSettings() {
+    return this.get('/radius/session-settings');
+  }
+
+  async updateRadiusSessionSettings(autoPauseOffline) {
+    return this.put('/radius/session-settings', { autoPauseOffline: !!autoPauseOffline });
   }
 
   // --- Hotspot User Update ---

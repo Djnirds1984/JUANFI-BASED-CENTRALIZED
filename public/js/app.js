@@ -571,6 +571,13 @@ const App = {
 
       const connectedRouters = summary.routers.filter((r) => r.connected && r.systemInfo);
       const primaryRouter = connectedRouters[0] || null;
+      // Older panels (or a failed aggregate) report zeroes instead of leaving
+      // the tiles blank.
+      const stats = summary.stats || {
+        onlineUsers: 0,
+        sales: { total: 0, today: 0, vouchers: 0, gcash: 0, coins: 0 },
+        traffic: { sessions: 0, download: 0, upload: 0 },
+      };
 
       const memPct = serverInfo.memoryPercent;
       const diskPct = serverInfo.diskPercent;
@@ -672,25 +679,26 @@ const App = {
           </div>
         </div>
 
-        <div class="dash-card" style="margin-top:1.5rem">
-          <div class="dash-card-title">Network Overview</div>
-          <div class="stats-grid" style="margin-bottom:0">
-            <div class="stat-card">
-              <div class="stat-label">Total Routers</div>
-              <div class="stat-value">${summary.totalRouters}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Connected</div>
-              <div class="stat-value" style="color:var(--success)">${summary.connectedRouters}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Offline</div>
-              <div class="stat-value" style="color:var(--danger)">${summary.totalRouters - summary.connectedRouters}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Server Uptime</div>
-              <div class="stat-value" style="font-size:1.25rem">${formatUptime(serverInfo.uptime)}</div>
-            </div>
+        <div class="stats-grid" style="margin-top:1.5rem">
+          <div class="stat-card">
+            <div class="stat-label">Hotspot Users Online</div>
+            <div class="stat-value" data-stat="online-users" style="color:var(--success)">${stats.onlineUsers}</div>
+            <div class="stat-sub" data-stat="online-sub">${summary.connectedRouters}/${summary.totalRouters} routers online</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Sales</div>
+            <div class="stat-value" data-stat="sales-total">${this.formatMoney(stats.sales.total)}</div>
+            <div class="stat-sub" data-stat="sales-sub">${this.formatMoney(stats.sales.today)} today · ${this.formatMoney(stats.sales.vouchers)} vouchers · ${this.formatMoney(stats.sales.gcash)} GCash · ${this.formatMoney(stats.sales.coins)} coins</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Download</div>
+            <div class="stat-value" data-stat="download">${this.formatBytes(stats.traffic.download)}</div>
+            <div class="stat-sub" data-stat="download-sub">across ${stats.traffic.sessions} session${stats.traffic.sessions === 1 ? '' : 's'}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Upload</div>
+            <div class="stat-value" data-stat="upload">${this.formatBytes(stats.traffic.upload)}</div>
+            <div class="stat-sub" data-stat="upload-sub">across ${stats.traffic.sessions} session${stats.traffic.sessions === 1 ? '' : 's'}</div>
           </div>
         </div>
       `;
@@ -784,11 +792,23 @@ const App = {
         if (routerInfoValues[3]) routerInfoValues[3].textContent = formatUptime(primaryRouter.systemInfo.uptime);
       }
 
-      const statValues = content.querySelectorAll('.stat-value');
-      if (statValues[0]) statValues[0].textContent = summary.totalRouters;
-      if (statValues[1]) statValues[1].textContent = summary.connectedRouters;
-      if (statValues[2]) statValues[2].textContent = summary.totalRouters - summary.connectedRouters;
-      if (statValues[3]) statValues[3].textContent = formatUptime(serverInfo.uptime);
+      const stats = summary.stats;
+      if (stats) {
+        const setStat = (key, text) => {
+          const node = content.querySelector(`[data-stat="${key}"]`);
+          if (node) node.textContent = text;
+        };
+        const sessions = stats.traffic.sessions;
+        const sessionsLabel = `across ${sessions} session${sessions === 1 ? '' : 's'}`;
+        setStat('online-users', stats.onlineUsers);
+        setStat('online-sub', `${summary.connectedRouters}/${summary.totalRouters} routers online`);
+        setStat('sales-total', this.formatMoney(stats.sales.total));
+        setStat('sales-sub', `${this.formatMoney(stats.sales.today)} today · ${this.formatMoney(stats.sales.vouchers)} vouchers · ${this.formatMoney(stats.sales.gcash)} GCash · ${this.formatMoney(stats.sales.coins)} coins`);
+        setStat('download', this.formatBytes(stats.traffic.download));
+        setStat('download-sub', sessionsLabel);
+        setStat('upload', this.formatBytes(stats.traffic.upload));
+        setStat('upload-sub', sessionsLabel);
+      }
     } catch (err) {
       // silently ignore poll errors
     }
@@ -4862,6 +4882,7 @@ const App = {
           <button class="tab ${this.radiusTab === 'active' ? 'active' : ''}" data-tab="active">Active</button>
           <button class="tab ${this.radiusTab === 'offline' ? 'active' : ''}" data-tab="offline">Offline Devices<span id="radius-offline-tab-badge" class="radius-tab-badge" style="display:none">0</span></button>
           <button class="tab ${this.radiusTab === 'logs' ? 'active' : ''}" data-tab="logs">Logs</button>
+          <button class="tab ${this.radiusTab === 'session-settings' ? 'active' : ''}" data-tab="session-settings">Session Settings</button>
         </div>
         <div id="radius-tab-content">Loading...</div>
       </div>
@@ -4938,6 +4959,8 @@ const App = {
         await this.loadRadiusOfflineDevices(container);
       } else if (this.radiusTab === 'logs') {
         await this.loadRadiusLogs(container);
+      } else if (this.radiusTab === 'session-settings') {
+        await this.loadRadiusSessionSettings(container);
       }
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
@@ -4954,6 +4977,54 @@ const App = {
       card.querySelectorAll('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     }
     this.loadRadiusTab();
+  },
+
+  // RADIUS > Session Settings: how tracked time behaves when a phone leaves
+  // the hotspot. The flag is read by the 5s device sync, so saving here takes
+  // effect on the next tick.
+  async loadRadiusSessionSettings(container) {
+    const s = await api.getRadiusSessionSettings();
+    const on = !!s.autoPauseOffline;
+    const paused = Number(s.pausedAccounts) || 0;
+    const offline = Number(s.offlineSessions) || 0;
+
+    container.innerHTML = `
+      <div style="padding:1.25rem;max-width:820px">
+        <label class="pay-toggle" style="cursor:pointer">
+          <span class="pay-toggle-text">
+            <span class="pay-toggle-title">Auto-pause when a device goes offline</span>
+            <span class="pay-toggle-sub">Freezes the remaining paid time as soon as the phone drops off the hotspot. When it comes back the portal offers RESUME with exactly that balance. Off: the clock keeps running while the device is away.</span>
+          </span>
+          <input type="checkbox" id="radius-auto-pause" ${on ? 'checked' : ''}>
+        </label>
+
+        <div class="stat-sub" style="display:flex;flex-wrap:wrap;gap:1.25rem;margin-top:1rem">
+          <span>Auto-pause: <strong style="color:${on ? 'var(--success)' : 'var(--text-muted)'}">${on ? 'Enabled' : 'Disabled'}</strong></span>
+          <span><strong>${paused}</strong> account${paused === 1 ? '' : 's'} waiting on RESUME</span>
+          <span><strong>${offline}</strong> offline session${offline === 1 ? '' : 's'} holding time</span>
+        </div>
+
+        <p class="stat-sub" style="margin-top:1rem;line-height:1.55">
+          Covers RADIUS and coin-insert accounts. The check runs from the panel's 5-second device sync and only while the router is reachable, so a router outage never pauses the whole shop; a phone that leaves the hotspot is frozen on the next tick. Customers resume from the captive portal, so frozen time is never lost.
+        </p>
+      </div>
+    `;
+
+    const toggle = document.getElementById('radius-auto-pause');
+    if (!toggle) return;
+    toggle.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      e.target.disabled = true;
+      try {
+        await api.updateRadiusSessionSettings(enabled);
+        this.toast(enabled ? 'Auto-pause enabled' : 'Auto-pause disabled - time keeps running while offline', 'success');
+        this.loadRadiusTab();
+      } catch (err) {
+        e.target.checked = !enabled;
+        e.target.disabled = false;
+        this.toast(err.message, 'error');
+      }
+    });
   },
 
   async loadRadiusProfiles(container) {
@@ -10901,6 +10972,49 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
   _salesReport: null,
   _salesRange: null,
 
+  // One shape for the Sub-Vendo table and its CSV export: the panel ledger wins
+  // for AirCoins boards (they never kept their own counters), the board's own
+  // counters win for JuanFi machines, which the panel cannot see per sale.
+  salesVendoView(d) {
+    const airCoinsBox = d.firmware === 'aircoins';
+    const range = d.range || { sales: 0, coins: 0, minutes: 0, customers: 0 };
+    const ledger = d.ledger || range;
+    return {
+      airCoinsBox,
+      range,
+      tracked: airCoinsBox || (Number(range.sales) || 0) > 0,
+      lifetime: Math.max(Number(d.lifetimeCoins) || 0, airCoinsBox ? Number(ledger.coins) || 0 : 0),
+      sinceReset: airCoinsBox ? null : Number(d.currentCoins) || 0,
+      customers: Math.max(Number(d.customerCount) || 0, airCoinsBox ? Number(ledger.customers) || 0 : 0),
+    };
+  },
+
+  // One row of the Sub-Vendo table. The columns are the same for both firmware
+  // types, so a shop reads them the same way; the range columns are dashed out
+  // for machines whose sales only exist on the board itself.
+  salesVendoRow(d) {
+    const v = this.salesVendoView(d);
+    const fmt = (x) => this.formatMoney(x);
+    const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+    const dash = '<span title="This machine keeps no panel-side ledger">—</span>';
+    const sinceReset = v.sinceReset === null
+      ? '<span title="AirCoins keeps no board-side reset counter">—</span>'
+      : fmt(v.sinceReset);
+    return `
+      <tr>
+        <td>${esc(d.name)}</td>
+        <td>${esc(d.ip)}</td>
+        <td>${v.airCoinsBox ? 'AirCoins' : 'JuanFi'}</td>
+        <td><span class="status-badge ${d.online ? 'connected' : 'disconnected'}">${d.online ? 'Online' : 'Offline'}</span></td>
+        <td>${v.tracked ? fmt(v.range.coins) : dash}</td>
+        <td>${v.tracked ? v.range.sales : dash}</td>
+        <td>${v.tracked ? v.range.minutes : dash}</td>
+        <td>${fmt(v.lifetime)}</td>
+        <td>${sinceReset}</td>
+        <td>${v.customers}</td>
+      </tr>`;
+  },
+
   async renderSalesReport() {
     const content = document.getElementById('page-content');
     const today = new Date().toISOString().slice(0, 10);
@@ -10970,15 +11084,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const fmt = (v) => this.formatMoney(v);
     const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
 
-    const vendoRows = (r.vendo.devices || []).map((d) => `
-      <tr>
-        <td>${esc(d.name)}</td>
-        <td>${esc(d.ip)}</td>
-        <td><span class="status-badge ${d.online ? 'connected' : 'disconnected'}">${d.online ? 'Online' : 'Offline'}</span></td>
-        <td>${d.online ? fmt(d.lifetimeCoins) : '—'}</td>
-        <td>${d.online ? fmt(d.currentCoins) : '—'}</td>
-        <td>${d.online ? d.customerCount : '—'}</td>
-      </tr>`).join('');
+    const vendoRows = (r.vendo.devices || []).map((d) => this.salesVendoRow(d)).join('');
 
     const voucherRows = (r.vouchers.rows || []).map((v) => `
       <tr>
@@ -11008,6 +11114,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <td>${sale.minutes}</td>
         <td>${esc(sale.status)}</td>
         <td>${esc(sale.createdAt)}</td>
+        <td style="text-align:right"><button class="btn btn-sm btn-outline" onclick="App.deleteAirCoinsSale(${Number(sale.id)})">Delete</button></td>
       </tr>`).join('');
 
     body.innerHTML = `
@@ -11023,9 +11130,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${r.gcash.count} paid payments</div>
         </div>
         <div class="dash-card">
-          <div class="dash-card-title">Sub-Vendo Coins (lifetime)</div>
+          <div class="dash-card-title">Sub-Vendo Coins</div>
           <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.vendoLifetimeCoins)}</div>
-          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${fmt(r.totals.vendoCurrentCoins)} since reset · ${r.vendo.customerCount} customers · ${r.vendo.onlineCount}/${r.vendo.deviceCount} online</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">lifetime · ${fmt(r.vendo.rangeCoins)} sold in range (${r.vendo.rangeSales} sale${r.vendo.rangeSales === 1 ? '' : 's'}) · ${r.vendo.rangeMinutes} minutes · ${r.vendo.customerCount} customers · ${r.vendo.onlineCount}/${r.vendo.deviceCount} online</div>
         </div>
         <div class="dash-card">
           <div class="dash-card-title">AirCoins Coins (range)</div>
@@ -11039,24 +11146,33 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         </div>
       </div>
       <p style="color:var(--text-muted);font-size:0.8125rem;margin:0.75rem 0">
-        Sub-vendo counters are lifetime totals stored on each device (1 coin = ${fmt(1)}) and are not affected by the date range.
-        AirCoins, voucher and GCash rows are filtered by UTC date.
+        Sold in range counts the coins each machine took inside the selected dates (1 coin = ${fmt(1)}).
+        AirCoins boxes report into the panel, so their sales are date-filtered like vouchers and GCash;
+        JuanFi machines keep their counters on the board, so their revenue is the Lifetime / Since Reset columns,
+        which are not affected by the date range.
+        AirCoins takings also appear in the AirCoins Coin Sales card below - the two are the same money, not a sum.
       </p>
 
       <div class="card" style="margin-top:1rem">
         <div class="card-header"><h3>${uiIcon('store')} Sub-Vendo / NodeMCU Sales</h3></div>
         ${r.vendo.devices.length ? `
         <table class="table">
-          <thead><tr><th>Device</th><th>IP</th><th>Status</th><th>Lifetime</th><th>Since Reset</th><th>Customers</th></tr></thead>
+          <thead><tr><th>Device</th><th>IP</th><th>Type</th><th>Status</th><th>Sold (range)</th><th>Sales</th><th>Minutes</th><th>Lifetime</th><th>Since Reset</th><th>Customers</th></tr></thead>
           <tbody>${vendoRows}</tbody>
         </table>` : '<div class="empty-state"><p>No sub-vendo devices configured. Add them under SubVendo → Sub-Vendo Devices.</p></div>'}
       </div>
 
       <div class="card" style="margin-top:1rem">
-        <div class="card-header"><h3>${uiIcon('store')} AirCoins Coin Sales</h3><span class="status-badge connected">${airCoins.count} · ${fmt(airCoins.amount)}</span></div>
+        <div class="card-header">
+          <h3>${uiIcon('store')} AirCoins Coin Sales</h3>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <span class="status-badge connected">${airCoins.count} · ${fmt(airCoins.amount)}</span>
+            ${airCoins.rows.length ? `<button class="btn btn-sm btn-outline" onclick="App.deleteAllAirCoinsSales()">Delete All (${esc(r.from)} → ${esc(r.to)})</button>` : ''}
+          </div>
+        </div>
         ${airCoinsRows ? `
         <table class="table">
-          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC)</th></tr></thead>
+          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC)</th><th></th></tr></thead>
           <tbody>${airCoinsRows}</tbody>
         </table>` : '<div class="empty-state"><p>No AirCoins coin sales in this range.</p></div>'}
       </div>
@@ -11081,6 +11197,33 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     `;
   },
 
+  // Delete one coin sale from the ledger - a test sale or a mis-punch. Only the
+  // report row goes: the customer keeps the time that was already credited.
+  async deleteAirCoinsSale(id) {
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (!confirm('Delete this coin sale from the sales report? The customer keeps the time already credited.')) return;
+    try {
+      const res = await api.deleteAirCoinsSale(id);
+      if (!res.deleted) { this.toast('That sale is already gone', 'info'); return; }
+      this.toast('Sale deleted', 'success');
+      this.loadSalesReport();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
+  // Clear every coin sale inside the range the report is showing; rows outside
+  // it are untouched, which is why the button names the dates.
+  async deleteAllAirCoinsSales() {
+    const { from, to } = this._salesRange || {};
+    const label = from && to ? (from === to ? from : `${from} → ${to}`) : 'today';
+    if (!confirm(`Delete every AirCoins coin sale from ${label}? Customers keep the time already credited, and this cannot be undone.`)) return;
+    try {
+      const res = await api.deleteAirCoinsSales(from, to);
+      if (!res.deleted) { this.toast('No coin sales in this range', 'info'); return; }
+      this.toast(`${res.deleted} coin sale${res.deleted === 1 ? '' : 's'} deleted`, 'success');
+      this.loadSalesReport();
+    } catch (err) { this.toast(err.message, 'error'); }
+  },
+
   exportSalesCsv() {
     const r = this._salesReport;
     if (!r) { this.toast('Load a report first', 'error'); return; }
@@ -11097,10 +11240,23 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     lines.push(['Total sales in range', '', r.totals.periodTotal].map(q).join(','));
     lines.push(['Sub-vendo lifetime coins', '', r.totals.vendoLifetimeCoins].map(q).join(','));
     lines.push(['Sub-vendo coins since reset', '', r.totals.vendoCurrentCoins].map(q).join(','));
+    lines.push(['Sub-vendo coins sold in range', r.vendo.rangeSales || 0, r.vendo.rangeCoins || 0].map(q).join(','));
     lines.push('');
-    lines.push(['SUB-VENDO DEVICES', 'IP', 'Status', 'Lifetime Coins', 'Since Reset', 'Customers'].map(q).join(','));
+    lines.push(['SUB-VENDO DEVICES', 'IP', 'Type', 'Status', 'Sold (range)', 'Sales (range)', 'Minutes (range)', 'Lifetime Coins', 'Since Reset', 'Customers'].map(q).join(','));
     (r.vendo.devices || []).forEach((d) => {
-      lines.push([d.name, d.ip, d.online ? 'online' : 'offline', d.lifetimeCoins, d.currentCoins, d.customerCount].map(q).join(','));
+      const v = this.salesVendoView(d);
+      lines.push([
+        d.name,
+        d.ip,
+        v.airCoinsBox ? 'aircoins' : 'juanfi',
+        d.online ? 'online' : 'offline',
+        v.tracked ? v.range.coins : '',
+        v.tracked ? v.range.sales : '',
+        v.tracked ? v.range.minutes : '',
+        v.lifetime,
+        v.sinceReset === null ? '' : v.sinceReset,
+        v.customers,
+      ].map(q).join(','));
     });
     lines.push('');
     lines.push(['REDEEMED VOUCHERS', 'Profile', 'Price', 'Minutes', 'Used At (UTC)', 'Router'].map(q).join(','));

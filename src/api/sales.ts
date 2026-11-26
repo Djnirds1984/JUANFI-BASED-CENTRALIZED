@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
-import { buildSalesReport } from '../services/salesReport';
+import { getDb } from '../database';
+import { buildSalesReport, normalizeRange } from '../services/salesReport';
 
 const router = Router();
 router.use(authMiddleware);
@@ -21,6 +22,44 @@ router.get('/report', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Sales report error:', error);
     res.status(500).json({ error: error.message || 'Failed to build sales report' });
+  }
+});
+
+// DELETE /api/sales/aircoins/:id
+// Drops one recorded coin sale from the ledger - a test sale, or one punched on
+// the wrong machine. Only the report row goes: minutes already credited to a
+// customer stay with them, so this corrects the books, not somebody's time.
+router.delete('/aircoins/:id', (req: Request, res: Response) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid sale id' });
+  }
+  try {
+    const info = getDb().prepare('DELETE FROM aircoins_sales WHERE id = ?').run(id);
+    res.json({ deleted: info.changes });
+  } catch (error: any) {
+    console.error('Delete AirCoins sale error:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete sale' });
+  }
+});
+
+// DELETE /api/sales/aircoins?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Clears every sale inside the range the report is showing. Missing dates fall
+// back to today, the same default the report uses, so an accidental call can
+// never wipe the whole ledger.
+router.delete('/aircoins', (req: Request, res: Response) => {
+  const { from, to } = normalizeRange(
+    typeof req.query.from === 'string' ? req.query.from : undefined,
+    typeof req.query.to === 'string' ? req.query.to : undefined,
+  );
+  try {
+    const info = getDb()
+      .prepare(`DELETE FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?`)
+      .run(from, to);
+    res.json({ deleted: info.changes, from, to });
+  } catch (error: any) {
+    console.error('Delete AirCoins sales error:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete sales' });
   }
 });
 

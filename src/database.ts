@@ -13,6 +13,57 @@ const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+/**
+ * Folds the per-batch coin rows an earlier build wrote into the one sale they
+ * always were. Each old row held the difference since the row before it, so the
+ * paid rows of one slot add up to exactly what that customer spent; retries and
+ * failures in between were the same coins waiting for a credit and are dropped.
+ * The first row keeps the time the first coin landed. Runs once - a slot has a
+ * single row afterwards, so a second pass finds nothing to do.
+ */
+function mergeBatchedCoinSales(database: Database.Database): void {
+  try {
+    const groups = database.prepare(
+      `SELECT session_id FROM aircoins_sales
+        WHERE session_id <> '' GROUP BY session_id HAVING COUNT(*) > 1`
+    ).all() as any[];
+    if (!groups.length) return;
+
+    const rowsOf = database.prepare(
+      `SELECT id, status, coins, minutes, error, created_at
+         FROM aircoins_sales WHERE session_id = ? ORDER BY id`
+    );
+    const merge = database.prepare(
+      `UPDATE aircoins_sales
+          SET coins = ?, minutes = ?, batch_coins = ?, batch_minutes = ?, status = ?, error = ?, txn_id = ?
+        WHERE id = ?`
+    );
+    const dropRest = database.prepare('DELETE FROM aircoins_sales WHERE session_id = ? AND id <> ?');
+
+    let merged = 0;
+    for (const group of groups) {
+      const rows = rowsOf.all(group.session_id) as any[];
+      const paid = rows.filter((row) => row.status === 'ok' || row.status === 'unassigned');
+      if (!paid.length) continue;
+      const keep = paid[0];
+      const coins = paid.reduce((sum, row) => sum + (Number(row.coins) || 0), 0);
+      const minutes = paid.reduce((sum, row) => sum + (Number(row.minutes) || 0), 0);
+      const error = rows.map((row) => String(row.error || '')).filter(Boolean).pop() || '';
+      const day = new Date(Date.parse(String(keep.created_at).replace(' ', 'T') + 'Z') + 8 * 3600 * 1000)
+        .toISOString().slice(0, 10).replace(/-/g, '');
+      const txnId = `TX-${day}-${String(group.session_id).slice(0, 6).toUpperCase()}`;
+      database.transaction(() => {
+        merge.run(coins, minutes, coins, minutes, keep.status, error.slice(0, 200), txnId, keep.id);
+        dropRest.run(group.session_id, keep.id);
+      })();
+      merged += 1;
+    }
+    if (merged) console.log(`aircoins: folded ${merged} batched coin sale(s) into one row each`);
+  } catch (error: any) {
+    console.error('AirCoins sale fold failed:', error.message);
+  }
+}
+
 export function initializeDatabase(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS routers (
@@ -312,7 +363,8 @@ export function initializeDatabase(): void {
     -- (mac = '') is money the box took with no PC to credit: it is still revenue
     -- the shop earned, so it is recorded instead of refused. The sales report
     -- reads this, which is what puts AirCoins boxes in the same report as
-    -- JuanFi counters, vouchers and GCash.
+    -- JuanFi counters, vouchers and GCash. A feed into one coin slot is ONE row
+    -- carrying the transaction id and the totals - not one row per handful.
     CREATE TABLE IF NOT EXISTS aircoins_sales (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       device_id INTEGER NOT NULL,
@@ -325,11 +377,13 @@ export function initializeDatabase(): void {
       session_id TEXT NOT NULL DEFAULT '',
       batch_coins INTEGER NOT NULL DEFAULT 0,
       batch_minutes INTEGER NOT NULL DEFAULT 0,
+      txn_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_aircoins_sales_created ON aircoins_sales(created_at);
     CREATE INDEX IF NOT EXISTS idx_aircoins_sales_device ON aircoins_sales(device_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_aircoins_sales_session ON aircoins_sales(session_id);
 
     -- The answer given to one coin bank the board offered for sale, keyed by the
     -- key the board stamped on it. A board that never got the reply keeps the
@@ -735,9 +789,11 @@ export function initializeDatabase(): void {
     db.exec("ALTER TABLE wallet_topup_sessions ADD COLUMN panel_session_id TEXT NOT NULL DEFAULT ''");
   }
 
-  // A coin slot pays a customer's feed batch by batch, so a ₱2.00 row can carry
-  // 90 minutes - it is the step onto a bigger rate tier, not a second credit.
-  // The session id and that slot's running totals let the sales report say so.
+  // A coin slot pays a customer's feed batch by batch. An earlier build wrote
+  // one row per batch; the slot now keeps one row per transaction, moved forward
+  // to the feed's totals. Everything below brings an existing ledger in line: it
+  // gains the transaction id, and the batches still sitting in it are folded into
+  // the single sale they always were.
   const saleCols = db.prepare("PRAGMA table_info('aircoins_sales')").all() as any[];
   if (saleCols.length && !saleCols.some((c: any) => c.name === 'session_id')) {
     db.exec("ALTER TABLE aircoins_sales ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
@@ -748,6 +804,11 @@ export function initializeDatabase(): void {
   if (saleCols.length && !saleCols.some((c: any) => c.name === 'batch_minutes')) {
     db.exec("ALTER TABLE aircoins_sales ADD COLUMN batch_minutes INTEGER NOT NULL DEFAULT 0");
   }
+  if (saleCols.length && !saleCols.some((c: any) => c.name === 'txn_id')) {
+    db.exec("ALTER TABLE aircoins_sales ADD COLUMN txn_id TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_aircoins_sales_session ON aircoins_sales(session_id)');
+  mergeBatchedCoinSales(db);
 
   const payCols = db.prepare("PRAGMA table_info('payment_settings')").all() as any[];
   if (payCols.length && !payCols.some((c: any) => c.name === 'methods')) {

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { airCoinsDataDir, getSettings, getStatus, planCoinAllocation } from './aircoins';
+import { shopToday } from './shopTime';
 
 /*
  * A coin session for an AirCoins machine.
@@ -59,6 +60,12 @@ export interface AirCoinsSession {
   minutes: number;
   coins: number;
   error: string;
+  /**
+   * The id this feed is sold under, minted when the first coin lands. Every
+   * coin after it belongs to the same transaction, so the ledger carries one
+   * row per customer rather than one per handful of coins.
+   */
+  txnId?: string;
 }
 
 interface SessionStore {
@@ -237,6 +244,40 @@ export function sessionCoinCount(deviceId: number, pulses: number): number {
 /** What one coin is worth at that machine, in centavos. */
 export function sessionCoinCentavos(deviceId: number): number {
   return Math.round(Math.max(1, getSettings(deviceId).coinValue) * 100);
+}
+
+/** The id the shop day is written as: 20261127. */
+function txnDay(): string {
+  return shopToday().replace(/-/g, '');
+}
+
+/**
+ * Transaction id for one feed. Derived from the session rather than drawn at
+ * random, so a batch that is priced twice - the phone and the heartbeat can
+ * both poll - still lands on one id.
+ */
+export function sessionTxnId(session: AirCoinsSession): string {
+  if (session.txnId) return session.txnId;
+  return `TX-${txnDay()}-${String(session.id || '').slice(0, 6).toUpperCase()}`;
+}
+
+/**
+ * Stamps the id the first time a coin is seen. The clock is read once, at that
+ * moment, so a feed that runs past midnight keeps the id the customer saw when
+ * they started paying.
+ */
+export function stampSessionTxn(id: string): string {
+  const store = loadStore();
+  for (const key of Object.keys(store.sessions)) {
+    const session = store.sessions[key];
+    if (session.id !== id) continue;
+    if (!session.txnId) {
+      session.txnId = sessionTxnId(session);
+      saveStore(store);
+    }
+    return session.txnId;
+  }
+  return '';
 }
 
 /** What the coins in the slot are worth, priced exactly like a sale. */

@@ -27,12 +27,16 @@ export interface AirCoinsSaleRow {
   status: string;
   error: string;
   /**
+   * The id the feed was sold under. One coin slot is one transaction, so this
+   * is what the operator can point at when a customer asks about a payment.
+   */
+  txnId: string;
+  /**
    * Coin slot this row was paid out of, empty for a sale the board made alone.
-   * A slot pays one customer's feed batch by batch, so several rows can belong
-   * to the same person - and the last one can carry a big minute step.
+   * One row per slot now, carrying that feed's totals.
    */
   sessionId: string;
-  /** That slot's running totals up to and including this row. */
+  /** That slot's running totals, i.e. the same numbers on the row. */
   batchCoins: number;
   batchMinutes: number;
   createdAt: string;
@@ -264,10 +268,10 @@ export async function buildSalesReport(
   
   const vendo = await fetchVendoSales(vendoDevices ?? loadVendoDevices(), rangeLedger, allLedger);
 
-  // AirCoins sales are logged per sale, so unlike the JuanFi counters they can
-  // be filtered by date. Only coins that were actually banked - credited to a PC
-  // or logged as unassigned - are revenue: a no-rate or error row is the same
-  // coins waiting for a retry, and counting it would double the sale.
+  // AirCoins sales are logged once per coin slot, so unlike the JuanFi counters
+  // they can be filtered by date. Only coins that were actually banked - credited
+  // to a PC or logged as unassigned - are revenue: a no-rate or error row is the
+  // same coins waiting for a retry, and counting it would double the sale.
   const aAgg = db.prepare(
     `SELECT COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN 1 ELSE 0 END), 0) AS n,
             COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN coins ELSE 0 END), 0) AS coins,
@@ -279,7 +283,7 @@ export async function buildSalesReport(
   ).get(from, to) as any;
   const aRowsRaw = db.prepare(
     `SELECT id, device_id, mac, coins, minutes, status, error,
-            session_id, batch_coins, batch_minutes, created_at
+            session_id, batch_coins, batch_minutes, txn_id, created_at
      FROM aircoins_sales WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?
      ORDER BY created_at DESC, id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
@@ -294,6 +298,7 @@ export async function buildSalesReport(
     minutes: Number(row.minutes) || 0,
     status: String(row.status || ''),
     error: String(row.error || ''),
+    txnId: String(row.txn_id || ''),
     sessionId: String(row.session_id || ''),
     batchCoins: Number(row.batch_coins) || 0,
     batchMinutes: Number(row.batch_minutes) || 0,

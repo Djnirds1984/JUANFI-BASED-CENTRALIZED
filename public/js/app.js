@@ -11234,22 +11234,16 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       </tr>`).join('');
 
     const airCoins = r.aircoins || { count: 0, amount: 0, minutes: 0, unassignedCount: 0, unassignedAmount: 0, failedCount: 0, rows: [] };
-    // One coin slot pays a customer's feed batch by batch, so a row is only the
-    // difference since the previous one. Printing where that slot ended up stops
-    // a small batch that stepped onto a bigger rate tier from reading like a
-    // second credit.
-    const batchNote = (sale) => {
-      const totalCoins = Number(sale.batchCoins) || 0;
-      const totalMinutes = Number(sale.batchMinutes) || 0;
-      if (!sale.sessionId || totalCoins <= 0) return '';
-      return `<div style="color:var(--text-muted);font-size:0.75rem">slot total ${fmt(totalCoins)} · ${totalMinutes} min</div>`;
-    };
-const airCoinsRows = (airCoins.rows || []).map((sale) => `
+    // One coin slot is one sale. The transaction id is minted when the first
+    // coin lands and every coin after it is totalled onto the same row, so this
+    // table shows what each customer paid - not what each handful bought.
+    const airCoinsRows = (airCoins.rows || []).map((sale) => `
       <tr>
         <td>${esc(sale.deviceName)}</td>
+        <td>${sale.txnId ? `<code>${esc(sale.txnId)}</code>` : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${sale.mac ? esc(sale.mac) : '<span class="status-badge disconnected">unassigned</span>'}</td>
         <td>${fmt(sale.coins)}</td>
-        <td>${sale.minutes}${batchNote(sale)}</td>
+        <td>${sale.minutes}</td>
         <td>${esc(sale.status)}</td>
         <td>${esc(this.shopTime(sale.createdAt))}</td>
         <td style="text-align:right"><button class="btn btn-sm btn-outline" onclick="App.deleteAirCoinsSale(${Number(sale.id)})">Delete</button></td>
@@ -11310,13 +11304,13 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         </div>
         ${airCoinsRows ? `
         <table class="table">
-          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC+8)</th><th></th></tr></thead>
+          <thead><tr><th>Device</th><th>Txn</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC+8)</th><th></th></tr></thead>
           <tbody>${airCoinsRows}</tbody>
         </table>
         <p style="color:var(--text-muted);font-size:0.75rem;margin:0.5rem 0 0">
-          An AirCoins slot credits one customer's feed batch by batch, so a row is only
-          the difference since the row before it. "slot total" is where that feed ended up -
-          a small batch crossing a bigger rate tier is one credit, not two.
+          One row per coin slot: the transaction id is minted when the first coin lands and
+          every coin fed after it is totalled onto that row, so the coins and minutes shown
+          are what that customer paid for in one go.
         </p>` : '<div class="empty-state"><p>No AirCoins coin sales in this range.</p></div>'}
       </div>
 
@@ -11407,12 +11401,11 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
       lines.push([v.code, v.profile, v.price, v.duration_minutes, this.shopTime(v.used_at), v.router_name || v.router_id].map(q).join(','));
     });
     lines.push('');
-    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Slot', 'Slot Coins', 'Slot Minutes', 'Status', 'When (UTC+8)'].map(q).join(','));
+    lines.push(['AIRCOINS COIN SALES', 'Txn', 'Credited To', 'Coins', 'Minutes', 'Status', 'When (UTC+8)'].map(q).join(','));
     ((r.aircoins || {}).rows || []).forEach((sale) => {
       lines.push([
-        sale.deviceName, sale.mac || 'unassigned', sale.coins, sale.minutes,
-        sale.sessionId || '', sale.batchCoins || '', sale.batchMinutes || '',
-        sale.status, this.shopTime(sale.createdAt),
+        sale.deviceName, sale.txnId || sale.sessionId || '', sale.mac || 'unassigned',
+        sale.coins, sale.minutes, sale.status, this.shopTime(sale.createdAt),
       ].map(q).join(','));
     });
     lines.push('');

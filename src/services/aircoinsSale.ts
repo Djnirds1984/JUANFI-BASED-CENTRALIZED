@@ -1,10 +1,12 @@
+import crypto from 'crypto';
 import { getDb } from '../database';
 import { findDevice } from './deviceRegistry';
 import { getSettings, planCoinAllocation, recordRedeem } from './aircoins';
 import { creditMacAccount, bindMacToken, propagateTimeToRouter } from './timeCredit';
 import { mikroTikService } from './mikrotik';
+import { shopToday } from './shopTime';
 import {
-  AirCoinsSession, livePulses, previewSession, recordSettled,
+  AirCoinsSession, livePulses, previewSession, recordSettled, sessionTxnId, stampSessionTxn,
 } from './aircoinsSession';
 
 /*
@@ -58,12 +60,21 @@ function recordSale(opts: {
   error?: string;
   /** Coin slot this batch belongs to; empty when the board sold alone. */
   sessionId?: string;
-  /** That slot's running totals up to and including this row. */
+  /** That slot's running totals up to and including this batch. */
   batchCoins?: number;
   batchMinutes?: number;
+  /** The slot's transaction id, so every batch of one feed lands on one row. */
+  txnId?: string;
 }): number {
   const coins = Math.max(0, Math.floor(Number(opts.coins) || 0));
+  const minutes = Math.max(0, Math.floor(Number(opts.minutes) || 0));
+  const sessionId = String(opts.sessionId || '');
+  const txnId = String(opts.txnId || '') || newTxnId();
   try {
+    // A slot sells one customer's feed under one id: the row is moved forward
+    // to that feed's running totals, never repeated.
+    if (sessionId) return writeSlotSale(opts, coins, minutes, sessionId, txnId);
+
     // A credit that has to be retried - no rate covers the amount, the router is
     // down - is the same coins coming back on the next poll. Logging it again
     // every couple of seconds would bury the real sales, so one row per attempt
@@ -81,19 +92,20 @@ function recordSale(opts: {
     const result = getDb().prepare(
       `INSERT INTO aircoins_sales
          (device_id, router_id, mac, coins, minutes, status, error,
-          session_id, batch_coins, batch_minutes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          session_id, batch_coins, batch_minutes, txn_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       opts.deviceId,
       Number(opts.routerId) || 0,
       String(opts.mac || ''),
       coins,
-      Math.max(0, Math.floor(Number(opts.minutes) || 0)),
+      minutes,
       opts.status,
       String(opts.error || '').slice(0, 200),
-      String(opts.sessionId || ''),
+      '',
       Math.max(0, Math.floor(Number(opts.batchCoins) || 0)),
       Math.max(0, Math.floor(Number(opts.batchMinutes) || 0)),
+      txnId,
     );
     return Number(result.lastInsertRowid) || 0;
   } catch (error: any) {
@@ -101,6 +113,97 @@ function recordSale(opts: {
     console.error('AirCoins sale log failed:', error.message);
     return 0;
   }
+}
+
+/** Ledger id for a bank the board sold on its own, with no slot session. */
+function newTxnId(): string {
+  return `TX-${shopToday().replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+/**
+ * One feed, one row. The slot credits each handful of coins as it lands, so the
+ * row is carried forward to that feed's running totals instead of being written
+ * again: the report then shows the ₱10 the customer paid, not ₱3, ₱6 and ₱1
+ * that read like three separate sales - and the minutes shown are the minutes
+ * those coins actually bought in total.
+ */
+function writeSlotSale(
+  opts: {
+    deviceId: number; routerId?: number; mac?: string; status: AirCoinsSaleStatus;
+    error?: string; batchCoins?: number; batchMinutes?: number;
+  },
+  coins: number,
+  minutes: number,
+  sessionId: string,
+  txnId: string,
+): number {
+  const db = getDb();
+  const paid = opts.status === 'ok' || opts.status === 'unassigned';
+  // What the whole feed has paid so far. A batch is the smallest unit, so it is
+  // also the fallback when the caller has no running total to give.
+  const totalCoins = paid
+    ? Math.max(0, Math.floor(Number(opts.batchCoins) || 0)) || coins
+    : coins;
+  const totalMinutes = paid
+    ? Math.max(0, Math.floor(Number(opts.batchMinutes) || 0)) || minutes
+    : minutes;
+  const error = String(opts.error || '').slice(0, 200);
+  const existing = db.prepare(
+    'SELECT id FROM aircoins_sales WHERE session_id = ? ORDER BY id LIMIT 1'
+  ).get(sessionId) as any;
+
+  if (existing) {
+    const id = Number(existing.id) || 0;
+    if (paid) {
+      db.prepare(
+        `UPDATE aircoins_sales
+            SET router_id = ?, mac = ?, coins = ?, minutes = ?,
+                status = ?, error = ?, batch_coins = ?, batch_minutes = ?,
+                txn_id = CASE WHEN txn_id = '' THEN ? ELSE txn_id END
+          WHERE id = ?`
+      ).run(
+        Number(opts.routerId) || 0,
+        String(opts.mac || ''),
+        totalCoins,
+        totalMinutes,
+        opts.status,
+        error,
+        totalCoins,
+        totalMinutes,
+        txnId,
+        id,
+      );
+    } else {
+      // A retry of coins that never went through only annotates the row: what
+      // the feed already paid stays what the report counts.
+      db.prepare(
+        `UPDATE aircoins_sales
+            SET error = ?, txn_id = CASE WHEN txn_id = '' THEN ? ELSE txn_id END
+          WHERE id = ?`
+      ).run(error, txnId, id);
+    }
+    return id;
+  }
+
+  const result = db.prepare(
+    `INSERT INTO aircoins_sales
+       (device_id, router_id, mac, coins, minutes, status, error,
+        session_id, batch_coins, batch_minutes, txn_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    opts.deviceId,
+    Number(opts.routerId) || 0,
+    String(opts.mac || ''),
+    totalCoins,
+    totalMinutes,
+    opts.status,
+    error,
+    sessionId,
+    totalCoins,
+    totalMinutes,
+    txnId,
+  );
+  return Number(result.lastInsertRowid) || 0;
 }
 
 /**
@@ -161,10 +264,13 @@ export async function creditAirCoinsTime(
     /** That slot's totals once this batch is paid, for the operator to check. */
     batchCoins?: number;
     batchMinutes?: number;
+    /** The slot's transaction id; every batch of one feed shares it. */
+    txnId?: string;
   },
 ): Promise<AirCoinsSaleResult> {
   const coins = Math.max(0, Math.floor(Number(credit.coins) || 0));
   const sessionId = String(credit.sessionId || '');
+  const txnId = String(credit.txnId || '');
   const batchCoins = Math.max(0, Math.floor(Number(credit.batchCoins) || 0));
   const batchMinutes = Math.max(0, Math.floor(Number(credit.batchMinutes) || 0));
   const base: AirCoinsSaleResult = {
@@ -183,7 +289,7 @@ export async function creditAirCoinsTime(
   const device = findDevice(deviceId);
   if (!device) {
     recordRedeem(deviceId, coins, 0, 'Device not found');
-    recordSale({ deviceId, mac: macNoColon, coins, minutes: 0, status: 'error', error: 'Device not found', sessionId });
+    recordSale({ deviceId, mac: macNoColon, coins, minutes: 0, status: 'error', error: 'Device not found', sessionId, txnId });
     return { ...base, status: 'error', error: 'Device not found' };
   }
 
@@ -194,7 +300,7 @@ export async function creditAirCoinsTime(
   ).get(routerId) as any;
   if (!routerRow) {
     recordRedeem(deviceId, coins, 0, 'Router not found or inactive');
-    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'no-router', error: 'Router not found or inactive', sessionId });
+    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'no-router', error: 'Router not found or inactive', sessionId, txnId });
     return { ...base, status: 'no-router', error: 'Router not found or inactive' };
   }
 
@@ -218,7 +324,7 @@ export async function creditAirCoinsTime(
     recordRedeem(deviceId, coins, base.minutes);
     recordSale({
       deviceId, routerId, mac: macNoColon, coins, minutes: base.minutes, status: 'ok',
-      sessionId, batchCoins, batchMinutes,
+      sessionId, batchCoins, batchMinutes, txnId,
     });
     console.log(`aircoins: vendo ${deviceId} took ${coins} -> ${base.minutes}min for ${macNoColon} (router ${routerId})`);
     return {
@@ -230,7 +336,7 @@ export async function creditAirCoinsTime(
     };
   } catch (error: any) {
     recordRedeem(deviceId, coins, 0, error.message);
-    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'error', error: error.message, sessionId });
+    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'error', error: error.message, sessionId, txnId });
     console.error('AirCoins redeem error:', error);
     return { ...base, status: 'error', error: error.message };
   }
@@ -273,6 +379,9 @@ export async function settleAirCoinsSession(
   if (!reported) {
     return { pulses, coins: 0, minutes: 0, leftover: 0, result: null };
   }
+  // The first coin of the feed starts the transaction: one id from here on, so
+  // the whole feed is written to the ledger as one sale.
+  const txnId = stampSessionTxn(session.id) || sessionTxnId(session);
 
   // Two callers reach this at once - the phone polling and the board's own
   // heartbeat - and both read the same stored session.
@@ -304,6 +413,7 @@ export async function settleAirCoinsSession(
       sessionId: session.id,
       batchCoins: paidCoins + coins,
       batchMinutes: paidMinutes + minutes,
+      txnId,
     });
     if (result.status === 'ok') {
       // Only a batch that went through moves the watermark: a failed credit has to

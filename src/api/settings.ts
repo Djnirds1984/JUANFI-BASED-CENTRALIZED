@@ -12,6 +12,9 @@ const LOGO_URL_PREFIX = '/assets/uploads/branding/';
 const SOUND_DIR = path.join(__dirname, '..', '..', 'public', 'assets', 'uploads', 'sounds');
 const SOUND_URL_PREFIX = '/assets/uploads/sounds/';
 const DEFAULT_COMPANY_NAME = 'MikroTik';
+// The artwork shipped with the panel. The portal falls back to it whenever no
+// banner has been uploaded, so the hero card is never blank.
+const DEFAULT_PORTAL_BANNER = '/assets/MainPic.PNG';
 
 // The two coin sounds the customer portal plays. The URL column name is taken
 // from this map only, so a request can never steer the UPDATE at another column.
@@ -32,12 +35,13 @@ function readSettings() {
   const db = getDb();
   db.prepare('INSERT OR IGNORE INTO system_settings (id) VALUES (1)').run();
   const row = db
-    .prepare('SELECT currency, company_name, logo_path, insert_coin_sound, coin_drop_sound, trial_enabled, trial_minutes, updated_at FROM system_settings WHERE id = 1')
+    .prepare('SELECT currency, company_name, logo_path, portal_banner, insert_coin_sound, coin_drop_sound, trial_enabled, trial_minutes, updated_at FROM system_settings WHERE id = 1')
     .get() as any;
   return {
     currency: row?.currency || 'PHP',
     company_name: row?.company_name || DEFAULT_COMPANY_NAME,
     logo_path: row?.logo_path || '',
+    portal_banner: row?.portal_banner || '',
     insert_coin_sound: row?.insert_coin_sound || '',
     coin_drop_sound: row?.coin_drop_sound || '',
     trial_enabled: Number(row?.trial_enabled ?? 1) === 1,
@@ -90,22 +94,32 @@ function soundPaths() {
   return { insert_coin: settings.insert_coin_sound, coin_drop: settings.coin_drop_sound };
 }
 
-function removeLogoFile(logoPath: string) {
-  if (!logoPath || !logoPath.startsWith(LOGO_URL_PREFIX)) return;
-  const file = path.join(LOGO_DIR, path.basename(logoPath));
+function bannerPaths() {
+  return { portal_banner: readSettings().portal_banner, default_banner: DEFAULT_PORTAL_BANNER };
+}
+
+function removeBrandingFile(assetPath: string) {
+  if (!assetPath || !assetPath.startsWith(LOGO_URL_PREFIX)) return;
+  const file = path.join(LOGO_DIR, path.basename(assetPath));
   try {
     if (fs.existsSync(file)) fs.unlinkSync(file);
   } catch (error: any) {
-    console.error('Remove logo file error:', error);
+    console.error('Remove branding file error:', error);
   }
 }
 
 // Public branding so the login screen can show the company name and logo
-// before the admin authenticates.
+// before the admin authenticates, and so the customer portal can draw its own
+// banner - a device that is still captive only reaches this address.
 router.get('/branding', (_req: Request, res: Response) => {
   try {
     const settings = readSettings();
-    res.json({ company_name: settings.company_name, logo_path: settings.logo_path });
+    res.json({
+      company_name: settings.company_name,
+      logo_path: settings.logo_path,
+      portal_banner: settings.portal_banner,
+      default_banner: DEFAULT_PORTAL_BANNER,
+    });
   } catch (error: any) {
     console.error('Get branding error:', error);
     res.status(500).json({ error: error.message });
@@ -228,7 +242,7 @@ router.post(
       const logoPath = LOGO_URL_PREFIX + filename;
 
       db.prepare("UPDATE system_settings SET logo_path = ?, updated_at = datetime('now') WHERE id = 1").run(logoPath);
-      removeLogoFile(previous?.logo_path || '');
+      removeBrandingFile(previous?.logo_path || '');
 
       res.json(readSettings());
     } catch (error: any) {
@@ -244,10 +258,69 @@ router.delete('/logo', (_req: Request, res: Response) => {
     db.prepare('INSERT OR IGNORE INTO system_settings (id) VALUES (1)').run();
     const previous = db.prepare('SELECT logo_path FROM system_settings WHERE id = 1').get() as any;
     db.prepare("UPDATE system_settings SET logo_path = '', updated_at = datetime('now') WHERE id = 1").run();
-    removeLogoFile(previous?.logo_path || '');
+    removeBrandingFile(previous?.logo_path || '');
     res.json(readSettings());
   } catch (error: any) {
     console.error('Delete logo error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Browsers label a picked picture from its own guess (and sometimes send no
+// type at all), so the raw parser takes the generic octet-stream too. What the
+// file really is comes from the magic-byte sniff, never from the label.
+const IMAGE_BODY_TYPES = [
+  'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/octet-stream',
+];
+
+// The picture at the top of the customer portal. Same idiom as the logo: the
+// bytes decide the extension, and the file in use is only removed once the new
+// one is on disk and recorded - an interrupted upload never blanks the hero.
+router.post(
+  '/banner',
+  raw({ type: IMAGE_BODY_TYPES, limit: '5mb' }),
+  (req: Request, res: Response) => {
+    try {
+      const buf = req.body as Buffer;
+      if (!buf || !Buffer.isBuffer(buf) || !buf.length) {
+        res.status(400).json({ error: 'No banner image received' });
+        return;
+      }
+      const ext = detectImageExt(buf);
+      if (!ext) {
+        res.status(400).json({ error: 'Banner must be a PNG, JPEG or WebP image' });
+        return;
+      }
+
+      fs.mkdirSync(LOGO_DIR, { recursive: true });
+      const db = getDb();
+      db.prepare('INSERT OR IGNORE INTO system_settings (id) VALUES (1)').run();
+      const previous = db.prepare('SELECT portal_banner FROM system_settings WHERE id = 1').get() as any;
+
+      const filename = `banner-${Date.now()}.${ext}`;
+      fs.writeFileSync(path.join(LOGO_DIR, filename), buf);
+      db.prepare("UPDATE system_settings SET portal_banner = ?, updated_at = datetime('now') WHERE id = 1").run(LOGO_URL_PREFIX + filename);
+      removeBrandingFile(previous?.portal_banner || '');
+
+      res.json(bannerPaths());
+    } catch (error: any) {
+      console.error('Upload banner error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+// Clearing the banner falls back to the shipped artwork, it never leaves a hole.
+router.delete('/banner', (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO system_settings (id) VALUES (1)').run();
+    const previous = db.prepare('SELECT portal_banner FROM system_settings WHERE id = 1').get() as any;
+    db.prepare("UPDATE system_settings SET portal_banner = ?, updated_at = datetime('now') WHERE id = 1").run('');
+    removeBrandingFile(previous?.portal_banner || '');
+    res.json(bannerPaths());
+  } catch (error: any) {
+    console.error('Delete banner error:', error);
     res.status(500).json({ error: error.message });
   }
 });

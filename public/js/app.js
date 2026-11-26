@@ -6526,10 +6526,15 @@ const App = {
 
     const activeTab = this.portalActiveTab;
 
-    // The Sounds tab owns its own layout - no file tree, no code editor, and no
-    // router to push to, so it must not depend on either request.
+    // The Sounds and Banner Uploader tabs own their own layout - no file tree,
+    // no code editor, and no router to push to, so they must not depend on
+    // either request.
     if (activeTab === 'sounds') {
       await this.renderPortalSounds(content);
+      return;
+    }
+    if (activeTab === 'banner') {
+      await this.renderPortalBanner(content);
       return;
     }
 
@@ -6699,6 +6704,7 @@ const App = {
         <button class="tab portal-tab ${activeTab === 'mikrotik' ? 'active' : ''}" onclick="App.switchPortalTab('mikrotik')">${uiIcon('file-text')} MikroTik Portal</button>
         <button class="tab portal-tab ${activeTab === 'stub' ? 'active' : ''}" onclick="App.switchPortalTab('stub')">${uiIcon('link')} Stub Portal</button>
         <button class="tab portal-tab ${activeTab === 'panel-page' ? 'active' : ''}" onclick="App.switchPortalTab('panel-page')">${uiIcon('monitor')} Panel Portal</button>
+        <button class="tab portal-tab ${activeTab === 'banner' ? 'active' : ''}" onclick="App.switchPortalTab('banner')">${uiIcon('image')} Banner Uploader</button>
         <button class="tab portal-tab ${activeTab === 'sounds' ? 'active' : ''}" onclick="App.switchPortalTab('sounds')">${uiIcon('music')} Sounds</button>
       </div>
     `;
@@ -6811,6 +6817,106 @@ const App = {
     try {
       await api.deletePortalSound(kind);
       this.toast('Sound removed', 'success');
+      await this.renderPortal();
+    } catch (err) {
+      this.toast(err.message, 'error');
+    }
+  },
+
+  // Portal > Banner Uploader. The picture replaces the JuanFi artwork at the
+  // top of the customer portal (public/portal.html). It lives on this server and
+  // is served from the same origin as the portal page itself, so a phone that
+  // is still captive reaches it exactly like it reaches the portal HTML. The
+  // portal script swaps the image at load time, so the operator's own copy of
+  // portal.html is never rewritten.
+  async renderPortalBanner(content) {
+    let branding = { portal_banner: '', default_banner: '/assets/MainPic.PNG' };
+    try {
+      branding = await api.getBranding();
+    } catch (err) {
+      content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+      return;
+    }
+
+    const custom = branding.portal_banner || '';
+    const shown = custom || branding.default_banner || '';
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3>Banner Uploader</h3>
+          <span class="status-badge connected">Panel-hosted portal - nothing to push to a router</span>
+        </div>
+        ${this._portalTabs('banner')}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;padding:1rem">
+          <div style="border:1px solid var(--border);border-radius:8px;padding:1rem">
+            <div class="dash-card-title" style="display:flex;align-items:center;gap:0.4rem">
+              ${uiIcon('image')} Portal banner
+              <span class="status-badge ${custom ? 'connected' : 'disconnected'}">${custom ? 'Custom' : 'JuanFi default'}</span>
+            </div>
+            <p style="color:var(--text-muted);font-size:0.8rem;margin:0.5rem 0">
+              The picture at the top of the customer portal. Upload any image to replace the JuanFi artwork
+              for every customer.
+            </p>
+            <div style="background:var(--bg);border-radius:6px;padding:0.5rem;text-align:center;margin-bottom:0.75rem">
+              ${shown ? `<img src="${this.escapeHtml(shown)}" alt="Portal banner" style="max-width:100%;max-height:220px;border-radius:4px">` : ''}
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <input type="file" id="banner-file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                style="flex:1;min-width:170px;font-size:0.8rem">
+              <button class="btn btn-sm btn-primary" id="banner-upload" onclick="App.uploadPortalBanner()">${uiIcon('upload')} Upload</button>
+              <button class="btn btn-sm btn-outline" onclick="App.removePortalBanner()" ${custom ? '' : 'disabled'}>${uiIcon('trash')} JuanFi Default</button>
+            </div>
+            <small style="color:var(--text-muted);display:block;margin-top:0.5rem">
+              Now showing: ${this.escapeHtml(custom ? custom.split('/').pop() : 'MainPic.PNG (JuanFi)')}
+            </small>
+          </div>
+        </div>
+        <div style="padding:0 1rem 1rem;color:var(--text-muted);font-size:0.8rem">
+          PNG, JPEG or WebP, up to 5 MB. A wide picture (about 900 x 500) fits the portal card best.
+          Customers see the change on their next portal load - nothing is uploaded to the router.
+        </div>
+      </div>
+    `;
+  },
+
+  async uploadPortalBanner() {
+    const input = document.getElementById('banner-file');
+    const file = input && input.files && input.files[0];
+    if (!file) {
+      this.toast('Choose an image file first', 'error');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      this.toast('Banner must be 5 MB or smaller', 'error');
+      return;
+    }
+
+    const button = document.getElementById('banner-upload');
+    const buttonHtml = button ? button.innerHTML : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Uploading...';
+    }
+
+    try {
+      await api.uploadPortalBanner(file);
+      this.toast('Banner saved', 'success');
+      await this.renderPortal();
+    } catch (err) {
+      this.toast(err.message, 'error');
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = buttonHtml;
+      }
+    }
+  },
+
+  async removePortalBanner() {
+    if (!confirm('Remove the custom banner and show the JuanFi artwork again?')) return;
+    try {
+      await api.deletePortalBanner();
+      this.toast('Banner reset to the JuanFi artwork', 'success');
       await this.renderPortal();
     } catch (err) {
       this.toast(err.message, 'error');

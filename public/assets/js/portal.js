@@ -112,6 +112,24 @@ function stopCoinLoop() {
 	} catch (e) {}
 }
 
+// ---- Portal banner ----
+// Uploaded on the admin Portal > Banner Uploader page and served from this same
+// origin, for the same reason as the sounds: a captive phone can reach the
+// controller and nothing else. The markup is not touched - portal.html keeps the
+// <img> the operator may have edited, and only its src is swapped here.
+function loadPortalBanner() {
+	fetch('/api/settings/branding')
+		.then(function(r) { return r.ok ? r.json() : null; })
+		.then(function(s) {
+			if (!s) return;
+			var src = s.portal_banner || s.default_banner || '';
+			if (!src) return;
+			var images = document.querySelectorAll('.brand-img-container img');
+			for (var i = 0; i < images.length; i++) images[i].src = src;
+		})
+		.catch(function() {});
+}
+
 
 // ---- Initialize on DOM load ----
 document.addEventListener('DOMContentLoaded', function() {
@@ -123,6 +141,7 @@ document.addEventListener('DOMContentLoaded', function() {
 	loadVendoConfig();
 	loadPaymentConfig();
 	loadCoinSounds();
+	loadPortalBanner();
 
 	// Fast roam FIRST: a browser that already owns a token (it came from another
 	// SSID with another MAC) does not need to ask the router anything to know it

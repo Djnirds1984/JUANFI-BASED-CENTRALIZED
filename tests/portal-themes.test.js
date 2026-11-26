@@ -233,12 +233,17 @@ const MP3_BYTES = Buffer.concat([Buffer.from('ID3\u0003\u0000\u0000\u0000\u0000\
 const WAV_BYTES = Buffer.concat([Buffer.from('RIFF\u0000\u0000\u0000\u0000WAVEfmt ', 'binary'), Buffer.alloc(64)]);
 const NOT_AUDIO = Buffer.from('this is not a sound file');
 const SOUNDS_DIR = path.join(root, 'public/assets/uploads/sounds');
+const PNG_BYTES = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(64, 0x7f)]);
+const WEBP_BYTES = Buffer.concat([Buffer.from('RIFF\u0000\u0000\u0000\u0000WEBPVP8 ', 'binary'), Buffer.alloc(64)]);
+const NOT_AN_IMAGE = Buffer.from('this is not a picture');
+const BRANDING_DIR = path.join(root, 'public/assets/uploads/branding');
 
-// Runs the real /sounds routes against an in-memory disk and settings row, so a
-// test upload never lands in public/assets/uploads or the production database.
-function soundsApi(initial = {}) {
+// Runs the real /sounds and /banner routes against an in-memory disk and
+// settings row, so a test upload never lands in public/assets/uploads or the
+// production database.
+function settingsApi(initial = {}) {
   const row = {
-    currency: 'PHP', company_name: 'MikroTik', logo_path: '',
+    currency: 'PHP', company_name: 'MikroTik', logo_path: '', portal_banner: '',
     insert_coin_sound: initial.insert_coin || '', coin_drop_sound: initial.coin_drop || '',
     updated_at: null,
   };
@@ -288,21 +293,24 @@ function soundsApi(initial = {}) {
   }
   return {
     row, disk, writes, unlinks,
-    // The portal asks for the sounds while the device is still captive, so this
-    // route has to sit in front of the auth middleware.
-    isPublic() {
+    // The portal asks for the sounds and the banner while the device is still
+    // captive, so both reads have to sit in front of the auth middleware.
+    isPublic(p = '/sounds') {
       const authIndex = layers.findIndex(l => !l.route && l.handle?.name === 'authMiddleware');
-      const soundIndex = layers.findIndex(l => l.route?.path === '/sounds' && l.route.methods.get);
-      return soundIndex !== -1 && (authIndex === -1 || soundIndex < authIndex);
+      const readIndex = layers.findIndex(l => l.route?.path === p && l.route.methods.get);
+      return readIndex !== -1 && (authIndex === -1 || readIndex < authIndex);
     },
     read() { return respond('get', '/sounds', 0, {}); },
     upload(kind, body) { return respond('post', '/sounds/:kind', 1, { params: { kind }, body }); },
     remove(kind) { return respond('delete', '/sounds/:kind', 0, { params: { kind } }); },
+    readBranding() { return respond('get', '/branding', 0, {}); },
+    uploadBanner(body) { return respond('post', '/banner', 1, { body }); },
+    removeBanner() { return respond('delete', '/banner', 0, {}); },
   };
 }
 
 test('coin sound upload stores the bytes and records its URL, replacing cleanly', () => {
-  const api = soundsApi();
+  const api = settingsApi();
   assert.ok(api.isPublic(), 'GET /settings/sounds must not require a login');
   const blank = api.read().payload;
   assert.equal(blank.insert_coin, '');
@@ -325,7 +333,7 @@ test('coin sound upload stores the bytes and records its URL, replacing cleanly'
 
 test('unplayable, unknown and empty sound uploads are refused without touching the working file', () => {
   const stored = path.join(SOUNDS_DIR, 'insert-coin-1.mp3');
-  const api = soundsApi({ insert_coin: '/assets/uploads/sounds/insert-coin-1.mp3' });
+  const api = settingsApi({ insert_coin: '/assets/uploads/sounds/insert-coin-1.mp3' });
   api.disk.set(stored, MP3_BYTES);
 
   assert.equal(api.upload('insert-coin', NOT_AUDIO).code, 400);
@@ -339,7 +347,7 @@ test('unplayable, unknown and empty sound uploads are refused without touching t
 
 test('clearing a sound slot unlinks the file and leaves the built-in fallback', () => {
   const stored = path.join(SOUNDS_DIR, 'coin-drop-9.mp3');
-  const api = soundsApi({ coin_drop: '/assets/uploads/sounds/coin-drop-9.mp3' });
+  const api = settingsApi({ coin_drop: '/assets/uploads/sounds/coin-drop-9.mp3' });
   api.disk.set(stored, MP3_BYTES);
 
   const result = api.remove('coin-drop');
@@ -400,6 +408,132 @@ test('oversized and unselected audio never reach the server', async () => {
   await app.uploadPortalSound('coin-drop');
   assert.deepEqual(uploads, ['coin-drop']);
   assert.equal(notices.at(-1).type, 'success');
+});
+
+// ---- Portal banner ----
+
+test('banner upload stores the picture under branding and replaces cleanly', () => {
+  const api = settingsApi();
+  assert.ok(api.isPublic('/branding'), 'GET /settings/branding must not require a login');
+
+  const blank = api.readBranding().payload;
+  assert.equal(blank.portal_banner, '');
+  assert.equal(blank.default_banner, '/assets/MainPic.PNG');
+
+  const first = api.uploadBanner(PNG_BYTES);
+  assert.equal(first.code, 200);
+  assert.match(first.payload.portal_banner, /^\/assets\/uploads\/branding\/banner-\d+\.png$/);
+  assert.equal(first.payload.default_banner, '/assets/MainPic.PNG');
+  assert.equal(api.disk.get(api.writes[0]).length, PNG_BYTES.length);
+
+  const second = api.uploadBanner(WEBP_BYTES);
+  assert.match(second.payload.portal_banner, /\.webp$/, 'the extension follows the bytes, not the filename');
+  assert.deepEqual(api.unlinks, [api.writes[0]], 'the replaced banner is cleaned up');
+  assert.equal(api.disk.size, 1);
+  assert.equal(api.row.portal_banner, second.payload.portal_banner);
+});
+
+test('unreadable and empty banner uploads are refused without touching the picture in use', () => {
+  const stored = path.join(BRANDING_DIR, 'banner-1.png');
+  const api = settingsApi();
+  api.row.portal_banner = '/assets/uploads/branding/banner-1.png';
+  api.disk.set(stored, PNG_BYTES);
+
+  assert.equal(api.uploadBanner(NOT_AN_IMAGE).code, 400);
+  assert.equal(api.uploadBanner(Buffer.alloc(0)).code, 400);
+
+  assert.deepEqual(api.writes, []);
+  assert.deepEqual(api.unlinks, [], 'a refused upload must never delete the banner in use');
+  assert.equal(api.row.portal_banner, '/assets/uploads/branding/banner-1.png');
+});
+
+test('clearing the banner unlinks the file and leaves the shipped JuanFi artwork', () => {
+  const stored = path.join(BRANDING_DIR, 'banner-9.webp');
+  const api = settingsApi();
+  api.row.portal_banner = '/assets/uploads/branding/banner-9.webp';
+  api.disk.set(stored, WEBP_BYTES);
+
+  const result = api.removeBanner();
+  assert.equal(result.code, 200);
+  assert.equal(result.payload.portal_banner, '');
+  assert.deepEqual(api.unlinks, [stored]);
+  assert.equal(api.readBranding().payload.default_banner, '/assets/MainPic.PNG');
+});
+
+test('Portal > Banner Uploader tab renders the current banner without a router or file request', async () => {
+  const api = portalApi();
+  api.getRouters = async () => { throw new Error('the Banner Uploader must not need a router'); };
+  api.getPortalFiles = async () => { throw new Error('the Banner Uploader must not read the file tree'); };
+  api.getBranding = async () => ({
+    company_name: 'MikroTik', logo_path: '',
+    portal_banner: '/assets/uploads/branding/banner-7.png',
+    default_banner: '/assets/MainPic.PNG',
+  });
+  const { app, nodes, renderPortal } = dashboard(api, 'banner');
+  nodes.set('page-content', { innerHTML: '' });
+  app.escapeHtml = value => String(value);
+  await renderPortal();
+
+  const html = nodes.get('page-content').innerHTML;
+  assert.equal(api.writes.length, 0);
+  assert.match(html, /Banner Uploader/);
+  assert.match(html, /App\.switchPortalTab\('banner'\)/);
+  assert.match(html, /src="\/assets\/uploads\/branding\/banner-7\.png"/, 'the uploaded banner is previewable');
+  assert.match(html, /id="banner-file"/);
+  assert.equal((html.match(/\bdisabled\b/g) || []).length, 0, 'a custom banner can be reset');
+});
+
+test('the shipped JuanFi artwork is shown until a banner is uploaded', async () => {
+  const api = portalApi();
+  api.getBranding = async () => ({ portal_banner: '', default_banner: '/assets/MainPic.PNG' });
+  const { app, nodes, renderPortal } = dashboard(api, 'banner');
+  nodes.set('page-content', { innerHTML: '' });
+  app.escapeHtml = value => String(value);
+  await renderPortal();
+
+  const html = nodes.get('page-content').innerHTML;
+  assert.match(html, /src="\/assets\/MainPic\.PNG"/);
+  assert.match(html, /JuanFi default/);
+  assert.equal((html.match(/\bdisabled\b/g) || []).length, 1, 'there is nothing to reset yet');
+});
+
+test('oversized and unselected banner images never reach the server', async () => {
+  const uploads = [];
+  const api = portalApi();
+  api.getBranding = async () => ({ portal_banner: '', default_banner: '/assets/MainPic.PNG' });
+  api.uploadPortalBanner = async (file) => { uploads.push(file); return {}; };
+  const { app, nodes, notices } = dashboard(api, 'banner');
+  app.escapeHtml = value => String(value);
+
+  nodes.set('banner-file', { files: [{ name: 'huge.png', size: 6 * 1024 * 1024 }] });
+  nodes.set('banner-upload', { disabled: false, innerHTML: 'Upload' });
+  await app.uploadPortalBanner();
+  assert.deepEqual(uploads, []);
+  assert.match(notices.at(-1).message, /5 MB/);
+  assert.equal(nodes.get('banner-upload').disabled, false, 'a rejected upload frees the button again');
+
+  nodes.set('banner-file', { files: [] });
+  await app.uploadPortalBanner();
+  assert.deepEqual(uploads, []);
+  assert.match(notices.at(-1).message, /Choose an image file/);
+
+  nodes.set('banner-file', { files: [{ name: 'shop.png', size: 4096, type: 'image/png' }] });
+  await app.uploadPortalBanner();
+  assert.equal(uploads.length, 1);
+  assert.equal(notices.at(-1).type, 'success');
+});
+
+test('the customer portal swaps the hero image from the public branding route', () => {
+  const bannerFn = portalJsSource.slice(
+    portalJsSource.indexOf('function loadPortalBanner'),
+    portalJsSource.indexOf('// ---- Initialize on DOM load ----')
+  );
+  assert.match(bannerFn, /fetch\('\/api\/settings\/branding'\)/);
+  assert.match(bannerFn, /s\.portal_banner \|\| s\.default_banner/, 'an empty slot keeps the shipped artwork');
+  assert.match(bannerFn, /querySelectorAll\('\.brand-img-container img'\)/);
+  assert.match(bannerFn, /\.catch\(function\(\) \{\}\)/, 'a blocked request must not break the portal');
+  assert.match(portalJsSource, /loadCoinSounds\(\);\s*loadPortalBanner\(\);/, 'loaded with the other panel assets');
+  assert.match(panelHtml, /src="\/assets\/MainPic\.PNG"/, 'the markup keeps a working fallback');
 });
 
 test('the portal loops the insert-coin sound from the click and blips on every coin', () => {

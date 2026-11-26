@@ -696,6 +696,32 @@ class ApiClient {
 
   async deleteCompanyLogo() { return this.request('DELETE', '/settings/logo'); }
 
+  // --- Portal banner (the hero picture on the customer portal) ---
+  async uploadPortalBanner(file) {
+    const headers = { 'Content-Type': file.type || 'application/octet-stream' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${this.baseUrl}/settings/banner`, {
+      method: 'POST',
+      headers,
+      body: file,
+    });
+
+    if (response.status === 401) {
+      this.setToken(null);
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Banner upload failed');
+    }
+    return data;
+  }
+
+  async deletePortalBanner() { return this.request('DELETE', '/settings/banner'); }
+
   // --- Portal coin sounds ---
   async getPortalSounds() { return this.get('/settings/sounds'); }
 

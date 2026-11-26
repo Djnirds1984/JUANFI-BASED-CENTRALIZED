@@ -359,6 +359,7 @@ export function initializeDatabase(): void {
       currency TEXT NOT NULL DEFAULT 'PHP',
       company_name TEXT NOT NULL DEFAULT 'MikroTik',
       logo_path TEXT NOT NULL DEFAULT '',
+      portal_banner TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -746,6 +747,11 @@ export function initializeDatabase(): void {
   }
   if (!sysCols.some((c: any) => c.name === 'logo_path')) {
     db.exec("ALTER TABLE system_settings ADD COLUMN logo_path TEXT NOT NULL DEFAULT ''");
+  }
+  // The picture at the top of the customer portal, uploaded on Portal > Banner
+  // Uploader. Empty means "use the artwork shipped in public/assets/MainPic.PNG".
+  if (!sysCols.some((c: any) => c.name === 'portal_banner')) {
+    db.exec("ALTER TABLE system_settings ADD COLUMN portal_banner TEXT NOT NULL DEFAULT ''");
   }
   // Coin sounds for the customer portal, uploaded on Portal > Sounds. Empty
   // means "use the sound shipped in hotspot/assets", never "play nothing".

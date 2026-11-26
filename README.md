@@ -325,7 +325,7 @@ curl http://localhost:3000/api/routers -H "Authorization: Bearer <token>"
 | Chat | `GET /api/chat/thread`, `POST /api/chat/messages`, `POST /api/chat/read`, `GET /api/chat/threads`, `GET/POST /api/chat/threads/:id/messages`, `POST /api/chat/threads/:id/read`, `GET /api/chat/unread`, `DELETE /api/chat/threads/:id` |
 | Monitoring | `GET /api/monitoring/summary`, `GET /api/monitoring/system`, `GET /api/monitoring/router/:routerId/system|interfaces|traffic|history` |
 | Sales | `GET /api/sales/report` |
-| Settings | `GET /api/settings`, `PUT /api/settings`, `GET /api/settings/branding`, `GET /api/settings/sounds`, `DELETE /api/settings/logo`, `DELETE /api/settings/sounds/:kind` |
+| Settings | `GET /api/settings`, `PUT /api/settings`, `GET /api/settings/branding`, `GET /api/settings/sounds`, `POST/DELETE /api/settings/logo`, `POST/DELETE /api/settings/banner`, `POST /api/settings/sounds/:kind`, `DELETE /api/settings/sounds/:kind` |
 | Tools | `GET /api/tools/zerotier/status`, `POST /api/tools/zerotier/install|join|leave`, `GET /api/tools/database/backup`, `POST /api/tools/database/restore`, `GET/POST /api/tools/turso/config`, `POST /api/tools/turso/test|sync|restore` |
 
 ---

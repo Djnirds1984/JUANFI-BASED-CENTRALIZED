@@ -56,6 +56,11 @@ function recordSale(opts: {
   minutes?: number;
   status: AirCoinsSaleStatus;
   error?: string;
+  /** Coin slot this batch belongs to; empty when the board sold alone. */
+  sessionId?: string;
+  /** That slot's running totals up to and including this row. */
+  batchCoins?: number;
+  batchMinutes?: number;
 }): number {
   const coins = Math.max(0, Math.floor(Number(opts.coins) || 0));
   try {
@@ -74,8 +79,10 @@ function recordSale(opts: {
     }
 
     const result = getDb().prepare(
-      `INSERT INTO aircoins_sales (device_id, router_id, mac, coins, minutes, status, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO aircoins_sales
+         (device_id, router_id, mac, coins, minutes, status, error,
+          session_id, batch_coins, batch_minutes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       opts.deviceId,
       Number(opts.routerId) || 0,
@@ -84,6 +91,9 @@ function recordSale(opts: {
       Math.max(0, Math.floor(Number(opts.minutes) || 0)),
       opts.status,
       String(opts.error || '').slice(0, 200),
+      String(opts.sessionId || ''),
+      Math.max(0, Math.floor(Number(opts.batchCoins) || 0)),
+      Math.max(0, Math.floor(Number(opts.batchMinutes) || 0)),
     );
     return Number(result.lastInsertRowid) || 0;
   } catch (error: any) {
@@ -144,9 +154,19 @@ export async function creditAirCoinsSale(
 export async function creditAirCoinsTime(
   deviceId: number,
   macNoColon: string,
-  credit: { coins: number; minutes: number; spent?: number; leftover?: number; applied?: string[] },
+  credit: {
+    coins: number; minutes: number; spent?: number; leftover?: number; applied?: string[];
+    /** Coin slot the coins came from, so the ledger can group a feed's batches. */
+    sessionId?: string;
+    /** That slot's totals once this batch is paid, for the operator to check. */
+    batchCoins?: number;
+    batchMinutes?: number;
+  },
 ): Promise<AirCoinsSaleResult> {
   const coins = Math.max(0, Math.floor(Number(credit.coins) || 0));
+  const sessionId = String(credit.sessionId || '');
+  const batchCoins = Math.max(0, Math.floor(Number(credit.batchCoins) || 0));
+  const batchMinutes = Math.max(0, Math.floor(Number(credit.batchMinutes) || 0));
   const base: AirCoinsSaleResult = {
     status: 'ok',
     coins,
@@ -163,7 +183,7 @@ export async function creditAirCoinsTime(
   const device = findDevice(deviceId);
   if (!device) {
     recordRedeem(deviceId, coins, 0, 'Device not found');
-    recordSale({ deviceId, mac: macNoColon, coins, minutes: 0, status: 'error', error: 'Device not found' });
+    recordSale({ deviceId, mac: macNoColon, coins, minutes: 0, status: 'error', error: 'Device not found', sessionId });
     return { ...base, status: 'error', error: 'Device not found' };
   }
 
@@ -174,7 +194,7 @@ export async function creditAirCoinsTime(
   ).get(routerId) as any;
   if (!routerRow) {
     recordRedeem(deviceId, coins, 0, 'Router not found or inactive');
-    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'no-router', error: 'Router not found or inactive' });
+    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'no-router', error: 'Router not found or inactive', sessionId });
     return { ...base, status: 'no-router', error: 'Router not found or inactive' };
   }
 
@@ -196,7 +216,10 @@ export async function creditAirCoinsTime(
       Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
     );
     recordRedeem(deviceId, coins, base.minutes);
-    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: base.minutes, status: 'ok' });
+    recordSale({
+      deviceId, routerId, mac: macNoColon, coins, minutes: base.minutes, status: 'ok',
+      sessionId, batchCoins, batchMinutes,
+    });
     console.log(`aircoins: vendo ${deviceId} took ${coins} -> ${base.minutes}min for ${macNoColon} (router ${routerId})`);
     return {
       ...base,
@@ -207,7 +230,7 @@ export async function creditAirCoinsTime(
     };
   } catch (error: any) {
     recordRedeem(deviceId, coins, 0, error.message);
-    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'error', error: error.message });
+    recordSale({ deviceId, routerId, mac: macNoColon, coins, minutes: 0, status: 'error', error: error.message, sessionId });
     console.error('AirCoins redeem error:', error);
     return { ...base, status: 'error', error: error.message };
   }
@@ -261,7 +284,8 @@ export async function settleAirCoinsSession(
     const total = previewSession(deviceId, reported);
     const paidSeconds = Math.max(0, Math.floor(session.settledSeconds || 0));
     const paidCoins = Math.max(0, Math.floor(session.coins || 0));
-    const minutes = Math.max(0, total.minutes - Math.round(paidSeconds / 60));
+    const paidMinutes = Math.round(paidSeconds / 60);
+    const minutes = Math.max(0, total.minutes - paidMinutes);
     const coins = Math.max(0, total.coins - paidCoins);
 
     if (coins <= 0 || minutes <= 0) {
@@ -274,13 +298,19 @@ export async function settleAirCoinsSession(
       spent: Math.max(0, total.coins - total.leftover),
       leftover: total.leftover,
       applied: total.applied,
+      // The row shows the difference, these show what the whole feed came to:
+      // a small batch stepping onto a bigger rate tier is the one row that
+      // looks like a duplicate credit but is not.
+      sessionId: session.id,
+      batchCoins: paidCoins + coins,
+      batchMinutes: paidMinutes + minutes,
     });
     if (result.status === 'ok') {
       // Only a batch that went through moves the watermark: a failed credit has to
       // stay unpaid so the customer's coins are still worth something next poll.
       recordSettled(session.id, reported, paidSeconds + minutes * 60, {
         coins: paidCoins + coins,
-        minutes: Math.round(paidSeconds / 60) + minutes,
+        minutes: paidMinutes + minutes,
       });
     }
     return { pulses, coins, minutes, leftover: total.leftover, result };

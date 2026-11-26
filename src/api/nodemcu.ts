@@ -200,6 +200,44 @@ router.post('/aircoins/status', async (req: Request, res: Response) => {
   }
 });
 
+/*
+ * A board keeps a coin bank until the panel says it is sold: its POST times out
+ * after 15s, and a reply that never lands leaves the coins banked and the same
+ * amount offered again. Without a key that retry would credit the pesos twice,
+ * so the board stamps every bank it offers with one and the panel replays the
+ * answer it already gave instead of crediting again. A board on older firmware
+ * sends no key and keeps the old behaviour.
+ */
+function cachedRedeem(deviceId: number, redeemKey: string): any | null {
+  if (!redeemKey) return null;
+  try {
+    const row = getDb().prepare(
+      'SELECT response FROM aircoins_redeems WHERE device_id = ? AND redeem_key = ?'
+    ).get(deviceId, redeemKey) as any;
+    if (!row) return null;
+    return JSON.parse(String(row.response || '{}'));
+  } catch (error: any) {
+    console.error('AirCoins redeem memo read failed:', error.message);
+    return null;
+  }
+}
+
+/** Remembers a sale that went through, so the same bank cannot be paid twice. */
+function rememberRedeem(deviceId: number, redeemKey: string, payload: any): void {
+  if (!redeemKey) return;
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT OR REPLACE INTO aircoins_redeems (device_id, redeem_key, response)
+       VALUES (?, ?, ?)`
+    ).run(deviceId, redeemKey, JSON.stringify(payload));
+    // A bank is confirmed within seconds; a month is already generous.
+    db.prepare("DELETE FROM aircoins_redeems WHERE created_at < datetime('now', '-30 days')").run();
+  } catch (error: any) {
+    console.error('AirCoins redeem memo write failed:', error.message);
+  }
+}
+
 // The coins bought the time, so the panel decides how much time - not the
 // machine. Same credit path as a portal coin insert, so a vendo sale stacks
 // onto whatever the customer already has and survives a pause or a roam.
@@ -215,12 +253,18 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
   const coins = Math.floor(Number(body.amount) || 0);
   if (coins <= 0) { res.status(400).json({ error: 'amount must be a positive number' }); return; }
 
+  // The same bank offered again: answer with the sale that already went through
+  // rather than paying for these pesos a second time.
+  const redeemKey = String(body.redeemKey || '').slice(0, 64);
+  const memo = cachedRedeem(deviceId, redeemKey);
+  if (memo) { res.json({ ...memo, duplicate: true }); return; }
+
   if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
     // No fixed sale target and nobody opened the portal for this bank. The coins
     // are still money the shop took, so they are logged rather than refused - and
     // the board is told they are sold, or it would offer the same bank forever.
     const saleId = recordUnassignedSale(deviceId, coins, 'No fixed sale target and no open session');
-    res.json({
+    const payload = {
       status: 'ok',
       minutes: 0,
       spent: coins,
@@ -231,7 +275,9 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
       remainingSeconds: 0,
       unassigned: true,
       saleId,
-    });
+    };
+    rememberRedeem(deviceId, redeemKey, payload);
+    res.json(payload);
     return;
   }
 
@@ -243,7 +289,7 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
   if (result.status === 'no-router') { res.status(404).json({ error: result.error }); return; }
   if (result.status !== 'ok') { res.status(500).json({ error: result.error || 'Could not credit this sale' }); return; }
 
-  res.json({
+  const payload = {
     status: 'ok',
     minutes: result.minutes,
     spent: result.spent,
@@ -252,7 +298,9 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
     username: result.username,
     expiryAt: result.expiryAt,
     remainingSeconds: result.remainingSeconds,
-  });
+  };
+  rememberRedeem(deviceId, redeemKey, payload);
+  res.json(payload);
 });
 
 /*

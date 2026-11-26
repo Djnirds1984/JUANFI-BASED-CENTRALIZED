@@ -565,7 +565,7 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define AIRCOINS_BUZZER_PASSIVE 0     // 1 = piezo driven with tone(), 0 = active buzzer
 #endif
 
-#define AIRCOINS_VERSION "1.4.1"
+#define AIRCOINS_VERSION "1.4.2"
 // Acceptors send a burst per coin - five pulses for five pesos, often less than
 // 25 ms apart. The gap only has to swallow contact bounce, and the panel can
 // raise or lower it per machine.
@@ -643,6 +643,18 @@ static String liveSessionId;
 static uint16_t sessionPulses = 0;
 static uint16_t sessionPaid = 0;
 static uint32_t sessionEndsMs = 0;
+
+/*
+ * The key the bank is offered for sale under. It stays the same for as long as
+ * those coins are still in the bank here, so when a POST times out and the same
+ * amount is offered again the panel can answer the sale it already credited
+ * instead of paying for those pesos twice. `bootTag` makes the key differ after
+ * a restart, or the panel would replay a sale from the previous run and the
+ * new coins would never be paid for.
+ */
+static String redeemKey;
+static uint32_t redeemSeq = 0;
+static String bootTag;
 
 static void copyText(char *dst, size_t size, const char *src) {
   if (!size) return;
@@ -1038,10 +1050,16 @@ static void sellBank(uint16_t coins) {
     Serial.println("aircoins: no fixed sale target, letting the panel route these coins");
   }
 
+  if (!bootTag.length()) {
+    bootTag = String((uint32_t)ESP.getChipId(), HEX) + String((uint32_t)random(0x10000000L, 0x7FFFFFFFL), HEX);
+  }
+  if (!redeemKey.length()) redeemKey = bootTag + "-" + String(++redeemSeq);
+
   DynamicJsonDocument doc(256);
   doc["key"] = cfg.deviceKey;
   doc["mac"] = settings.clientMac;
   doc["amount"] = coins;
+  doc["redeemKey"] = redeemKey;
   String payload;
   serializeJson(doc, payload);
 
@@ -1064,6 +1082,9 @@ static void sellBank(uint16_t coins) {
     uint16_t usedPulses = spent / settings.coinValue * settings.pulsesPerCoin;
     pulseBank = pulseBank > usedPulses ? pulseBank - usedPulses : 0;
 
+    // Paid and done: the next bank is offered under a fresh key, so the panel
+    // will credit those coins even though the amount may be the same.
+    redeemKey = "";
     coinsTaken += coins;
     customers++;
     failedSales = 0;

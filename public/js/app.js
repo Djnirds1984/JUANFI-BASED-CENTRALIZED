@@ -11106,12 +11106,22 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       </tr>`).join('');
 
     const airCoins = r.aircoins || { count: 0, amount: 0, minutes: 0, unassignedCount: 0, unassignedAmount: 0, failedCount: 0, rows: [] };
-    const airCoinsRows = (airCoins.rows || []).map((sale) => `
+    // One coin slot pays a customer's feed batch by batch, so a row is only the
+    // difference since the previous one. Printing where that slot ended up stops
+    // a small batch that stepped onto a bigger rate tier from reading like a
+    // second credit.
+    const batchNote = (sale) => {
+      const totalCoins = Number(sale.batchCoins) || 0;
+      const totalMinutes = Number(sale.batchMinutes) || 0;
+      if (!sale.sessionId || totalCoins <= 0) return '';
+      return `<div style="color:var(--text-muted);font-size:0.75rem">slot total ${fmt(totalCoins)} · ${totalMinutes} min</div>`;
+    };
+const airCoinsRows = (airCoins.rows || []).map((sale) => `
       <tr>
         <td>${esc(sale.deviceName)}</td>
         <td>${sale.mac ? esc(sale.mac) : '<span class="status-badge disconnected">unassigned</span>'}</td>
         <td>${fmt(sale.coins)}</td>
-        <td>${sale.minutes}</td>
+        <td>${sale.minutes}${batchNote(sale)}</td>
         <td>${esc(sale.status)}</td>
         <td>${esc(sale.createdAt)}</td>
         <td style="text-align:right"><button class="btn btn-sm btn-outline" onclick="App.deleteAirCoinsSale(${Number(sale.id)})">Delete</button></td>
@@ -11174,7 +11184,12 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <table class="table">
           <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC)</th><th></th></tr></thead>
           <tbody>${airCoinsRows}</tbody>
-        </table>` : '<div class="empty-state"><p>No AirCoins coin sales in this range.</p></div>'}
+        </table>
+        <p style="color:var(--text-muted);font-size:0.75rem;margin:0.5rem 0 0">
+          An AirCoins slot credits one customer's feed batch by batch, so a row is only
+          the difference since the row before it. "slot total" is where that feed ended up -
+          a small batch crossing a bigger rate tier is one credit, not two.
+        </p>` : '<div class="empty-state"><p>No AirCoins coin sales in this range.</p></div>'}
       </div>
 
       <div class="card" style="margin-top:1rem">
@@ -11264,9 +11279,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       lines.push([v.code, v.profile, v.price, v.duration_minutes, v.used_at, v.router_name || v.router_id].map(q).join(','));
     });
     lines.push('');
-    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Status', 'When (UTC)'].map(q).join(','));
+    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Slot', 'Slot Coins', 'Slot Minutes', 'Status', 'When (UTC)'].map(q).join(','));
     ((r.aircoins || {}).rows || []).forEach((sale) => {
-      lines.push([sale.deviceName, sale.mac || 'unassigned', sale.coins, sale.minutes, sale.status, sale.createdAt].map(q).join(','));
+      lines.push([
+        sale.deviceName, sale.mac || 'unassigned', sale.coins, sale.minutes,
+        sale.sessionId || '', sale.batchCoins || '', sale.batchMinutes || '',
+        sale.status, sale.createdAt,
+      ].map(q).join(','));
     });
     lines.push('');
     lines.push(['GCASH PAYMENTS', 'MAC', 'Amount', 'Minutes', 'Paid At (UTC)'].map(q).join(','));

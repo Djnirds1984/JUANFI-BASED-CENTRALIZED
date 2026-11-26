@@ -322,11 +322,27 @@ export function initializeDatabase(): void {
       minutes INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'ok',
       error TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL DEFAULT '',
+      batch_coins INTEGER NOT NULL DEFAULT 0,
+      batch_minutes INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_aircoins_sales_created ON aircoins_sales(created_at);
     CREATE INDEX IF NOT EXISTS idx_aircoins_sales_device ON aircoins_sales(device_id, created_at);
+
+    -- The answer given to one coin bank the board offered for sale, keyed by the
+    -- key the board stamped on it. A board that never got the reply keeps the
+    -- coins in its bank and posts again, so this is what lets the panel answer
+    -- the same key instead of crediting the same pesos twice.
+    CREATE TABLE IF NOT EXISTS aircoins_redeems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id INTEGER NOT NULL,
+      redeem_key TEXT NOT NULL,
+      response TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(device_id, redeem_key)
+    );
 
     CREATE TABLE IF NOT EXISTS payment_rates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -701,6 +717,20 @@ export function initializeDatabase(): void {
   }
   // Migrate old portal_mode values to new values
   db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
+
+  // A coin slot pays a customer's feed batch by batch, so a ₱2.00 row can carry
+  // 90 minutes - it is the step onto a bigger rate tier, not a second credit.
+  // The session id and that slot's running totals let the sales report say so.
+  const saleCols = db.prepare("PRAGMA table_info('aircoins_sales')").all() as any[];
+  if (saleCols.length && !saleCols.some((c: any) => c.name === 'session_id')) {
+    db.exec("ALTER TABLE aircoins_sales ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (saleCols.length && !saleCols.some((c: any) => c.name === 'batch_coins')) {
+    db.exec("ALTER TABLE aircoins_sales ADD COLUMN batch_coins INTEGER NOT NULL DEFAULT 0");
+  }
+  if (saleCols.length && !saleCols.some((c: any) => c.name === 'batch_minutes')) {
+    db.exec("ALTER TABLE aircoins_sales ADD COLUMN batch_minutes INTEGER NOT NULL DEFAULT 0");
+  }
 
   const payCols = db.prepare("PRAGMA table_info('payment_settings')").all() as any[];
   if (payCols.length && !payCols.some((c: any) => c.name === 'methods')) {

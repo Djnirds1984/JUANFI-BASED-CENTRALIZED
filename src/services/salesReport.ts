@@ -24,6 +24,15 @@ export interface AirCoinsSaleRow {
   minutes: number;
   status: string;
   error: string;
+  /**
+   * Coin slot this row was paid out of, empty for a sale the board made alone.
+   * A slot pays one customer's feed batch by batch, so several rows can belong
+   * to the same person - and the last one can carry a big minute step.
+   */
+  sessionId: string;
+  /** That slot's running totals up to and including this row. */
+  batchCoins: number;
+  batchMinutes: number;
   createdAt: string;
 }
 
@@ -266,7 +275,8 @@ export async function buildSalesReport(
      FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?`
   ).get(from, to) as any;
   const aRowsRaw = db.prepare(
-    `SELECT id, device_id, mac, coins, minutes, status, error, created_at
+    `SELECT id, device_id, mac, coins, minutes, status, error,
+            session_id, batch_coins, batch_minutes, created_at
      FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?
      ORDER BY created_at DESC, id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
@@ -281,6 +291,9 @@ export async function buildSalesReport(
     minutes: Number(row.minutes) || 0,
     status: String(row.status || ''),
     error: String(row.error || ''),
+    sessionId: String(row.session_id || ''),
+    batchCoins: Number(row.batch_coins) || 0,
+    batchMinutes: Number(row.batch_minutes) || 0,
     createdAt: String(row.created_at || ''),
   }));
   const aircoins = {

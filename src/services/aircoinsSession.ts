@@ -25,6 +25,14 @@ import { airCoinsDataDir, getSettings, getStatus, planCoinAllocation } from './a
 
 export type AirCoinsSessionStatus = 'open' | 'saved' | 'cancelled' | 'expired' | 'replaced';
 
+/**
+ * What the coins are for. INSERT COIN buys internet time and is credited as it
+ * lands; LOAD WALLET only banks the money, because the customer will spend it
+ * later. An expiry must not turn a wallet bank into free time, so the purpose
+ * travels with the session.
+ */
+export type AirCoinsSessionPurpose = 'time' | 'wallet';
+
 export interface AirCoinsSession {
   id: string;
   deviceId: number;
@@ -33,6 +41,9 @@ export interface AirCoinsSession {
   /** PC this session credits, without separators. Same identity, no colons. */
   mac: string;
   routerId: number;
+  /** Time sale (default) or wallet load. Absent on sessions written before this
+   * field existed, and those were all time sales. */
+  purpose?: AirCoinsSessionPurpose;
   status: AirCoinsSessionStatus;
   startedAt: string;
   expiresAt: string;
@@ -117,7 +128,13 @@ export function sessionRemainingMs(session: AirCoinsSession | null): number {
   return Math.max(0, ends - Date.now());
 }
 
-export function openSession(deviceId: number, voucher: string, mac: string, routerId: number): AirCoinsSession {
+export function openSession(
+  deviceId: number,
+  voucher: string,
+  mac: string,
+  routerId: number,
+  purpose: AirCoinsSessionPurpose = 'time',
+): AirCoinsSession {
   const store = loadStore();
   const previous = store.sessions[String(deviceId)];
   if (previous && previous.status === 'open') previous.status = 'replaced';
@@ -130,6 +147,7 @@ export function openSession(deviceId: number, voucher: string, mac: string, rout
     voucher: String(voucher || identity).toUpperCase(),
     mac: identity,
     routerId: Number(routerId) || 0,
+    purpose,
     status: 'open',
     startedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + sessionTtlSeconds() * 1000).toISOString(),
@@ -208,6 +226,17 @@ export interface SessionPreview {
   leftover: number;
   /** Names of the rates the coins bought, for the sales ledger. */
   applied: string[];
+}
+
+/** Whole coins dropped, from the raw pulse count the board reports. */
+export function sessionCoinCount(deviceId: number, pulses: number): number {
+  const perCoin = Math.max(1, getSettings(deviceId).pulsesPerCoin);
+  return Math.floor(Math.max(0, pulses) / perCoin);
+}
+
+/** What one coin is worth at that machine, in centavos. */
+export function sessionCoinCentavos(deviceId: number): number {
+  return Math.round(Math.max(1, getSettings(deviceId).coinValue) * 100);
 }
 
 /** What the coins in the slot are worth, priced exactly like a sale. */

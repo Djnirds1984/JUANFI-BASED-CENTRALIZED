@@ -7788,6 +7788,30 @@ Then join your network:
     return this.formatAmount(this.systemCurrency, amount);
   },
 
+  // SQLite stamps every row in UTC, but the shop reads its own wall clock: a
+  // sale at 00:23 belongs to the new day. Every timestamp on screen and every
+  // date filter goes through here, so the two never disagree. Keep the offset
+  // in step with src/services/shopTime.ts.
+  shopTzMinutes: 8 * 60,
+
+  /** A stored UTC stamp shown on the shop clock: "2026-11-27 00:23:55". */
+  shopTime(value) {
+    if (!value) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(value));
+    if (!m) return String(value);
+    const utc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], Number(m[6] || 0));
+    const d = new Date(utc + this.shopTzMinutes * 60000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} `
+      + `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  },
+
+  /** Today on the shop clock (YYYY-MM-DD), optionally that many days back. */
+  shopToday(daysAgo) {
+    const d = new Date(Date.now() + this.shopTzMinutes * 60000 - (Number(daysAgo) || 0) * 86400000);
+    return d.toISOString().slice(0, 10);
+  },
+
   async renderSystemSettings() {
     const content = document.getElementById('page-content');
     content.innerHTML = '<div class="empty-state"><p>Loading settings...</p></div>';
@@ -11123,7 +11147,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 
   async renderSalesReport() {
     const content = document.getElementById('page-content');
-    const today = new Date().toISOString().slice(0, 10);
+    const today = this.shopToday();
     if (!this._salesRange) this._salesRange = { from: today, to: today };
     const { from, to } = this._salesRange;
 
@@ -11152,14 +11176,12 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
   },
 
   setSalesRange(kind) {
-    const now = new Date();
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const to = iso(now);
+    // The report filters days on the shop clock, so these buttons have to name
+    // the same days it does - the browser's UTC date would be a day off.
+    const to = this.shopToday();
     let from = to;
     if (kind === '7d' || kind === '30d') {
-      const d = new Date(now);
-      d.setUTCDate(d.getUTCDate() - (kind === '7d' ? 6 : 29));
-      from = iso(d);
+      from = this.shopToday(kind === '7d' ? 6 : 29);
     } else if (kind === 'month') {
       from = to.slice(0, 8) + '01';
     }
@@ -11198,7 +11220,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <td>${esc(v.profile)}</td>
         <td>${fmt(v.price)}</td>
         <td>${v.duration_minutes == null ? '—' : v.duration_minutes}</td>
-        <td>${esc(v.used_at)}</td>
+        <td>${esc(this.shopTime(v.used_at))}</td>
         <td>${esc(v.router_name || v.router_id)}</td>
       </tr>`).join('');
 
@@ -11208,7 +11230,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <td>${esc(p.mac_address)}</td>
         <td>${fmt(p.amount)}</td>
         <td>${p.minutes}</td>
-        <td>${esc(p.paid_at)}</td>
+        <td>${esc(this.shopTime(p.paid_at))}</td>
       </tr>`).join('');
 
     const airCoins = r.aircoins || { count: 0, amount: 0, minutes: 0, unassignedCount: 0, unassignedAmount: 0, failedCount: 0, rows: [] };
@@ -11229,7 +11251,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         <td>${fmt(sale.coins)}</td>
         <td>${sale.minutes}${batchNote(sale)}</td>
         <td>${esc(sale.status)}</td>
-        <td>${esc(sale.createdAt)}</td>
+        <td>${esc(this.shopTime(sale.createdAt))}</td>
         <td style="text-align:right"><button class="btn btn-sm btn-outline" onclick="App.deleteAirCoinsSale(${Number(sale.id)})">Delete</button></td>
       </tr>`).join('');
 
@@ -11288,7 +11310,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         </div>
         ${airCoinsRows ? `
         <table class="table">
-          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC)</th><th></th></tr></thead>
+          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC+8)</th><th></th></tr></thead>
           <tbody>${airCoinsRows}</tbody>
         </table>
         <p style="color:var(--text-muted);font-size:0.75rem;margin:0.5rem 0 0">
@@ -11302,7 +11324,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         <div class="card-header"><h3>${uiIcon('ticket')} Redeemed Vouchers</h3><span class="status-badge connected">${r.vouchers.count} · ${fmt(r.vouchers.amount)}</span></div>
         ${voucherRows ? `
         <table class="table">
-          <thead><tr><th>Code</th><th>Profile</th><th>Price</th><th>Minutes</th><th>Used At (UTC)</th><th>Router</th></tr></thead>
+          <thead><tr><th>Code</th><th>Profile</th><th>Price</th><th>Minutes</th><th>Used At (UTC+8)</th><th>Router</th></tr></thead>
           <tbody>${voucherRows}</tbody>
         </table>` : '<div class="empty-state"><p>No vouchers redeemed in this range.</p></div>'}
       </div>
@@ -11311,7 +11333,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         <div class="card-header"><h3>${uiIcon('card')} GCash / Online Payments</h3><span class="status-badge connected">${r.gcash.count} · ${fmt(r.gcash.amount)}</span></div>
         ${gcashRows ? `
         <table class="table">
-          <thead><tr><th>Reference</th><th>MAC</th><th>Amount</th><th>Minutes</th><th>Paid At (UTC)</th></tr></thead>
+          <thead><tr><th>Reference</th><th>MAC</th><th>Amount</th><th>Minutes</th><th>Paid At (UTC+8)</th></tr></thead>
           <tbody>${gcashRows}</tbody>
         </table>` : '<div class="empty-state"><p>No paid online payments in this range.</p></div>'}
       </div>
@@ -11380,23 +11402,23 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
       ].map(q).join(','));
     });
     lines.push('');
-    lines.push(['REDEEMED VOUCHERS', 'Profile', 'Price', 'Minutes', 'Used At (UTC)', 'Router'].map(q).join(','));
+    lines.push(['REDEEMED VOUCHERS', 'Profile', 'Price', 'Minutes', 'Used At (UTC+8)', 'Router'].map(q).join(','));
     (r.vouchers.rows || []).forEach((v) => {
-      lines.push([v.code, v.profile, v.price, v.duration_minutes, v.used_at, v.router_name || v.router_id].map(q).join(','));
+      lines.push([v.code, v.profile, v.price, v.duration_minutes, this.shopTime(v.used_at), v.router_name || v.router_id].map(q).join(','));
     });
     lines.push('');
-    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Slot', 'Slot Coins', 'Slot Minutes', 'Status', 'When (UTC)'].map(q).join(','));
+    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Slot', 'Slot Coins', 'Slot Minutes', 'Status', 'When (UTC+8)'].map(q).join(','));
     ((r.aircoins || {}).rows || []).forEach((sale) => {
       lines.push([
         sale.deviceName, sale.mac || 'unassigned', sale.coins, sale.minutes,
         sale.sessionId || '', sale.batchCoins || '', sale.batchMinutes || '',
-        sale.status, sale.createdAt,
+        sale.status, this.shopTime(sale.createdAt),
       ].map(q).join(','));
     });
     lines.push('');
-    lines.push(['GCASH PAYMENTS', 'MAC', 'Amount', 'Minutes', 'Paid At (UTC)'].map(q).join(','));
+    lines.push(['GCASH PAYMENTS', 'MAC', 'Amount', 'Minutes', 'Paid At (UTC+8)'].map(q).join(','));
     (r.gcash.rows || []).forEach((p) => {
-      lines.push([p.reference, p.mac_address, p.amount, p.minutes, p.paid_at].map(q).join(','));
+      lines.push([p.reference, p.mac_address, p.amount, p.minutes, this.shopTime(p.paid_at)].map(q).join(','));
     });
 
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
@@ -11446,7 +11468,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         <div class="dash-card">
           <div class="dash-card-title">Coins Loaded Today</div>
           <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(s.credited_today)}</div>
-          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">credited into wallets (UTC day)</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">credited into wallets (UTC+8 day)</div>
         </div>
         <div class="dash-card">
           <div class="dash-card-title">Spent on Time Today</div>
@@ -11510,7 +11532,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
             <td><strong>${fmt(a.balance)}</strong></td>
             <td>${a.tx_count}</td>
             <td><span class="status-badge ${a.status === 'active' ? 'connected' : 'disconnected'}">${esc(a.status)}</span>${a.verified ? '' : ' <span class="status-badge disconnected">unverified</span>'}</td>
-            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(a.last_login_at || a.created_at)}</td>
+            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(this.shopTime(a.last_login_at || a.created_at))}</td>
             <td><button class="btn btn-outline btn-sm" onclick="App.openWalletAccount(${a.id})">Open</button></td>
           </tr>`).join('')}
         </tbody>
@@ -11541,7 +11563,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
 
     const txRows = (d.transactions || []).slice(0, 40).map((t) => `
       <tr>
-        <td style="font-size:0.8125rem">${esc(t.created_at)}</td>
+        <td style="font-size:0.8125rem">${esc(this.shopTime(t.created_at))}</td>
         <td>${esc(kinds[t.kind] || t.kind)}</td>
         <td style="text-align:right;color:${t.amount_centavos >= 0 ? 'var(--success)' : 'var(--danger)'}">${t.amount_centavos >= 0 ? '+' : '−'}${fmt(Math.abs(t.amount))}</td>
         <td style="text-align:right">${fmt(t.balance)}</td>
@@ -11549,7 +11571,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
       </tr>`).join('');
 
     const deviceRows = (d.devices || []).map((v) => `
-      <tr><td><code>${esc(v.mac)}</code></td><td>${esc(v.router_id)}</td><td style="font-size:0.8125rem;color:var(--text-muted)">${esc(v.first_seen)} → ${esc(v.last_seen)}</td></tr>`).join('');
+      <tr><td><code>${esc(v.mac)}</code></td><td>${esc(v.router_id)}</td><td style="font-size:0.8125rem;color:var(--text-muted)">${esc(this.shopTime(v.first_seen))} → ${esc(this.shopTime(v.last_seen))}</td></tr>`).join('');
 
     const topupRows = (d.topups || []).slice(0, 12).map((t) => `
       <tr>
@@ -11563,7 +11585,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
     this.openModal(`${a.full_name || a.email} — ${fmt(a.balance)}`, `
       <div style="font-size:0.875rem">
         <p style="margin:0 0 0.25rem"><strong>${esc(a.email)}</strong> · ${esc(a.mobile) || 'no mobile'} · PIN ${a.has_pin ? 'set' : 'not set'}</p>
-        <p style="margin:0 0 0.25rem;color:var(--text-muted)">registered ${esc(a.created_at)} · last login ${esc(a.last_login_at || 'never')} · status ${esc(a.status)}</p>
+        <p style="margin:0 0 0.25rem;color:var(--text-muted)">registered ${esc(this.shopTime(a.created_at))} · last login ${esc(a.last_login_at ? this.shopTime(a.last_login_at) : 'never')} · status ${esc(a.status)}</p>
 
         <div class="form-row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:end;margin:0.75rem 0;padding:0.75rem;background:var(--bg-secondary, #f8fafc);border-radius:8px">
           <div style="flex:1;min-width:120px">
@@ -11584,11 +11606,11 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         </div>
 
         ${d.open_code ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8125rem">
-          Pending restore/verification code <strong>${esc(d.open_code.purpose)}</strong> for ${esc(d.open_code.device_mac || 'any device')} — expires ${esc(d.open_code.expires_at)}. Give it to the customer over the counter.
+          Pending restore/verification code <strong>${esc(d.open_code.purpose)}</strong> for ${esc(d.open_code.device_mac || 'any device')} — expires ${esc(this.shopTime(d.open_code.expires_at))}. Give it to the customer over the counter.
         </div>` : ''}
 
         <h4 style="margin:0.75rem 0 0.25rem">Ledger</h4>
-        ${txRows ? `<table class="table"><thead><tr><th>When (UTC)</th><th>Kind</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th><th></th></tr></thead><tbody>${txRows}</tbody></table>` : '<p style="color:var(--text-muted)">No wallet activity.</p>'}
+        ${txRows ? `<table class="table"><thead><tr><th>When (UTC+8)</th><th>Kind</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th><th></th></tr></thead><tbody>${txRows}</tbody></table>` : '<p style="color:var(--text-muted)">No wallet activity.</p>'}
 
         <h4 style="margin:0.75rem 0 0.25rem">Coin Sessions</h4>
         ${topupRows ? `<table class="table"><thead><tr><th>Code</th><th>Machine</th><th>Coins</th><th>Status</th><th></th></tr></thead><tbody>${topupRows}</tbody></table>` : '<p style="color:var(--text-muted)">This customer has not loaded a wallet from a machine yet.</p>'}
@@ -11656,7 +11678,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
       </p>
       ${rows.length ? `
       <table class="table">
-        <thead><tr><th>Code</th><th>Customer</th><th>Machine</th><th>Coins</th><th>Status</th><th>Started (UTC)</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Customer</th><th>Machine</th><th>Coins</th><th>Status</th><th>Started (UTC+8)</th><th></th></tr></thead>
         <tbody>${rows.map((t) => `
           <tr>
             <td><code>${esc(t.code)}</code></td>
@@ -11664,7 +11686,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
             <td>${esc(t.device_name || t.device_ip)}</td>
             <td>${t.coins}</td>
             <td><span class="status-badge ${t.status === 'credited' ? 'connected' : (t.status === 'failed' ? 'disconnected' : '')}">${esc(t.status)}</span>${t.cleanup_needed ? ' <span class="status-badge disconnected">cleanup</span>' : ''}</td>
-            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(t.created_at)}</td>
+            <td style="font-size:0.8125rem;color:var(--text-muted)">${esc(this.shopTime(t.created_at))}</td>
             <td>${t.cleanup_needed ? `<button class="btn btn-outline btn-sm" onclick="App.retryWalletCleanup(${t.id})">${uiIcon('refresh')} Clean</button>` : ''}${t.cleanup_error ? `<div style="font-size:0.75rem;color:var(--danger)">${esc(t.cleanup_error)}</div>` : ''}</td>
           </tr>`).join('')}
         </tbody>

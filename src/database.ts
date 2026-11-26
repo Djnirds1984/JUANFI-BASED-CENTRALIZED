@@ -477,6 +477,11 @@ export function initializeDatabase(): void {
       router_id INTEGER NOT NULL DEFAULT 0,
       client_mac TEXT NOT NULL DEFAULT '',
       coins INTEGER NOT NULL DEFAULT 0,
+      -- How the coins are collected: 'machine' posts to the vendo's own web
+      -- server (JuanFi), 'panel' polls the panel-held AirCoins session. The
+      -- panel session id is what the two records are matched by later.
+      mode TEXT NOT NULL DEFAULT 'machine',
+      panel_session_id TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'open',
       cleanup_needed INTEGER NOT NULL DEFAULT 0,
       cleanup_error TEXT NOT NULL DEFAULT '',
@@ -718,6 +723,17 @@ export function initializeDatabase(): void {
   }
   // Migrate old portal_mode values to new values
   db.exec("UPDATE routers SET portal_mode = 'mikrotik' WHERE portal_mode IN ('local', 'radius')");
+
+  // A wallet top-up can be collected two ways, and older rows are all the
+  // first: the phone posts to the vendo's own web server (JuanFi), or it polls
+  // a panel-held AirCoins session (that board serves no page at all).
+  const topupCols = db.prepare("PRAGMA table_info('wallet_topup_sessions')").all() as any[];
+  if (topupCols.length && !topupCols.some((c: any) => c.name === 'mode')) {
+    db.exec("ALTER TABLE wallet_topup_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'machine'");
+  }
+  if (topupCols.length && !topupCols.some((c: any) => c.name === 'panel_session_id')) {
+    db.exec("ALTER TABLE wallet_topup_sessions ADD COLUMN panel_session_id TEXT NOT NULL DEFAULT ''");
+  }
 
   // A coin slot pays a customer's feed batch by batch, so a ₱2.00 row can carry
   // 90 minutes - it is the step onto a bigger rate tier, not a second credit.

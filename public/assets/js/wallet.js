@@ -17,13 +17,18 @@ var wallet = {
 	account: null,
 	config: null,
 	machines: [],
+	// True when the phone's own lease named one machine: the picker is then not
+	// a choice, exactly like the INSERT COIN dialog.
+	lockedMachine: false,
 	view: 'signin',
 	historyOpen: false,
 };
 
 // Coin session state (independent of the INSERT COIN flow in portal.js so the
-// two can never hand each other a wrong voucher code).
-var wcoin = { code: '', ip: '', name: '', deviceId: 0, timer: null, total: 0, busy: false };
+// two can never hand each other a wrong voucher code). `mode` says who holds
+// the slot: the vendo's own web server (JuanFi) or the panel (AirCoins, which
+// has no page to post to).
+var wcoin = { code: '', ip: '', name: '', deviceId: 0, timer: null, total: 0, busy: false, mode: 'machine' };
 
 // ---- tiny helpers ----
 function wEl(id) { return document.getElementById(id); }
@@ -438,10 +443,18 @@ function wTimeGranted(result) {
 // ---- load balance with coins ----
 function wStartTopup() {
 	if (!wallet.account) { wOpenModal('signin'); wStatus('Sign in first, then your coins land in your wallet', '#dc2626'); return; }
-	wApi('/machines', 'GET', null, false).then(function (res) {
+	// The phone's own lease decides which sub-vendo this account may feed. The
+	// panel answers with that one machine only when the network names it.
+	var query = [];
+	if (typeof ip !== 'undefined' && ip) query.push('ip=' + encodeURIComponent(ip));
+	if (wRouterId()) query.push('routerId=' + encodeURIComponent(wRouterId()));
+	wApi('/machines' + (query.length ? '?' + query.join('&') : ''), 'GET', null, false).then(function (res) {
 		wallet.machines = (res.data && res.data.machines) || [];
+		wallet.lockedMachine = !!(res.data && res.data.locked);
 		if (!wallet.machines.length) {
-			wStatus('No coin machine is registered on the panel yet, so wallet loading is unavailable. Please see an agent.', '#dc2626');
+			wStatus(wallet.lockedMachine
+				? 'The coin machine on your network is not registered on the panel, so wallet loading is unavailable here. Please see an agent.'
+				: 'No coin machine is registered on the panel yet, so wallet loading is unavailable. Please see an agent.', '#dc2626');
 			return;
 		}
 		wOpenCoinModal();
@@ -451,16 +464,23 @@ function wStartTopup() {
 function wOpenCoinModal() {
 	var sel = wEl('wcMachine');
 	if (sel) {
-		var current = (typeof vendorIpAddress !== 'undefined') ? vendorIpAddress : '';
+		var current = (typeof vendorIpAddress !== 'undefined') ? String(vendorIpAddress) : '';
+		var currentId = current.indexOf('aircoins:') === 0 ? parseInt(current.substring(9), 10) : 0;
 		sel.innerHTML = wallet.machines.map(function (m) {
-			return '<option value="' + m.id + '" data-ip="' + wEsc(m.ip) + '"'
-				+ (m.ip === current ? ' selected' : '') + '>' + wEsc(m.name || m.ip) + ' (' + wEsc(m.ip) + ')</option>';
+			var selected = wallet.lockedMachine || String(m.id) === String(currentId) || m.ip === current;
+			return '<option value="' + m.id + '" data-ip="' + wEsc(m.ip) + '"' + (selected ? ' selected' : '') + '>'
+				+ wEsc(m.name || m.ip) + (wallet.lockedMachine ? '' : ' (' + wEsc(m.ip) + ')') + '</option>';
 		}).join('');
-		sel.disabled = false;
+		// One machine owns this network: there is nothing to choose, and listing
+		// the other sub-vendos is how a customer picks a slot behind another VLAN.
+		sel.disabled = !!wallet.lockedMachine;
 	}
 	var min = (wallet.config && wallet.config.min_topup) || 0;
 	if (wEl('wcHint')) {
-		wEl('wcHint').textContent = 'Coins go to your wallet balance, not to internet time. Insert at least '
+		var only = wallet.lockedMachine && wallet.machines.length === 1
+			? 'The coin machine on your network: ' + (wallet.machines[0].name || wallet.machines[0].ip) + '. '
+			: '';
+		wEl('wcHint').textContent = only + 'Coins go to your wallet balance, not to internet time. Insert at least '
 			+ wMoney(min) + ' worth, then press DONE PAYING.';
 	}
 	if (wEl('wcTotal')) wEl('wcTotal').textContent = '0';
@@ -488,7 +508,14 @@ function wPrepareSession() {
 	var done = wEl('wcDoneBtn');
 	if (done) done.disabled = true;
 
-	wApi('/topup/start', 'POST', { deviceId: deviceId, mac: wMac(), routerId: wRouterId() })
+	// The lease goes up with the request: the panel refuses a machine that is not
+	// on this phone's network, and picks the slot the same way INSERT COIN does.
+	wApi('/topup/start', 'POST', {
+		deviceId: deviceId,
+		mac: wMac(),
+		routerId: wRouterId(),
+		ip: (typeof ip !== 'undefined' ? ip : ''),
+	})
 		.then(function (res) {
 			if (wHandleAuthLoss(res)) { wCloseCoinModal(); return; }
 			if (!res.ok) {
@@ -497,6 +524,7 @@ function wPrepareSession() {
 				return;
 			}
 			wcoin.code = res.data.code;
+			wcoin.mode = res.data.mode === 'panel' ? 'panel' : 'machine';
 			wcoin.ip = res.data.device_ip;
 			wcoin.name = res.data.device_name || '';
 			wcoin.deviceId = deviceId;
@@ -505,6 +533,17 @@ function wPrepareSession() {
 			// Locked while the code lives: switching machine mid-session would
 			// leave the first machine holding coins nobody is polling for.
 			if (sel) sel.disabled = true;
+
+			// An AirCoins board serves no page, so there is nothing here to post a
+			// voucher to. The panel holds the slot and the phone just reads the
+			// count back from it - the same session INSERT COIN uses.
+			if (wcoin.mode === 'panel') {
+				wSetCoinStatus('Insert coins now', '#059669');
+				if (!wcoin.timer) wcoin.timer = setInterval(wPollPanel, 1000);
+				wPollPanel();
+				return;
+			}
+
 			wMachinePost('/topUp', 'voucher=' + encodeURIComponent(res.data.code) + '&mac=' + encodeURIComponent(wMac()))
 				.then(function (data) {
 					if (data && data.status === 'true') {
@@ -584,10 +623,59 @@ function wPollCoin() {
 	});
 }
 
-function wShowCoins(coins) {
+// Panel-held slot: the coins are whatever the board reports to the controller,
+// so asking the panel is the only truthful reading. Nothing is settled here.
+function wPollPanel() {
+	if (!wcoin.code || wcoin.busy) return;
+	wApi('/topup/peek', 'POST', { code: wcoin.code }).then(function (res) {
+		if (wHandleAuthLoss(res)) { wCloseCoinModal(); return; }
+		if (!res.ok || !res.data) return;
+
+		var coins = Number(res.data.coins) || 0;
+		if (coins !== wcoin.total) {
+			wcoin.total = coins;
+			// The panel sends what these coins are worth at THIS machine, so the
+			// number on screen is the money that will land in the balance.
+			wShowCoins(coins, Number(res.data.value) || 0);
+			if (coins > 0) {
+				wSetCoinStatus('Coin accepted - insert more or press DONE PAYING', '#059669');
+				if (typeof playCoinSound === 'function' && typeof coinDropSound !== 'undefined') playCoinSound(coinDropSound, true);
+			}
+		}
+		var done = wEl('wcDoneBtn');
+		if (done) done.disabled = wcoin.total <= 0;
+
+		var remainMs = Number(res.data.remain_ms) || 0;
+		var remainSec = Math.max(0, Math.round(remainMs / 1000));
+		if (wEl('wcRemain')) wEl('wcRemain').textContent = remainSec > 0 ? ('Coin slot closes in ' + remainSec + 's') : '';
+
+		// The panel stops counting when the window closes; claim a few seconds
+		// early so the money is banked before the slot is released.
+		if (remainMs > 0 && remainMs <= 8000 && wcoin.total > 0) {
+			wSetCoinStatus('Slot closing - sending your coins to the wallet...', '#b45309');
+			wClaim('auto');
+			return;
+		}
+
+		if (!res.data.open) {
+			if (wcoin.timer) { clearInterval(wcoin.timer); wcoin.timer = null; }
+			if (wcoin.total > 0) {
+				wSetCoinStatus('Slot closed - claiming the coins you inserted...', '#b45309');
+				wClaim('expired');
+				return;
+			}
+			wSetCoinStatus('Coin slot closed with no coins.', '#dc2626');
+			setTimeout(wCloseCoinModal, 1800);
+		}
+	});
+}
+
+function wShowCoins(coins, pesoValue) {
 	if (wEl('wcTotal')) wEl('wcTotal').textContent = String(coins);
-	var per = (wallet.config && wallet.config.coin_value) || 1;
-	if (wEl('wcValue')) wEl('wcValue').textContent = wMoney(Number(coins) * Number(per));
+	var money = (typeof pesoValue === 'number')
+		? pesoValue
+		: Number(coins) * Number((wallet.config && wallet.config.coin_value) || 1);
+	if (wEl('wcValue')) wEl('wcValue').textContent = wMoney(money);
 }
 
 function wClaim(reason) {
@@ -600,14 +688,30 @@ function wClaim(reason) {
 	wSetCoinStatus('Counting your coins...', '#475569');
 
 	// Let the machine finish its own settle step before the controller asks it
-	// for the total, so the two never read the counter at the same instant.
-	var wait = (reason === 'expired') ? 1200 : 0;
+	// for the total, so the two never read the counter at the same instant. A
+	// panel-held slot settles here instead, so there is nothing to wait for.
+	var wait = (wcoin.mode === 'machine' && reason === 'expired') ? 1200 : 0;
 	setTimeout(function () {
 		wApi('/topup/claim', 'POST', { code: wcoin.code }).then(function (res) {
 			if (wHandleAuthLoss(res)) { wCloseCoinModal(); return; }
 			if (done) done.textContent = 'DONE PAYING';
 			if (!res.ok) {
 				wcoin.busy = false;
+				if (wcoin.mode === 'panel') {
+					// A 5xx leaves the slot open and the coins in the box, so keep the
+					// modal up and let the customer press again.
+					if (res.status >= 500) {
+						wSetCoinStatus(res.data.error || 'The panel did not answer. Your coins are safe - try again.', '#dc2626');
+						if (done) done.disabled = false;
+						if (wcoin.timer) { clearInterval(wcoin.timer); wcoin.timer = null; }
+						wcoin.timer = setInterval(wPollPanel, 2000);
+						return;
+					}
+					wcoin.code = '';
+					wSetCoinStatus(res.data.error || 'Could not load those coins. Please see an agent.', '#dc2626');
+					setTimeout(wCloseCoinModal, 2600);
+					return;
+				}
 				// 502 means the coins are still inside the machine: keep the modal
 				// open so the customer can press the button again.
 				if (res.status === 502) {
@@ -655,14 +759,22 @@ function wClaimPending(code) {
 
 function wCancelTopup() {
 	if (wcoin.timer) { clearInterval(wcoin.timer); wcoin.timer = null; }
-	// Coins already counted for this code stay claimable from the wallet page,
-	// so only tell the machine to let go when nothing was inserted.
-	if (wcoin.ip && wcoin.code && wcoin.total === 0) {
-		wMachinePost('/cancelTopUp', 'voucher=' + encodeURIComponent(wcoin.code) + '&mac=' + encodeURIComponent(wMac()))
+	var code = wcoin.code;
+	if (wcoin.mode === 'panel') {
+		// The panel holds that slot, so it is the panel that has to let it go.
+		// Coins already inside are banked to this code and stay claimable from
+		// the wallet page instead of being thrown away.
+		if (code) wApi('/topup/cancel', 'POST', { code: code }).catch(function () {});
+	} else if (wcoin.ip && code && wcoin.total === 0) {
+		// The machine keeps its own slot: only tell it to let go when nothing
+		// was inserted.
+		wMachinePost('/cancelTopUp', 'voucher=' + encodeURIComponent(code) + '&mac=' + encodeURIComponent(wMac()))
 			.catch(function () {});
 	}
 	wcoin.code = '';
+	wcoin.mode = 'machine';
 	wcoin.busy = false;
+	wcoin.total = 0;
 	wCloseCoinModal();
 	var modal = wEl('walletModal');
 	if (modal) modal.style.display = 'flex';
@@ -671,8 +783,10 @@ function wCancelTopup() {
 
 function wCloseCoinModal() {
 	if (wcoin.timer) { clearInterval(wcoin.timer); wcoin.timer = null; }
+	wcoin.mode = 'machine';
 	var sel = wEl('wcMachine');
-	if (sel) sel.disabled = false;
+	// A locked picker has only one machine to offer, so it stays shut.
+	if (sel) sel.disabled = !!wallet.lockedMachine;
 	var done = wEl('wcDoneBtn');
 	if (done) { done.disabled = false; done.textContent = 'DONE PAYING'; }
 	if (typeof stopCoinLoop === 'function') stopCoinLoop();

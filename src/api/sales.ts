@@ -2,14 +2,16 @@ import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import { getDb } from '../database';
 import { buildSalesReport, normalizeRange } from '../services/salesReport';
+import { SHOP_SQL_SHIFT } from '../services/shopTime';
 
 const router = Router();
 router.use(authMiddleware);
 
 // GET /api/sales/report?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=1000
 // Aggregates sub-vendo coin counters, redeemed vouchers and paid GCash
-// payments. Voucher/payment rows are filtered by the UTC date range;
-// sub-vendo counters are device lifetime totals (not date-filterable).
+// payments. Voucher/payment rows are filtered by the date range on the shop
+// clock (UTC+8); sub-vendo counters are device lifetime totals (not
+// date-filterable).
 router.get('/report', async (req: Request, res: Response) => {
   try {
     const { from, to, limit } = req.query;
@@ -54,7 +56,7 @@ router.delete('/aircoins', (req: Request, res: Response) => {
   );
   try {
     const info = getDb()
-      .prepare(`DELETE FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?`)
+      .prepare(`DELETE FROM aircoins_sales WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?`)
       .run(from, to);
     res.json({ deleted: info.changes, from, to });
   } catch (error: any) {

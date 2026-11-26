@@ -467,6 +467,43 @@ export function listOpenTopups(accountId: number): any[] {
   ).all(accountId) as any[];
 }
 
+/**
+ * Banks what a panel-held AirCoins slot has collected, without crediting the
+ * wallet yet. Claim is a separate step because the customer may walk away;
+ * leaving the row 'settled' is what lets them finish the load later instead of
+ * the coins turning into internet time nobody asked for.
+ *
+ * `code` targets one session, `panelSessionId` the row the board's heartbeat
+ * knows about - the heartbeat has no idea what code the portal showed.
+ */
+export function bankTopupCoins(opts: { code?: string; panelSessionId?: string; coins: number }): number {
+  const coins = Math.max(0, Math.floor(Number(opts.coins) || 0));
+  const db = getDb();
+  if (opts.code) {
+    db.prepare(
+      `UPDATE wallet_topup_sessions SET status = 'settled', coins = ?, settled_at = datetime('now')
+        WHERE code = ? AND status = 'open'`
+    ).run(coins, String(opts.code).trim().toUpperCase());
+    return coins;
+  }
+  const panelId = String(opts.panelSessionId || '');
+  if (!panelId) return 0;
+  db.prepare(
+    `UPDATE wallet_topup_sessions SET status = 'settled', coins = ?, settled_at = datetime('now')
+      WHERE panel_session_id = ? AND status = 'open'`
+  ).run(coins, panelId);
+  return coins;
+}
+
+/** Closes a top-up with nothing to pay out, so it stops asking to be claimed. */
+export function failTopup(code: string, error: string): void {
+  getDb().prepare(
+    `UPDATE wallet_topup_sessions
+        SET status = 'failed', coins = 0, cleanup_error = ?, settled_at = datetime('now')
+      WHERE code = ? AND status IN ('open', 'settled')`
+  ).run(String(error || '').slice(0, 200), String(code || '').trim().toUpperCase());
+}
+
 // ---------------------------------------------------------------------------
 // Small in-process limiter (same shape the chat endpoints use)
 // ---------------------------------------------------------------------------

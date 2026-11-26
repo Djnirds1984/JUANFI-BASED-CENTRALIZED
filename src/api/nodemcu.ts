@@ -16,10 +16,11 @@ import {
   rejectClaim, loadClaims, normalizeMac, forgetDevice, getSettings,
 } from '../services/aircoins';
 import {
-  SESSION_POLL_SECONDS, findSession, findSessionById, finishSession, sessionIsLive,
-  sessionRemainingMs,
+  SESSION_POLL_SECONDS, findSession, findSessionById, finishSession, livePulses, previewSession,
+  recordSettled, sessionCoinCount, sessionIsLive, sessionRemainingMs,
 } from '../services/aircoinsSession';
 import { creditAirCoinsSale, recordUnassignedSale, settleAirCoinsSession } from '../services/aircoinsSale';
+import { bankTopupCoins } from '../services/wallet';
 
 const router = Router();
 
@@ -152,17 +153,31 @@ router.post('/aircoins/status', async (req: Request, res: Response) => {
     // already dropped the coins. JuanFi commits an expired slot the same way,
     // and doing it on the heartbeat means a closed browser tab cannot cost them
     // their money.
+    //
+    // A LOAD WALLET slot is the exception: those coins are balance, not time, so
+    // the count is banked onto the top-up row for the customer to claim. Paying
+    // it out as time here would hand them free internet on top of the money.
     let session = findSession(deviceId);
     if (session && session.status === 'open' && !sessionIsLive(session)) {
-      const credited = await settleAirCoinsSession(deviceId, session);
-      // Settling already wrote the running totals onto the session; finishing it
-      // only stamps the status, or those coins would be counted twice.
-      const after = findSessionById(session.id) || session;
-      session = finishSession(session.id, 'expired', {
-        coins: after.coins,
-        minutes: after.minutes,
-        error: credited.result && credited.result.status !== 'ok' ? (credited.result.error || '') : '',
-      });
+      if (session.purpose === 'wallet') {
+        const counted = Math.max(Number(session.settledPulses) || 0, livePulses(deviceId, session.id));
+        const preview = previewSession(deviceId, counted);
+        // The wallet row counts coins; the session record keeps money, as every
+        // other session on this machine does.
+        recordSettled(session.id, counted, 0, { coins: preview.coins, minutes: 0 });
+        bankTopupCoins({ panelSessionId: session.id, coins: sessionCoinCount(deviceId, counted) });
+        session = finishSession(session.id, 'expired', { coins: preview.coins, minutes: 0 });
+      } else {
+        const credited = await settleAirCoinsSession(deviceId, session);
+        // Settling already wrote the running totals onto the session; finishing it
+        // only stamps the status, or those coins would be counted twice.
+        const after = findSessionById(session.id) || session;
+        session = finishSession(session.id, 'expired', {
+          coins: after.coins,
+          minutes: after.minutes,
+          error: credited.result && credited.result.status !== 'ok' ? (credited.result.error || '') : '',
+        });
+      }
     }
 
     // A finished session keeps being repeated until the board reports it gone:

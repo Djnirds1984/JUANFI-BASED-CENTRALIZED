@@ -4,6 +4,7 @@ import { getDb } from '../database';
 import { nodeMcuService, NodeMcuDevice } from './nodemcu';
 import { firmwareTypeOf } from './deviceRegistry';
 import { getSettings, getStatus, statusIsOnline } from './aircoins';
+import { SHOP_SQL_SHIFT, shopToday } from './shopTime';
 
 // Sales report aggregation across the three revenue sources:
 //  - Sub-vendo / NodeMCU coin sales (device-side lifetime counters)
@@ -11,9 +12,10 @@ import { getSettings, getStatus, statusIsOnline } from './aircoins';
 //  - Redeemed vouchers (price recorded at generation)
 //  - Paid GCash / PayMongo online payments
 //
-// Voucher, payment and AirCoins rows are date-filterable (UTC, matching
-// datetime('now')). NodeMCU counters are cumulative on the device itself, so
-// they are reported as lifetime / since-reset totals and cannot be filtered.
+// Voucher, payment and AirCoins rows are date-filterable (on the shop clock,
+// UTC+8, so a sale at 00:23 local is the new day's takings). NodeMCU counters
+// are cumulative on the device itself, so they are reported as lifetime /
+// since-reset totals and cannot be filtered.
 
 export interface AirCoinsSaleRow {
   id: number;
@@ -121,9 +123,10 @@ function isDateStr(v: unknown): v is string {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 }
 
-/** Normalize the requested range; defaults to today (UTC). Swaps reversed bounds. */
+/** Normalize the requested range; defaults to today on the shop clock. Swaps
+ *  reversed bounds. */
 export function normalizeRange(from?: string, to?: string): { from: string; to: string } {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = shopToday();
   let f = isDateStr(from) ? from : today;
   let t = isDateStr(to) ? to : today;
   if (f > t) [f, t] = [t, f];
@@ -207,28 +210,28 @@ export async function buildSalesReport(
   // Redeemed vouchers inside the range = realized voucher sales.
   const vAgg = db.prepare(
     `SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS amount
-     FROM vouchers WHERE is_used = 1 AND date(used_at) BETWEEN ? AND ?`
+     FROM vouchers WHERE is_used = 1 AND date(used_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?`
   ).get(from, to) as any;
   const vRows = db.prepare(
     `SELECT v.id, v.code, v.username, v.profile, v.price, v.duration_minutes, v.used_at,
             v.router_id, r.name AS router_name
      FROM vouchers v LEFT JOIN routers r ON r.id = v.router_id
-     WHERE v.is_used = 1 AND date(v.used_at) BETWEEN ? AND ?
+     WHERE v.is_used = 1 AND date(v.used_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?
      ORDER BY v.used_at DESC, v.id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
   const vGen = db.prepare(
     `SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS amount
-     FROM vouchers WHERE date(created_at) BETWEEN ? AND ?`
+     FROM vouchers WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?`
   ).get(from, to) as any;
 
   // Paid online payments inside the range = realized GCash sales.
   const pAgg = db.prepare(
     `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amount
-     FROM payments WHERE status = 'paid' AND date(paid_at) BETWEEN ? AND ?`
+     FROM payments WHERE status = 'paid' AND date(paid_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?`
   ).get(from, to) as any;
   const pRows = db.prepare(
     `SELECT id, reference, provider, mac_address, amount, minutes, paid_at, created_at
-     FROM payments WHERE status = 'paid' AND date(paid_at) BETWEEN ? AND ?
+     FROM payments WHERE status = 'paid' AND date(paid_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?
      ORDER BY paid_at DESC, id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
 
@@ -255,7 +258,7 @@ export async function buildSalesReport(
     return map;
   };
   const rangeLedger = groupLedger(
-    db.prepare(`${ledgerColumns} WHERE date(created_at) BETWEEN ? AND ? GROUP BY device_id`).all(from, to) as any[]
+    db.prepare(`${ledgerColumns} WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ? GROUP BY device_id`).all(from, to) as any[]
   );
   const allLedger = groupLedger(db.prepare(`${ledgerColumns} GROUP BY device_id`).all() as any[]);
   
@@ -272,12 +275,12 @@ export async function buildSalesReport(
             COALESCE(SUM(CASE WHEN status = 'unassigned' THEN 1 ELSE 0 END), 0) AS unassigned_n,
             COALESCE(SUM(CASE WHEN status = 'unassigned' THEN coins ELSE 0 END), 0) AS unassigned_coins,
             COALESCE(SUM(CASE WHEN status IN ('no-rate', 'error') THEN 1 ELSE 0 END), 0) AS failed_n
-     FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?`
+     FROM aircoins_sales WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?`
   ).get(from, to) as any;
   const aRowsRaw = db.prepare(
     `SELECT id, device_id, mac, coins, minutes, status, error,
             session_id, batch_coins, batch_minutes, created_at
-     FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?
+     FROM aircoins_sales WHERE date(created_at, '${SHOP_SQL_SHIFT}') BETWEEN ? AND ?
      ORDER BY created_at DESC, id DESC LIMIT ?`
   ).all(from, to, limit) as any[];
   const deviceNames = new Map<number, string>();

@@ -11,7 +11,8 @@ import { mikrotikTimeToSeconds, secondsToLimitUptime, generateSessionToken } fro
 import { grantMinutesToMac } from '../services/timeCredit';
 import { getTrialSettings, claimTrial, releaseTrialClaim } from '../services/trial';
 import { findDevice, loadDevices, firmwareTypeOf } from '../services/deviceRegistry';
-import { autoSelectVendo, namesNetwork, vendoServesClient } from '../services/vendoAutoSelect';
+import { autoSelectVendo, namesNetwork } from '../services/vendoAutoSelect';
+import { foreignVendo, hotspotConfigPath, parseMultiVendoAddresses, vendoCandidates } from '../services/vendoRoster';
 import type { VendoCandidate } from '../services/vendoAutoSelect';
 import type { NodeMcuDevice } from '../services/nodemcu';
 import { getSettings, getStatus, statusIsOnline } from '../services/aircoins';
@@ -22,85 +23,6 @@ import {
 import { settleAirCoinsSession } from '../services/aircoinsSale';
 
 const router = Router();
-
-type HotspotVendo = { vendoName: string; vendoIp: string; chargingEnable: boolean; eloadEnable: boolean };
-
-function parseMultiVendoAddresses(content: string): HotspotVendo[] {
-  const addresses: HotspotVendo[] = [];
-  const arrayMatch = content.match(/var\s+multiVendoAddresses\s*=\s*\[([\s\S]*?)\];/);
-  if (!arrayMatch) return addresses;
-  const objRe = /\{([^}]+)\}/g;
-  let objMatch;
-  while ((objMatch = objRe.exec(arrayMatch[1])) !== null) {
-    const block = objMatch[1];
-    const nameM = block.match(/vendoName:\s*"([^"]*)"/);
-    const ipM = block.match(/vendoIp:\s*"([^"]*)"/);
-    const chM = block.match(/chargingEnable:\s*(true|false)/);
-    const elM = block.match(/eloadEnable:\s*(true|false)/);
-    if (ipM) {
-      addresses.push({
-        vendoName: nameM ? nameM[1] : '',
-        vendoIp: ipM[1],
-        chargingEnable: chM ? chM[1] === 'true' : false,
-        eloadEnable: elM ? elM[1] === 'true' : false,
-      });
-    }
-  }
-  return addresses;
-}
-
-function hotspotConfigPath(): string {
-  return path.join(__dirname, '..', '..', 'hotspot', 'assets', 'js', 'config.js');
-}
-
-/**
- * Every machine a portal could offer, in the shape its picker uses: the
- * AirCoins ones from the registry, then the JuanFi ones from the hotspot's own
- * config.js. An address registered as AirCoins is skipped - the registry is
- * what the panel actually sells through, and showing both would list one box
- * twice.
- *
- * The /vendo-config payload and the coin endpoints both build their list here,
- * so the machine the portal shows and the machine the panel accepts coins for
- * cannot drift apart.
- */
-function vendoCandidates(): VendoCandidate[] {
-  let devices: NodeMcuDevice[] = [];
-  try {
-    devices = loadDevices().filter((device) => firmwareTypeOf(device) === 'aircoins');
-  } catch {
-    devices = [];
-  }
-
-  const airCoins: VendoCandidate[] = devices.map((device) => ({
-    value: `aircoins:${device.id}`,
-    name: device.name || `AirCoins ${device.id}`,
-    ip: String(device.ip || '').trim(),
-    routerId: Number(device.routerId) || 0,
-    subnets: Array.isArray(device.hotspotSubnets) ? device.hotspotSubnets.map(String) : [],
-  }));
-
-  let legacy: HotspotVendo[] = [];
-  try {
-    legacy = parseMultiVendoAddresses(fs.readFileSync(hotspotConfigPath(), 'utf8'));
-  } catch {
-    legacy = [];
-  }
-  const ours = new Set(devices.map((device) => String(device.ip || '').trim()));
-
-  return [
-    ...airCoins,
-    ...legacy
-      .filter((vendo) => !ours.has(String(vendo.vendoIp || '').trim()))
-      .map((vendo) => ({
-        value: String(vendo.vendoIp || ''),
-        name: vendo.vendoName || vendo.vendoIp,
-        ip: String(vendo.vendoIp || ''),
-        routerId: 0,
-        subnets: [],
-      })),
-  ];
-}
 
 // Public endpoint — portal page needs vendo config pre-login
 router.get('/vendo-config', (req: Request, res: Response) => {
@@ -755,20 +677,9 @@ function airCoinsVendo(id: any): { id: number; name: string; ip: string } | null
 
 /*
  * Is this coin action aimed at a machine that is not on the customer's network?
- *
- * VLAN isolation already keeps the sub-vendos off each other's segments, but an
- * AirCoins box has no web server: every coin goes through this panel, so the
- * panel is the only place that can refuse the wrong one. The address comes from
- * the hotspot redirect - nginx makes every request look like this box, so the
- * browser is the last place the phone's own lease is still known. When the
- * panel cannot name the network it stays out of the way rather than guess.
+ * The rule itself lives in services/vendoRoster so LOAD WALLET applies exactly
+ * the same one as INSERT COIN.
  */
-function foreignVendo(source: any, vendo: { id: number; ip: string }): boolean {
-  const clientIp = String(source?.ip || source?.clientIp || '').trim();
-  if (!clientIp) return false;
-  const routerId = parseInt(String(source?.routerId || '1'), 10) || 0;
-  return !vendoServesClient(clientIp, routerId, vendoCandidates(), `aircoins:${vendo.id}`, vendo.ip);
-}
 
 function sessionPesos(deviceId: number, session: AirCoinsSession): number {
   // What is in the box right now, paid or not: a batch no rate could cover is
@@ -842,6 +753,13 @@ router.post('/coins/topup', (req: Request, res: Response) => {
       res.json({ status: 'false', errorCode: 'coinslot.busy' });
       return;
     }
+    // A slot the wallet opened is a balance load. Adopting it here would settle
+    // those pesos as internet time instead of money, so INSERT COIN leaves it
+    // alone until the wallet closes it.
+    if (sessionIsLive(existing) && existing!.purpose === 'wallet') {
+      res.json({ status: 'false', errorCode: 'coinslot.busy' });
+      return;
+    }
 
     const routerId = parseInt(String(req.body?.routerId || '1'), 10) || 1;
     const session = sessionIsLive(existing)
@@ -873,6 +791,12 @@ router.post('/coins/check', async (req: Request, res: Response) => {
     const vendo = airCoinsVendo(req.body?.deviceId);
     const session = vendo ? findSessionById(String(req.body?.sessionId || '')) : null;
     if (!vendo || !session || session.deviceId !== vendo.id) {
+      res.json({ status: 'false', errorCode: 'coin.slot.notavailable' });
+      return;
+    }
+    // A wallet slot is not a time sale: settling it here would turn a balance
+    // load into free internet. The wallet has its own peek and claim routes.
+    if (session.purpose === 'wallet') {
       res.json({ status: 'false', errorCode: 'coin.slot.notavailable' });
       return;
     }
@@ -927,6 +851,11 @@ async function closeAirCoinsSession(
   const vendo = airCoinsVendo(body?.deviceId);
   const session = vendo ? findSessionById(String(body?.sessionId || '')) : null;
   if (!vendo || !session || session.deviceId !== vendo.id) {
+    return { code: 200, payload: { status: 'false', errorCode: 'coin.slot.notavailable' } };
+  }
+  // Only LOAD WALLET may close its own slot: closing it here would credit the
+  // coins as time and leave the wallet top-up holding a session nobody owns.
+  if (session.purpose === 'wallet') {
     return { code: 200, payload: { status: 'false', errorCode: 'coin.slot.notavailable' } };
   }
   if (session.status !== 'open') {

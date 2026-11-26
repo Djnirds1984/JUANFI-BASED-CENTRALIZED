@@ -5,8 +5,16 @@ import { getDb } from '../database';
 import { authMiddleware, clientAuthMiddleware } from '../middleware/auth';
 import { mikroTikService } from '../services/mikrotik';
 import { nodeMcuService } from '../services/nodemcu';
-import { findDevice, findDeviceByIp, loadDevices } from '../services/deviceRegistry';
+import { findDevice, findDeviceByIp, loadDevices, firmwareTypeOf } from '../services/deviceRegistry';
+import { autoSelectVendo, namesNetwork } from '../services/vendoAutoSelect';
+import { foreignVendo, vendoCandidates } from '../services/vendoRoster';
+import { getSettings as getVendoSettings, getStatus as getVendoStatus, statusIsOnline } from '../services/aircoins';
+import {
+  findSession, findSessionById, finishSession, livePulses, openSession, previewSession,
+  recordSettled, sessionCoinCentavos, sessionCoinCount, sessionIsLive, sessionRemainingMs, sessionTtlSeconds,
+} from '../services/aircoinsSession';
 import { listPaymentRates } from '../services/payments';
+import { SHOP_SQL_SHIFT } from '../services/shopTime';
 import { grantMinutesToMac } from '../services/timeCredit';
 import { deliverCode } from '../services/notify';
 import {
@@ -14,7 +22,7 @@ import {
   findAccountByEmail, findAccountById, publicAccount, createAccount, authenticateAccount,
   signClientToken, verifyPin, revokeWalletSessions, credit, debit, spentTodayCentavos,
   issueAuthCode, matchAuthCode, consumeAuthCode, makeTopupCode, getTopupByCode, listOpenTopups,
-  allowRate, pesosToCentavos, touchDevice, isKnownDevice,
+  allowRate, pesosToCentavos, touchDevice, isKnownDevice, bankTopupCoins, failTopup,
 } from '../services/wallet';
 
 const router = Router();
@@ -89,11 +97,34 @@ router.get('/config', (_req: Request, res: Response) => {
 // The portal offers one coin machine per registered panel device, so it can
 // grey out a machine that is listed in config.js but was never added here (a
 // wallet top-up needs the controller to be able to talk to that machine).
-router.get('/machines', (_req: Request, res: Response) => {
+//
+// Which machine that is comes from the same rule INSERT COIN uses: the phone's
+// own lease names its sub-vendo, and when it does, nothing else is sent. A
+// wallet load at the wrong slot is money the customer cannot even reach through
+// the VLAN, so the list is not a convenience here - it is the guard.
+router.get('/machines', (req: Request, res: Response) => {
+  const clientIp = String(req.query.ip || '').trim();
+  const routerId = parseInt(String(req.query.routerId || ''), 10) || 0;
+  const candidates = vendoCandidates();
+  const auto = autoSelectVendo(clientIp, routerId, candidates);
+  const locked = namesNetwork(auto);
+
+  let machines = loadDevices()
+    .filter((d) => d.ip)
+    .map((d) => ({ id: d.id, name: d.name, ip: d.ip, firmware: firmwareTypeOf(d) }));
+
+  if (locked) {
+    const chosen = candidates.find((candidate) => candidate.value === auto!.value);
+    const keep = new Set<string>([auto!.value]);
+    const chosenIp = chosen ? String(chosen.ip || '').trim() : '';
+    if (chosenIp) keep.add(chosenIp);
+    machines = machines.filter((m) => keep.has(`aircoins:${m.id}`) || keep.has(String(m.ip || '').trim()));
+  }
+
   res.json({
-    machines: loadDevices()
-      .filter((d) => d.ip)
-      .map((d) => ({ id: d.id, name: d.name, ip: d.ip })),
+    locked,
+    locked_id: locked && machines.length === 1 ? machines[0].id : 0,
+    machines,
   });
 });
 
@@ -351,18 +382,99 @@ router.post('/topup/start', (req: Request, res: Response) => {
       return;
     }
 
+    // The same guard INSERT COIN applies, for the same reason: pesos dropped at
+    // another sub-vendo's slot are a support call, not a sale.
+    if (foreignVendo(req.body, { id: device.id, ip: String(device.ip) })) {
+      res.status(403).json({ error: 'This coin machine is not on your network. Please load your wallet at the machine on your own station.' });
+      return;
+    }
+
     const code = makeTopupCode();
+    const routerId = parseInt(String(req.body.routerId || '0'), 10) || 0;
+
+    // An AirCoins board serves no page, so the phone cannot post a voucher to it
+    // at all. The panel holds the slot instead - exactly like INSERT COIN - and
+    // the coins are counted from the board's own heartbeat. JuanFi machines keep
+    // their own web server and the old handshake.
+    if (firmwareTypeOf(device) === 'aircoins') {
+      const vendoSettings = getVendoSettings(device.id);
+      if (!statusIsOnline(getVendoStatus(device.id), vendoSettings.pollSeconds)) {
+        res.status(409).json({ error: 'That coin machine is offline right now. Please tell the operator.' });
+        return;
+      }
+
+      const macNoColon = normalizeMac(req.body.mac);
+      // One slot is one physical place. A live slot of somebody else's (or of
+      // this phone's own time purchase) is left alone - opening over it would
+      // hand its coins to whoever pressed last.
+      const existing = findSession(device.id);
+      let acs = null;
+      if (sessionIsLive(existing)) {
+        if (existing!.purpose === 'wallet' && existing!.mac === macNoColon) {
+          acs = existing!;
+        } else {
+          res.status(409).json({ error: 'Another customer is using that machine now. Wait for them, then try again.' });
+          return;
+        }
+      } else {
+        acs = openSession(device.id, '', macNoColon, routerId, 'wallet');
+      }
+
+      // One slot, one code. A row left open on this same slot would be banked
+      // alongside the new one and could then be claimed twice, so the existing
+      // code is handed back to its owner and dropped otherwise.
+      const stale = getDb().prepare(
+        "SELECT code, account_id FROM wallet_topup_sessions WHERE panel_session_id = ? AND status = 'open'"
+      ).get(acs!.id) as any;
+      if (stale && stale.account_id === account.id) {
+        res.json({
+          code: stale.code,
+          mode: 'panel',
+          panel_session_id: acs!.id,
+          device_ip: device.ip,
+          device_name: device.name,
+          wait_time: sessionTtlSeconds() * 1000,
+          remain_ms: sessionRemainingMs(acs),
+          poll_seconds: 1,
+          valid_minutes: getWalletSettings().topup_validity_min,
+          resumed: true,
+        });
+        return;
+      }
+      if (stale) failTopup(String(stale.code), 'Replaced by a newer wallet session');
+
+      getDb().prepare(
+        `INSERT INTO wallet_topup_sessions
+           (code, account_id, device_id, device_ip, device_name, router_id, client_mac, mode, panel_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'panel', ?)`
+      ).run(code, account.id, device.id, device.ip, device.name, routerId, macNoColon, acs!.id);
+
+      res.status(201).json({
+        code,
+        mode: 'panel',
+        panel_session_id: acs!.id,
+        device_ip: device.ip,
+        device_name: device.name,
+        wait_time: sessionTtlSeconds() * 1000,
+        remain_ms: sessionRemainingMs(acs),
+        poll_seconds: 1,
+        valid_minutes: getWalletSettings().topup_validity_min,
+      });
+      return;
+    }
+
     getDb().prepare(
-      `INSERT INTO wallet_topup_sessions (code, account_id, device_id, device_ip, device_name, router_id, client_mac)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO wallet_topup_sessions (code, account_id, device_id, device_ip, device_name, router_id, client_mac, mode)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'machine')`
     ).run(
       code, account.id, device.id, device.ip, device.name,
-      parseInt(String(req.body.routerId || '0'), 10) || 0,
+      routerId,
       normalizeMac(req.body.mac),
     );
 
     res.status(201).json({
       code,
+      mode: 'machine',
       device_ip: device.ip,
       device_name: device.name,
       // The portal shows this so a customer knows how long an unclaimed session
@@ -372,6 +484,46 @@ router.post('/topup/start', (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Wallet topup start error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * How much is in a panel-held slot right now. The phone cannot ask the machine
+ * (an AirCoins board has no page), so it asks the panel, which reads the count
+ * the board reports on every heartbeat. Nothing is settled or credited here.
+ */
+router.post('/topup/peek', (req: Request, res: Response) => {
+  try {
+    const session = getTopupByCode(String(req.body.code || ''));
+    if (!session || session.account_id !== req.wallet!.accountId) {
+      res.status(404).json({ error: 'Unknown top-up session' });
+      return;
+    }
+    if (session.mode !== 'panel') {
+      res.status(400).json({ error: 'That session is not counted by the panel' });
+      return;
+    }
+
+    const acs = findSessionById(session.panel_session_id);
+    const live = acs ? livePulses(session.device_id, acs.id) : 0;
+    // The screen counts coins, so hand it coins - plus what those coins are
+    // worth at this machine, which is the money that will reach the balance.
+    const coins = Math.max(Number(session.coins) || 0, sessionCoinCount(session.device_id, live));
+    const open = !!acs && sessionIsLive(acs) && session.status === 'open';
+
+    res.json({
+      ok: true,
+      open,
+      coins,
+      value: pesos(coins * sessionCoinCentavos(session.device_id)),
+      remain_ms: open && acs ? sessionRemainingMs(acs) : 0,
+      status: session.status,
+      device_name: session.device_name,
+      valid_minutes: getWalletSettings().topup_validity_min,
+    });
+  } catch (error: any) {
+    console.error('Wallet topup peek error:', error);
+    res.status(500).json({ error: error.message || 'Could not read the coin slot' });
   }
 });
 
@@ -416,35 +568,63 @@ router.post('/topup/claim', async (req: Request, res: Response) => {
 
     let coins = Number(session.coins) || 0;
     if (session.status !== 'settled') {
-      const result = await nodeMcuService.settleCoinSession(session.device_ip, session.code);
-      if (result.status === 'unreachable') {
-        // Leave the session open: the coins are still inside the machine and the
-        // customer can claim again once it answers.
-        res.status(502).json({ error: `The coin machine ${session.device_name || session.device_ip} did not answer. Your coins are safe - try again in a moment.` });
-        return;
+      if (session.mode === 'panel') {
+        // Panel-held slot: the count comes from the board's own heartbeat, and
+        // settling it here is what stops the expiry path from ever reading it.
+        const acs = findSessionById(session.panel_session_id);
+        const live = acs ? livePulses(session.device_id, acs.id) : 0;
+        const preview = acs ? previewSession(session.device_id, live) : null;
+        // The row counts coins - one per drop - exactly as in machine mode.
+        // preview.coins is already money, so it stays on the panel session.
+        coins = acs ? sessionCoinCount(session.device_id, live) : 0;
+        if (acs) {
+          const money = preview ? preview.coins : 0;
+          recordSettled(acs.id, live, 0, { coins: money, minutes: 0 });
+          finishSession(acs.id, 'saved', { coins: money, minutes: 0 });
+        }
+        if (coins <= 0) {
+          failTopup(code, 'No coins were inserted');
+          res.status(400).json({ error: 'No coins were inserted in that session' });
+          return;
+        }
+        bankTopupCoins({ code, coins });
+      } else {
+        const result = await nodeMcuService.settleCoinSession(session.device_ip, session.code);
+        if (result.status === 'unreachable') {
+          // Leave the session open: the coins are still inside the machine and the
+          // customer can claim again once it answers.
+          res.status(502).json({ error: `The coin machine ${session.device_name || session.device_ip} did not answer. Your coins are safe - try again in a moment.` });
+          return;
+        }
+        if (result.status === 'busy') {
+          db.prepare("UPDATE wallet_topup_sessions SET status = 'failed', settled_at = datetime('now') WHERE id = ? AND status = 'open'")
+            .run(session.id);
+          res.status(409).json({ error: 'Another customer is using that machine now, so this session was closed. Please see an agent.' });
+          return;
+        }
+        if (result.status === 'error') {
+          res.status(502).json({ error: 'The machine rejected the claim. Please try again or see an agent.' });
+          return;
+        }
+        coins = result.coins;
+        if (coins <= 0) {
+          db.prepare("UPDATE wallet_topup_sessions SET status = 'failed', coins = 0, settled_at = datetime('now') WHERE id = ?")
+            .run(session.id);
+          res.status(400).json({ error: 'No coins were inserted in that session' });
+          return;
+        }
+        db.prepare("UPDATE wallet_topup_sessions SET status = 'settled', coins = ?, settled_at = datetime('now') WHERE id = ? AND status = 'open'")
+          .run(coins, session.id);
       }
-      if (result.status === 'busy') {
-        db.prepare("UPDATE wallet_topup_sessions SET status = 'failed', settled_at = datetime('now') WHERE id = ? AND status = 'open'")
-          .run(session.id);
-        res.status(409).json({ error: 'Another customer is using that machine now, so this session was closed. Please see an agent.' });
-        return;
-      }
-      if (result.status === 'error') {
-        res.status(502).json({ error: 'The machine rejected the claim. Please try again or see an agent.' });
-        return;
-      }
-      coins = result.coins;
-      if (coins <= 0) {
-        db.prepare("UPDATE wallet_topup_sessions SET status = 'failed', coins = 0, settled_at = datetime('now') WHERE id = ?")
-          .run(session.id);
-        res.status(400).json({ error: 'No coins were inserted in that session' });
-        return;
-      }
-      db.prepare("UPDATE wallet_topup_sessions SET status = 'settled', coins = ?, settled_at = datetime('now') WHERE id = ? AND status = 'open'")
-        .run(coins, session.id);
     }
 
-    const amountCentavos = coins * Math.max(1, settings.coin_value_centavos);
+    // Machine mode prices a coin by the wallet's configured value, as it always
+    // has. A panel-held slot knows the machine's own coin value, so that - the
+    // money physically in the box - is what the balance actually receives.
+    const coinCentavos = session.mode === 'panel'
+      ? sessionCoinCentavos(session.device_id)
+      : Math.max(1, settings.coin_value_centavos);
+    const amountCentavos = coins * coinCentavos;
     const note = amountCentavos > settings.max_topup_centavos
       ? `Above the configured maximum (${pesos(settings.max_topup_centavos)}) - check machine rates`
       : '';
@@ -488,13 +668,21 @@ router.post('/topup/claim', async (req: Request, res: Response) => {
     // settles coins (that is how it grants time to a normal customer). For a
     // wallet load that account is free internet nobody asked for, so remove it
     // straight away and flag it for the admin page if the router is unreachable.
-    db.prepare("UPDATE wallet_topup_sessions SET cleanup_needed = 1 WHERE id = ?").run(session.id);
-    const cleanup = await removeMachineUser(session.router_id, session.code);
-    if (cleanup.ok) {
-      db.prepare("UPDATE wallet_topup_sessions SET cleanup_needed = 0, cleanup_error = '' WHERE id = ?").run(session.id);
+    // A panel-held slot never names the code on the router, so there is nothing
+    // to clean up.
+    let cleanup: { ok: boolean; error: string } = { ok: true, error: '' };
+    if (session.mode === 'panel') {
+      db.prepare("UPDATE wallet_topup_sessions SET cleanup_needed = 0 WHERE id = ?").run(session.id);
     } else {
-      db.prepare('UPDATE wallet_topup_sessions SET cleanup_error = ? WHERE id = ?').run(cleanup.error || 'unknown', session.id);
-      console.error(`[wallet] credited ${code} but could not remove router user "${session.code}": ${cleanup.error}`);
+      db.prepare("UPDATE wallet_topup_sessions SET cleanup_needed = 1 WHERE id = ?").run(session.id);
+      const removed = await removeMachineUser(session.router_id, session.code);
+      cleanup = { ok: removed.ok, error: removed.error || '' };
+      if (cleanup.ok) {
+        db.prepare("UPDATE wallet_topup_sessions SET cleanup_needed = 0, cleanup_error = '' WHERE id = ?").run(session.id);
+      } else {
+        db.prepare('UPDATE wallet_topup_sessions SET cleanup_error = ? WHERE id = ?').run(cleanup.error || 'unknown', session.id);
+        console.error(`[wallet] credited ${code} but could not remove router user "${session.code}": ${cleanup.error}`);
+      }
     }
 
     const account = findAccountById(session.account_id);
@@ -510,6 +698,53 @@ router.post('/topup/claim', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Wallet topup claim error:', error);
     res.status(error.status || 500).json({ error: error.message || 'Claim failed' });
+  }
+});
+
+/**
+ * Give up a panel-held slot without losing what was already dropped there.
+ *
+ * JuanFi's machine keeps its own bank and the portal simply stops talking to
+ * it; a panel slot has to be closed by the panel, or the board would keep
+ * holding coins nobody collects. Coins already counted are banked for a later
+ * claim - the customer's money never evaporates because they pressed CANCEL.
+ */
+router.post('/topup/cancel', (req: Request, res: Response) => {
+  try {
+    const session = getTopupByCode(String(req.body.code || ''));
+    if (!session || session.account_id !== req.wallet!.accountId) {
+      res.status(404).json({ error: 'Unknown top-up session' });
+      return;
+    }
+    if (session.mode !== 'panel') {
+      // The machine handles its own cancel; nothing to close here.
+      res.json({ ok: true, status: session.status, coins: Number(session.coins) || 0 });
+      return;
+    }
+    if (session.status === 'credited' || session.status === 'settled') {
+      res.json({ ok: true, status: session.status, coins: Number(session.coins) || 0 });
+      return;
+    }
+
+    const acs = findSessionById(session.panel_session_id);
+    const live = acs ? livePulses(session.device_id, acs.id) : 0;
+    const coins = acs ? sessionCoinCount(session.device_id, live) : 0;
+    const preview = acs ? previewSession(session.device_id, live) : null;
+    if (acs) {
+      const money = preview ? preview.coins : 0;
+      recordSettled(acs.id, live, 0, { coins: money, minutes: 0 });
+      finishSession(acs.id, coins > 0 ? 'saved' : 'cancelled', { coins: money, minutes: 0 });
+    }
+    if (coins > 0) {
+      bankTopupCoins({ code: session.code, coins });
+      res.json({ ok: true, status: 'settled', coins });
+      return;
+    }
+    failTopup(session.code, 'Cancelled with no coins');
+    res.json({ ok: true, status: 'cancelled', coins: 0 });
+  } catch (error: any) {
+    console.error('Wallet topup cancel error:', error);
+    res.status(500).json({ error: error.message || 'Could not cancel the coin slot' });
   }
 });
 
@@ -844,7 +1079,7 @@ admin.get('/summary', (_req: Request, res: Response) => {
        COALESCE(SUM(CASE WHEN amount_centavos > 0 THEN amount_centavos ELSE 0 END), 0) AS in_centavos,
        COALESCE(SUM(CASE WHEN amount_centavos < 0 THEN -amount_centavos ELSE 0 END), 0) AS out_centavos,
        COALESCE(SUM(CASE WHEN kind = 'time_purchase' THEN minutes ELSE 0 END), 0) AS minutes_sold
-     FROM wallet_transactions WHERE date(created_at) = date('now')`
+     FROM wallet_transactions WHERE date(created_at, '${SHOP_SQL_SHIFT}') = date('now', '${SHOP_SQL_SHIFT}')`
   ).get() as any;
   const pending = db.prepare(
     "SELECT COUNT(*) AS n FROM wallet_topup_sessions WHERE status = 'credited' AND cleanup_needed = 1"

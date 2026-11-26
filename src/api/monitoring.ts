@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { getDb } from '../database';
 import { mikroTikService } from '../services/mikrotik';
 import { authMiddleware } from '../middleware/auth';
+import { SHOP_SQL_SHIFT } from '../services/shopTime';
 
 const router = Router();
 
@@ -42,10 +43,12 @@ function buildOverviewStats(db: any) {
     onlineUsers: scalar("SELECT COUNT(*) AS v FROM active_devices WHERE status = 'active'"),
     sales: {
       total: vouchers + gcash + coins,
+      // "Today" is the shop's own day: a sale at 00:23 local is today's money,
+      // even though its UTC stamp still says the day before.
       today:
-        sum('vouchers', 'price', "is_used = 1 AND date(used_at) = date('now')") +
-        sum('payments', 'amount', "status = 'paid' AND date(paid_at) = date('now')") +
-        sum('aircoins_sales', 'coins', "status IN ('ok', 'unassigned') AND date(created_at) = date('now')"),
+        sum('vouchers', 'price', `is_used = 1 AND date(used_at, '${SHOP_SQL_SHIFT}') = date('now', '${SHOP_SQL_SHIFT}')`) +
+        sum('payments', 'amount', `status = 'paid' AND date(paid_at, '${SHOP_SQL_SHIFT}') = date('now', '${SHOP_SQL_SHIFT}')`) +
+        sum('aircoins_sales', 'coins', `status IN ('ok', 'unassigned') AND date(created_at, '${SHOP_SQL_SHIFT}') = date('now', '${SHOP_SQL_SHIFT}')`),
       vouchers,
       gcash,
       coins,

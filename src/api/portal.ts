@@ -11,7 +11,7 @@ import { mikrotikTimeToSeconds, secondsToLimitUptime, generateSessionToken } fro
 import { grantMinutesToMac } from '../services/timeCredit';
 import { getTrialSettings, claimTrial, releaseTrialClaim } from '../services/trial';
 import { findDevice, loadDevices, firmwareTypeOf } from '../services/deviceRegistry';
-import { autoSelectVendo } from '../services/vendoAutoSelect';
+import { autoSelectVendo, namesNetwork, vendoServesClient } from '../services/vendoAutoSelect';
 import type { VendoCandidate } from '../services/vendoAutoSelect';
 import type { NodeMcuDevice } from '../services/nodemcu';
 import { getSettings, getStatus, statusIsOnline } from '../services/aircoins';
@@ -23,10 +23,89 @@ import { settleAirCoinsSession } from '../services/aircoinsSale';
 
 const router = Router();
 
+type HotspotVendo = { vendoName: string; vendoIp: string; chargingEnable: boolean; eloadEnable: boolean };
+
+function parseMultiVendoAddresses(content: string): HotspotVendo[] {
+  const addresses: HotspotVendo[] = [];
+  const arrayMatch = content.match(/var\s+multiVendoAddresses\s*=\s*\[([\s\S]*?)\];/);
+  if (!arrayMatch) return addresses;
+  const objRe = /\{([^}]+)\}/g;
+  let objMatch;
+  while ((objMatch = objRe.exec(arrayMatch[1])) !== null) {
+    const block = objMatch[1];
+    const nameM = block.match(/vendoName:\s*"([^"]*)"/);
+    const ipM = block.match(/vendoIp:\s*"([^"]*)"/);
+    const chM = block.match(/chargingEnable:\s*(true|false)/);
+    const elM = block.match(/eloadEnable:\s*(true|false)/);
+    if (ipM) {
+      addresses.push({
+        vendoName: nameM ? nameM[1] : '',
+        vendoIp: ipM[1],
+        chargingEnable: chM ? chM[1] === 'true' : false,
+        eloadEnable: elM ? elM[1] === 'true' : false,
+      });
+    }
+  }
+  return addresses;
+}
+
+function hotspotConfigPath(): string {
+  return path.join(__dirname, '..', '..', 'hotspot', 'assets', 'js', 'config.js');
+}
+
+/**
+ * Every machine a portal could offer, in the shape its picker uses: the
+ * AirCoins ones from the registry, then the JuanFi ones from the hotspot's own
+ * config.js. An address registered as AirCoins is skipped - the registry is
+ * what the panel actually sells through, and showing both would list one box
+ * twice.
+ *
+ * The /vendo-config payload and the coin endpoints both build their list here,
+ * so the machine the portal shows and the machine the panel accepts coins for
+ * cannot drift apart.
+ */
+function vendoCandidates(): VendoCandidate[] {
+  let devices: NodeMcuDevice[] = [];
+  try {
+    devices = loadDevices().filter((device) => firmwareTypeOf(device) === 'aircoins');
+  } catch {
+    devices = [];
+  }
+
+  const airCoins: VendoCandidate[] = devices.map((device) => ({
+    value: `aircoins:${device.id}`,
+    name: device.name || `AirCoins ${device.id}`,
+    ip: String(device.ip || '').trim(),
+    routerId: Number(device.routerId) || 0,
+    subnets: Array.isArray(device.hotspotSubnets) ? device.hotspotSubnets.map(String) : [],
+  }));
+
+  let legacy: HotspotVendo[] = [];
+  try {
+    legacy = parseMultiVendoAddresses(fs.readFileSync(hotspotConfigPath(), 'utf8'));
+  } catch {
+    legacy = [];
+  }
+  const ours = new Set(devices.map((device) => String(device.ip || '').trim()));
+
+  return [
+    ...airCoins,
+    ...legacy
+      .filter((vendo) => !ours.has(String(vendo.vendoIp || '').trim()))
+      .map((vendo) => ({
+        value: String(vendo.vendoIp || ''),
+        name: vendo.vendoName || vendo.vendoIp,
+        ip: String(vendo.vendoIp || ''),
+        routerId: 0,
+        subnets: [],
+      })),
+  ];
+}
+
 // Public endpoint — portal page needs vendo config pre-login
 router.get('/vendo-config', (req: Request, res: Response) => {
   try {
-    const configPath = path.join(__dirname, '..', '..', 'hotspot', 'assets', 'js', 'config.js');
+    const configPath = hotspotConfigPath();
     let content = '';
     try {
       content = fs.readFileSync(configPath, 'utf8');
@@ -48,27 +127,7 @@ router.get('/vendo-config', (req: Request, res: Response) => {
       return m ? m[1] : '';
     };
 
-    const addresses: Array<{ vendoName: string; vendoIp: string; chargingEnable: boolean; eloadEnable: boolean }> = [];
-    const arrayMatch = content.match(/var\s+multiVendoAddresses\s*=\s*\[([\s\S]*?)\];/);
-    if (arrayMatch) {
-      const objRe = /\{([^}]+)\}/g;
-      let objMatch;
-      while ((objMatch = objRe.exec(arrayMatch[1])) !== null) {
-        const block = objMatch[1];
-        const nameM = block.match(/vendoName:\s*"([^"]*)"/);
-        const ipM = block.match(/vendoIp:\s*"([^"]*)"/);
-        const chM = block.match(/chargingEnable:\s*(true|false)/);
-        const elM = block.match(/eloadEnable:\s*(true|false)/);
-        if (ipM) {
-          addresses.push({
-            vendoName: nameM ? nameM[1] : '',
-            vendoIp: ipM[1],
-            chargingEnable: chM ? chM[1] === 'true' : false,
-            eloadEnable: elM ? elM[1] === 'true' : false,
-          });
-        }
-      }
-    }
+    const addresses = parseMultiVendoAddresses(content);
 
     // INSERT COIN is posted straight to vendorIpAddress, and the dropdown the
     // portal shows is built from multiVendoAddresses. When those disagree the
@@ -127,26 +186,29 @@ router.get('/vendo-config', (req: Request, res: Response) => {
     // client look like 127.0.0.1 here (same reason as the trial claim).
     const clientIp = String(req.query.ip || '').trim();
     const clientRouterId = parseInt(String(req.query.routerId || ''), 10) || 0;
-    const candidates: VendoCandidate[] = [
-      ...airCoinsDevices.map((device) => ({
-        value: `aircoins:${device.id}`,
-        name: device.name || `AirCoins ${device.id}`,
-        ip: String(device.ip || '').trim(),
-        routerId: Number(device.routerId) || 0,
-        subnets: Array.isArray(device.hotspotSubnets) ? device.hotspotSubnets.map(String) : [],
-      })),
-      ...(cfg.multiVendoAddresses || []).map((vendo: any) => ({
-        value: String(vendo.vendoIp || ''),
-        name: vendo.vendoName || vendo.vendoIp,
-        ip: String(vendo.vendoIp || ''),
-        routerId: 0,
-        subnets: [],
-      })),
-    ];
+    const candidates: VendoCandidate[] = vendoCandidates();
     const auto = autoSelectVendo(clientIp, clientRouterId, candidates);
     cfg.autoVendo = auto ? auto.value : '';
     cfg.autoVendoName = auto ? auto.name : '';
     cfg.autoVendoReason = auto ? auto.reason : '';
+
+    // The phone's own address names the machine it may pay. From that moment
+    // the portal is locked to it and the other sub-vendos are not sent at all,
+    // so a stale localStorage entry or a hand-picked value cannot aim this
+    // customer's pesos at somebody else's slot. A fallback pick ("the only one
+    // on this router") only preselects - it never locks.
+    const locked = namesNetwork(auto);
+    if (locked) {
+      const chosen = candidates.find((candidate) => candidate.value === auto!.value);
+      const keep = new Set([auto!.value, chosen ? chosen.ip : ''].filter((value) => !!value));
+      cfg.multiVendoAddresses = (cfg.multiVendoAddresses || [])
+        .filter((vendo: any) => keep.has(String(vendo.vendoIp || '').trim()));
+      cfg.aircoinsVendos = airCoinsVendos
+        .filter((vendo) => keep.has(`aircoins:${vendo.deviceId}`) || keep.has(String(vendo.vendoIp || '').trim()));
+    }
+    cfg.vendoLocked = locked;
+    cfg.lockedVendo = locked ? auto!.value : '';
+    cfg.lockedVendoName = locked ? auto!.name : '';
 
     res.json(cfg);
   } catch (error: any) {
@@ -683,12 +745,29 @@ router.post('/trial', async (req: Request, res: Response) => {
  * `totalCoin` (pesos), `timeAdded` (seconds).
  */
 
-function airCoinsVendo(id: any): { id: number; name: string } | null {
+function airCoinsVendo(id: any): { id: number; name: string; ip: string } | null {
   const deviceId = parseInt(String(id || ''), 10);
   if (!Number.isFinite(deviceId) || deviceId <= 0) return null;
   const device = findDevice(deviceId);
   if (!device || firmwareTypeOf(device) !== 'aircoins') return null;
-  return { id: device.id, name: device.name || `AirCoins ${device.id}` };
+  return { id: device.id, name: device.name || `AirCoins ${device.id}`, ip: String(device.ip || '').trim() };
+}
+
+/*
+ * Is this coin action aimed at a machine that is not on the customer's network?
+ *
+ * VLAN isolation already keeps the sub-vendos off each other's segments, but an
+ * AirCoins box has no web server: every coin goes through this panel, so the
+ * panel is the only place that can refuse the wrong one. The address comes from
+ * the hotspot redirect - nginx makes every request look like this box, so the
+ * browser is the last place the phone's own lease is still known. When the
+ * panel cannot name the network it stays out of the way rather than guess.
+ */
+function foreignVendo(source: any, vendo: { id: number; ip: string }): boolean {
+  const clientIp = String(source?.ip || source?.clientIp || '').trim();
+  if (!clientIp) return false;
+  const routerId = parseInt(String(source?.routerId || '1'), 10) || 0;
+  return !vendoServesClient(clientIp, routerId, vendoCandidates(), `aircoins:${vendo.id}`, vendo.ip);
 }
 
 function sessionPesos(deviceId: number, session: AirCoinsSession): number {
@@ -706,6 +785,10 @@ router.get('/coins/rates', (req: Request, res: Response) => {
     const vendo = airCoinsVendo(req.query.deviceId);
     if (!vendo) {
       res.status(404).json({ error: 'Unknown vendo' });
+      return;
+    }
+    if (foreignVendo(req.query, vendo)) {
+      res.status(403).json({ error: 'This coin machine is not on your network' });
       return;
     }
     const settings = getSettings(vendo.id);
@@ -726,6 +809,14 @@ router.post('/coins/topup', (req: Request, res: Response) => {
     const vendo = airCoinsVendo(req.body?.deviceId);
     if (!vendo) {
       res.json({ status: 'false', errorCode: 'coin.slot.notavailable' });
+      return;
+    }
+
+    // The customer has to be on this machine's own network. Closing the slot
+    // later is not re-checked: the session is already bound to this vendo and
+    // to this MAC, and a coin dropped before a VLAN change must still count.
+    if (foreignVendo(req.body, vendo)) {
+      res.json({ status: 'false', errorCode: 'coin.slot.wrong.network' });
       return;
     }
 

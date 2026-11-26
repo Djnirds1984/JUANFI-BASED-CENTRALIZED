@@ -605,6 +605,29 @@ function loadVendoConfig() {
 function populateVendoSelect(selectId, divId, cfg) {
 	var sel = document.getElementById(selectId);
 	var selDiv = document.getElementById(divId);
+
+	// The phone's network owns exactly one machine. Nothing else was even sent,
+	// and the picker is no longer a choice: offering a list here is how a
+	// customer ends up feeding the vendo on the other side of the wall. VLAN
+	// isolation already keeps the machines apart; this keeps the pesos apart.
+	var locked = cfg.vendoLocked && cfg.lockedVendo ? String(cfg.lockedVendo) : '';
+	if (locked) {
+		selDiv.style.display = '';
+		var label = selDiv.querySelector ? selDiv.querySelector('label') : null;
+		if (label) label.textContent = 'Coin machine for your network';
+		sel.innerHTML = '';
+		var onlyOption = document.createElement('option');
+		onlyOption.value = locked;
+		onlyOption.textContent = cfg.lockedVendoName || locked;
+		sel.appendChild(onlyOption);
+		sel.value = locked;
+		sel.disabled = true;
+		vendorIpAddress = locked;
+		localStorage.setItem('selectedVendo', locked);
+		showAutoVendoNote(divId, cfg);
+		return;
+	}
+
 	var juanfi = (cfg.isMultiVendo && cfg.multiVendoAddresses) ? cfg.multiVendoAddresses : [];
 	var aircoins = cfg.aircoinsVendos || [];
 
@@ -686,7 +709,9 @@ function showAutoVendoNote(divId, cfg) {
 		div.appendChild(note);
 	}
 	if (!cfg) { note.style.display = 'none'; return; }
-	note.textContent = 'Auto-selected for your network' + (cfg.autoVendoName ? ': ' + cfg.autoVendoName : '');
+	note.textContent = cfg.vendoLocked
+		? 'The only coin machine on your network' + (cfg.lockedVendoName ? ': ' + cfg.lockedVendoName : '')
+		: 'Auto-selected for your network' + (cfg.autoVendoName ? ': ' + cfg.autoVendoName : '');
 	note.style.display = '';
 }
 
@@ -856,10 +881,16 @@ function airCoinsDevice() {
 }
 
 function panelPost(apiPath, payload) {
+	// Every coin action carries the phone's own lease: nginx makes the panel see
+	// this box as the client, and the address is what proves the customer is on
+	// the machine's network instead of feeding another sub-vendo's slot.
+	var body = payload || {};
+	if (ip) body.ip = ip;
+	if (routerId) body.routerId = routerId;
 	return fetch(window.location.origin + '/api/portal' + apiPath, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(payload),
+		body: JSON.stringify(body),
 	}).then(function(r) { return r.json(); });
 }
 
@@ -928,6 +959,7 @@ var errorCodeMap = {
 	'coin.slot.banned': 'Banned from coin slot',
 	'coin.slot.notavailable': 'Coin slot not available',
 	'coin.slot.offline': 'This sub-vendo is offline. Please tell the operator.',
+	'coin.slot.wrong.network': 'This machine does not serve your network. Please insert the coin at the machine on your own station.',
 	'coins.no.rate': 'Not enough for the lowest rate yet',
 	'invalid.mac': 'Invalid device address, please refresh the portal',
 	'server.error': 'The panel could not answer, please try again',
@@ -1641,9 +1673,22 @@ function payOnline(rateId) {
 // one that prices the coins, so the quote has to come from there. A JuanFi
 // vendo still answers /getRates itself, exactly as before.
 function loadAirCoinsPromoRates(list) {
-	fetch(window.location.origin + '/api/portal/coins/rates?deviceId=' + airCoinsDevice(), { cache: 'no-store' })
+	var url = window.location.origin + '/api/portal/coins/rates?deviceId=' + airCoinsDevice();
+	if (ip) url += '&ip=' + encodeURIComponent(ip);
+	if (routerId) url += '&routerId=' + encodeURIComponent(routerId);
+	fetch(url, { cache: 'no-store' })
 		.then(function(r) { return r.json(); })
 		.then(function(data) {
+			// The panel refuses a machine that does not serve this phone's network.
+			// Say so plainly: an empty rate list looks like a broken promo page.
+			if (data && data.error && !data.rates) {
+				list.innerHTML = '';
+				var refusal = document.createElement('div');
+				refusal.style.cssText = 'text-align:center;color:#f44336;padding:12px;';
+				refusal.textContent = data.error;
+				list.appendChild(refusal);
+				return;
+			}
 			var rates = (data && data.rates) || [];
 			var html = '';
 			rates.forEach(function(rate) {

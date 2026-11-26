@@ -12366,6 +12366,15 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
         </select>
       </div>
       <p style="font-size:.8rem;opacity:.75">Changing the firmware type moves this machine to the other subpage and stops the panel from using the matching settings.</p>
+      <div class="form-row">
+        <label>Portal networks (VLANs)</label>
+        <input id="nd-subnets" class="form-control" value="${(device.hotspotSubnets || []).map((s) => this.escapeHtml(s)).join(', ')}" placeholder="10.0.10.0/24, 10.0.20.0/24">
+      </div>
+      <p style="font-size:.8rem;opacity:.75">
+        The hotspot subnets this machine serves, one per VLAN or SSID. A customer whose address falls inside
+        one of them can only ever pay this vendo - the portal hides the others and the panel refuses them.
+        Leave it empty to use the machine's own /24.
+      </p>
       <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="${this.escapeHtml(device.username)}"></div>
       <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password" value="${this.escapeHtml(device.password)}"></div>
     `;
@@ -12382,6 +12391,7 @@ const airCoinsRows = (airCoins.rows || []).map((sale) => `
             username: document.getElementById('nd-user').value,
             password: document.getElementById('nd-pass').value,
             firmwareType,
+            hotspotSubnets: document.getElementById('nd-subnets').value,
           });
           this._subvendoType = res.device && res.device.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
           this.closeModal();

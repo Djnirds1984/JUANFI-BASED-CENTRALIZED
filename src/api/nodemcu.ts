@@ -380,6 +380,20 @@ router.get('/devices', (_req: Request, res: Response) => {
   res.json({ devices });
 });
 
+/**
+ * The hotspot networks a machine serves, from "10.0.10.0/24, 10.0.20.0/24" or
+ * an array. Anything that is not a CIDR or an address is dropped rather than
+ * stored: one bad entry would move every lease on that VLAN to another
+ * machine.
+ */
+function parseHotspotSubnets(value: any): string[] {
+  if (value === undefined || value === null) return [];
+  const list = Array.isArray(value) ? value : String(value).split(/[\s,]+/);
+  return list
+    .map((entry) => String(entry || '').trim())
+    .filter((entry) => /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(entry));
+}
+
 router.post('/devices', async (req: Request, res: Response) => {
   const { name, ip, username, password, mac } = req.body;
   if (!name || !ip) {
@@ -390,6 +404,7 @@ router.post('/devices', async (req: Request, res: Response) => {
   const devices = loadDevices();
   const id = devices.length > 0 ? Math.max(...devices.map((d) => d.id)) + 1 : 1;
   const routerId = resolveVendoRouterId(req.body.routerId);
+  const subnets = parseHotspotSubnets(req.body.hotspotSubnets);
   const device: NodeMcuDevice = {
     id,
     name: name || 'NodeMCU',
@@ -399,6 +414,7 @@ router.post('/devices', async (req: Request, res: Response) => {
     firmwareType: req.body.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi',
     ...(mac ? { mac } : {}),
     ...(routerId ? { routerId } : {}),
+    ...(subnets.length ? { hotspotSubnets: subnets } : {}),
   };
   devices.push(device);
   saveDevices(devices);
@@ -454,7 +470,7 @@ router.put('/devices/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { name, ip, username, password, mac, routerId, firmwareType } = req.body;
+  const { name, ip, username, password, mac, routerId, firmwareType, hotspotSubnets } = req.body;
   if (name !== undefined) devices[idx].name = name;
   if (ip !== undefined) devices[idx].ip = ip;
   if (username !== undefined) devices[idx].username = username;
@@ -462,6 +478,11 @@ router.put('/devices/:id', (req: Request, res: Response) => {
   if (firmwareType !== undefined) devices[idx].firmwareType = firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
   if (mac !== undefined) devices[idx].mac = mac;
   if (routerId !== undefined) devices[idx].routerId = routerId;
+  if (hotspotSubnets !== undefined) {
+    const subnets = parseHotspotSubnets(hotspotSubnets);
+    if (subnets.length) devices[idx].hotspotSubnets = subnets;
+    else delete devices[idx].hotspotSubnets;
+  }
   saveDevices(devices);
   nodeMcuService.clearSession(id);
   res.json({ device: devices[idx] });

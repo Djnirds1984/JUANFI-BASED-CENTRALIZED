@@ -90,13 +90,18 @@ export function autoSelectVendo(
     const sameAddress = usable.find((candidate) => ipv4ToInt(candidate.ip) === addr);
     if (sameAddress) return pick(sameAddress, 'address');
 
-    const declared = usable.find((candidate) =>
+    // A segment names a machine only when exactly one machine claims it. Two
+    // slots on one flat LAN (the usual small-shop wiring) would otherwise let
+    // the first entry claim every lease on it - and then refuse those
+    // customers the other slot that is right in front of them.
+    const declared = usable.filter((candidate) =>
       (candidate.subnets || []).some((subnet) => ipInSubnet(clientIp, subnet)),
     );
-    if (declared) return pick(declared, 'subnet');
-
-    const sameNetwork = usable.find((candidate) => ipInSubnet(clientIp, candidate.ip));
-    if (sameNetwork) return pick(sameNetwork, 'subnet');
+    if (declared.length === 1) return pick(declared[0], 'subnet');
+    if (declared.length === 0) {
+      const sameNetwork = usable.filter((candidate) => ipInSubnet(clientIp, candidate.ip));
+      if (sameNetwork.length === 1) return pick(sameNetwork[0], 'subnet');
+    }
   }
 
   const onRouter = usable.filter((candidate) => routerId > 0 && candidate.routerId === routerId);
@@ -104,4 +109,46 @@ export function autoSelectVendo(
 
   if (usable.length === 1) return pick(usable[0], 'only');
   return null;
+}
+
+/**
+ * True when the pick came from the phone's own address - the machine wired to
+ * that segment. `router` and `only` are fallbacks: they say "the panel has
+ * nothing better", not "this is the machine in front of the customer", so a
+ * portal must never lock a customer out on one of them.
+ */
+export function namesNetwork(choice: AutoVendoChoice | null): boolean {
+  return !!choice && (choice.reason === 'address' || choice.reason === 'subnet');
+}
+
+/**
+ * May a phone on `clientIp` pay the machine identified by `value` (a portal
+ * value such as `aircoins:3` or an address) or by `ip`?
+ *
+ * Undecided networks always answer yes. The panel is the only route an AirCoins
+ * box has, which also makes it the only place that can refuse the wrong one -
+ * the portal's single visible machine is a courtesy, not the guarantee.
+ */
+export function vendoServesClient(
+  clientIp: string,
+  routerId: number,
+  candidates: VendoCandidate[],
+  value: string,
+  ip = '',
+): boolean {
+  const usable = (candidates || []).filter((candidate) => candidate && candidate.value);
+  const choice = autoSelectVendo(clientIp, routerId, usable);
+  if (!namesNetwork(choice)) return true;
+
+  // One machine, two possible names: the registry's `aircoins:<id>` and the
+  // address the legacy list knows it by. Accept either on both sides, or a
+  // re-registered box would refuse the very customer standing in front of it.
+  const chosen = usable.find((candidate) => candidate.value === choice!.value);
+  const identity = new Set<string>([choice!.value]);
+  const chosenIp = chosen ? String(chosen.ip || '').trim() : '';
+  if (chosenIp) identity.add(chosenIp);
+
+  const wanted = String(value || '').trim();
+  const machineIp = String(ip || '').trim();
+  return identity.has(wanted) || (machineIp !== '' && identity.has(machineIp));
 }

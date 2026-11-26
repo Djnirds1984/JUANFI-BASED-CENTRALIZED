@@ -39,7 +39,7 @@ export interface AirCoinsSession {
   deviceId: number;
   /** What the phone presented, mirroring JuanFi's currentActiveVoucher. */
   voucher: string;
-  /** PC this session credits, without separators. Same identity, no colons. */
+  /** Hotspot device this session credits, without separators. Same identity, no colons. */
   mac: string;
   routerId: number;
   /** Time sale (default) or wallet load. Absent on sessions written before this

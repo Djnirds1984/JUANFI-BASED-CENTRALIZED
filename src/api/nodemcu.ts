@@ -772,8 +772,8 @@ router.post('/aircoins/claims/:id/reject', (req: Request, res: Response) => {
   res.json({ message: 'Pairing request rejected' });
 });
 
-// Every coin value and rate, the PC the box credits, plus the key the firmware
-// needs and what the machine last reported about itself.
+// Every coin value and rate, the device the box credits, plus the key the
+// firmware needs and what the machine last reported about itself.
 router.get('/devices/:id/aircoins', (req: Request, res: Response) => {
   const device = findDevice(parseInt(req.params.id));
   if (!device) { res.status(404).json({ error: 'Device not found' }); return; }

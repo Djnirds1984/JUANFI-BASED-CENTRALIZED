@@ -27,8 +27,10 @@ export interface AirCoinsSettings {
   /** Secret the machine presents when it pulls config or reports coins. */
   deviceKey: string;
   /**
-   * The PC this box sells time to. One coin box sits beside one seat, and the
-   * box has no screen to ask which, so the target is set here.
+   * Fixed device the coins must credit, when the shop needs one. Empty is the
+   * normal case: the portal credits whichever device opened the coin slot.
+   * This is a hotspot sub-vendo, so the target is a customer device - a phone,
+   * a tablet, or the set-top box a whole network shares.
    */
   clientMac: string;
   /** GPIO numbers on the vendo; -1 switches that device off. */

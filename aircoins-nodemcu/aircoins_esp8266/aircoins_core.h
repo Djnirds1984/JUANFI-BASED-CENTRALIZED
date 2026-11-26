@@ -6,9 +6,11 @@
  * and JavaScript of the pairing portal and fail.
  *
  * The board is a coin slot and nothing else: no display, no admin page, no
- * listening port. Rates, pricing and the PC that gets the time live in the
- * panel. Its only HTTP server is the Aircoins_setup pairing portal, and only
- * while the machine has no device key.
+ * listening port. It sells HOTSPOT time - the box a customer walks up to and
+ * feeds so their own phone gets online. It is not a pisonet seat timer; that is
+ * a different firmware. Rates, pricing and the device that gets the time live
+ * in the panel. Its only HTTP server is the Aircoins_setup pairing portal, and
+ * only while the machine has no device key.
  *
  * Requires ArduinoJson (v6.21.5 or newer in the 6.x line).
  */
@@ -540,10 +542,12 @@ inline void runSetupPortal(StoredConfig &cfg) {
  * AirCoins sub-vendo.
  *
  * A coin slot and nothing else: no display, no admin page, no listening port.
- * Rates, pricing and the PC that gets the time all live in the panel. The board
- * counts pulses, asks the panel what the bank is worth and reports back, so the
- * only HTTP server it ever runs is the pairing portal in setup_portal.h - and
- * only while the machine has no device key.
+ * It sells hotspot time for the customer standing in front of it - a phone or a
+ * tablet, not a pisonet seat, which is a separate firmware. Rates, pricing and
+ * the device that gets the time all live in the panel. The board counts pulses,
+ * asks the panel what the bank is worth and reports back, so the only HTTP
+ * server it ever runs is the pairing portal in setup_portal.h - and only while
+ * the machine has no device key.
  *
  * A sale is only forgotten once the panel confirms it. Anything the panel did
  * not answer stays in the bank and is offered again on the next poll.

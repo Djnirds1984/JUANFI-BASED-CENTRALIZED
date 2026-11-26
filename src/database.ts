@@ -360,7 +360,7 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 
     -- One row per AirCoins coin sale, whoever it was sold to. An unassigned row
-    -- (mac = '') is money the box took with no PC to credit: it is still revenue
+    -- (mac = '') is money the box took with no device to credit: it is still revenue
     -- the shop earned, so it is recorded instead of refused. The sales report
     -- reads this, which is what puts AirCoins boxes in the same report as
     -- JuanFi counters, vouchers and GCash. A feed into one coin slot is ONE row

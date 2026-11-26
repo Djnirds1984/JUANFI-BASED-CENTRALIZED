@@ -8716,10 +8716,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="subvendo-section" style="border-left:3px solid #ff9800;padding-left:.75rem">
           <h4 style="color:#ff9800">No fixed sale target</h4>
           <p style="font-size:.85rem;margin:0">
-            Coins are credited to whichever PC opens the coin slot in the portal, so this box does not
-            need one fixed MAC. Leave <strong>Sale Target</strong> empty to sell to any device, and fill
-            it in only when every coin here must always credit the same PC. Every coin is recorded in
-            the Sales Report either way.
+            Coins buy hotspot time for whichever device opens the coin slot in the portal, so this
+            box does not need one fixed MAC. Leave <strong>Sale Target</strong> empty to sell to any
+            device, and fill it in only when every coin here must always credit the same one. Every
+            coin is recorded in the Sales Report either way.
           </p>
         </div>` : ''}
 
@@ -8756,12 +8756,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="subvendo-section">
           <h4>Sale Target</h4>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
-            Optional. Leave it empty and each sale credits whichever PC opened the coin slot in the
-            portal; fill it in when every coin from this box must always credit the same computer.
-            Enter the MAC the hotspot sees for that PC.
+            Optional. Leave it empty and each sale credits whichever device opened the coin slot in
+            the portal; fill it in when every coin from this box must always credit the same one - a
+            fixed handset, or the set-top box a whole network shares.
+            Enter the MAC the hotspot sees for that device.
           </p>
           <div class="form-row">
-            <label>PC MAC:</label>
+            <label>Device MAC:</label>
             <input id="ac-clientMac" class="form-control" placeholder="AA:BB:CC:DD:EE:FF" value="${this.escapeHtml(s.clientMac || '')}">
           </div>
         </div>

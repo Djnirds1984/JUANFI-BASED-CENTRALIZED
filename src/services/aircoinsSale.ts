@@ -10,12 +10,12 @@ import {
 } from './aircoinsSession';
 
 /*
- * Turning a vendo's coins into time on a PC. Two callers reach this: the board
- * itself when it sells a bank on its own, and a portal coin session when the
- * customer presses SAVE. Both must credit through the same path as a coin
- * dropped at a JuanFi machine - bind the MAC, stack onto what is left, and push
- * the new expiry to the router - or the session would hand out time that the
- * router never learns about.
+ * Turning a vendo's coins into hotspot time for one device. Two callers reach
+ * this: the board itself when it sells a bank on its own, and a portal coin
+ * session when the customer presses SAVE. Both must credit through the same
+ * path as a coin dropped at a JuanFi machine - bind the MAC, stack onto what is
+ * left, and push the new expiry to the router - or the session would hand out
+ * time that the router never learns about.
  */
 
 export type AirCoinsSaleStatus = 'ok' | 'no-rate' | 'no-router' | 'unassigned' | 'error';
@@ -207,11 +207,11 @@ function writeSlotSale(
 }
 
 /**
- * Coins taken with no PC to credit: no fixed sale target on the box and no
+ * Coins taken with no device to credit: no fixed sale target on the box and no
  * MAC from the board. Recorded as revenue so the machine keeps selling and the
  * operator can see what came in, instead of the box refusing the bank forever.
  */
-export function recordUnassignedSale(deviceId: number, coins: number, reason = 'No PC was open to credit'): number {
+export function recordUnassignedSale(deviceId: number, coins: number, reason = 'No device was open to credit'): number {
   recordRedeem(deviceId, coins, 0, reason);
   return recordSale({ deviceId, coins, minutes: 0, status: 'unassigned', error: reason });
 }

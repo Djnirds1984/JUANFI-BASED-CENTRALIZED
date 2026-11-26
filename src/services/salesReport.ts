@@ -270,8 +270,8 @@ export async function buildSalesReport(
 
   // AirCoins sales are logged once per coin slot, so unlike the JuanFi counters
   // they can be filtered by date. Only coins that were actually banked - credited
-  // to a PC or logged as unassigned - are revenue: a no-rate or error row is the
-  // same coins waiting for a retry, and counting it would double the sale.
+  // to a device or logged as unassigned - are revenue: a no-rate or error row is
+  // the same coins waiting for a retry, and counting it would double the sale.
   const aAgg = db.prepare(
     `SELECT COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN 1 ELSE 0 END), 0) AS n,
             COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN coins ELSE 0 END), 0) AS coins,

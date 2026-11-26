@@ -8,7 +8,14 @@ import { authMiddleware } from '../middleware/auth';
 import { initSession } from '../services/deviceSessions';
 import { mikroTikService } from '../services/mikrotik';
 import { provisionSubVendo } from '../services/vendoProvision';
-import { loadDevices, saveDevices, findDevice } from '../services/deviceRegistry';
+import { loadDevices, saveDevices, findDevice, firmwareTypeOf } from '../services/deviceRegistry';
+import {
+  planCoinAllocation, getSettings, saveSettings, regenerateKey, queueCommand,
+  acknowledgeCommand, findDeviceIdByKey, recordStatus, getStatus, recordRedeem,
+  statusIsOnline, submitClaim, findClaimByToken, findClaim, approveClaim,
+  rejectClaim, loadClaims, normalizeMac,
+} from '../services/aircoins';
+import { creditMacAccount, bindMacToken, propagateTimeToRouter } from '../services/timeCredit';
 
 const router = Router();
 
@@ -62,6 +69,205 @@ router.post('/coin-insert', (req: Request, res: Response) => {
   }
 });
 
+/*
+ * AirCoins machine endpoints. Our own firmware has no web UI, so the only way
+ * it learns anything is by asking: it polls /aircoins/status, reads the config
+ * version from the reply, and re-fetches /aircoins/config when that version
+ * changed. Every call is authenticated by the per-device key the panel shows
+ * on the AirCoins subpage, never by an admin session - a machine in the field
+ * must not be able to read the panel.
+ */
+
+function airCoinsDeviceId(key: any): number | null {
+  const deviceId = findDeviceIdByKey(key);
+  if (!deviceId) return null;
+  const device = findDevice(deviceId);
+  if (!device || firmwareTypeOf(device) !== 'aircoins') return null;
+  return deviceId;
+}
+
+function settleDeviceRouter(device: NodeMcuDevice): number {
+  return device.routerId || resolveVendoRouterId();
+}
+
+router.get('/aircoins/config', (req: Request, res: Response) => {
+  try {
+    const deviceId = airCoinsDeviceId(req.query.key);
+    if (!deviceId) { res.status(401).json({ error: 'Unknown device key' }); return; }
+    const device = findDevice(deviceId)!;
+    const settings = getSettings(deviceId);
+    res.json({
+      status: 'ok',
+      version: settings.version,
+      device: { id: device.id, name: device.name, ip: device.ip, mac: device.mac || '' },
+      settings: {
+        clientMac: settings.clientMac,
+        coinPin: settings.coinPin,
+        buzzerPin: settings.buzzerPin,
+        ledPin: settings.ledPin,
+        slotLockPin: settings.slotLockPin,
+        coinValue: settings.coinValue,
+        pulsesPerCoin: settings.pulsesPerCoin,
+        coinWaitSeconds: settings.coinWaitSeconds,
+        maxCoins: settings.maxCoins,
+        abuseCount: settings.abuseCount,
+        banMinutes: settings.banMinutes,
+        rates: settings.rates,
+        thankYouSeconds: settings.thankYouSeconds,
+        buzzer: settings.buzzer,
+        pollSeconds: settings.pollSeconds,
+        pendingCommand: settings.pendingCommand,
+      },
+    });
+  } catch (error: any) {
+    console.error('AirCoins config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Heartbeat: records what the machine reports and hands back the config version
+// plus any command the operator queued. One call does liveness, change
+// detection and control, so the device needs no inbound port at all.
+router.post('/aircoins/status', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const deviceId = airCoinsDeviceId(body.key || req.query.key);
+    if (!deviceId) { res.status(401).json({ error: 'Unknown device key' }); return; }
+
+    recordStatus(deviceId, body);
+    if (body.commandDone) acknowledgeCommand(deviceId, String(body.commandDone));
+    const settings = getSettings(deviceId);
+    res.json({
+      status: 'ok',
+      version: settings.version,
+      pollSeconds: settings.pollSeconds,
+      pendingCommand: settings.pendingCommand,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('AirCoins status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// The coins bought the time, so the panel decides how much time - not the
+// machine. Same credit path as a portal coin insert, so a vendo sale stacks
+// onto whatever the customer already has and survives a pause or a roam.
+router.post('/aircoins/redeem', async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const deviceId = airCoinsDeviceId(body.key);
+  if (!deviceId) { res.status(401).json({ error: 'Unknown device key' }); return; }
+
+  const macNoColon = String(body.mac || '').replace(/[:\-]/g, '').toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
+    res.status(400).json({ error: 'mac (12 hex chars) is required' });
+    return;
+  }
+  const coins = Math.floor(Number(body.amount) || 0);
+  if (coins <= 0) { res.status(400).json({ error: 'amount must be a positive number' }); return; }
+
+  const settings = getSettings(deviceId);
+  const plan = planCoinAllocation(settings.rates, coins);
+  if (plan.minutes <= 0) {
+    recordRedeem(deviceId, coins, 0, 'No rate covers this amount');
+    res.json({ status: 'no-rate', amount: coins, leftover: plan.leftover });
+    return;
+  }
+
+  const device = findDevice(deviceId)!;
+  const routerId = settleDeviceRouter(device);
+  const db = getDb();
+  const routerRow = db.prepare(
+    'SELECT id, auth_mode, radius_local_users FROM routers WHERE id = ? AND is_active = 1'
+  ).get(routerId) as any;
+  if (!routerRow) {
+    recordRedeem(deviceId, coins, 0, 'Router not found or inactive');
+    res.status(404).json({ error: 'Router not found or inactive' });
+    return;
+  }
+
+  try {
+    const authMode = routerRow.auth_mode || 'api';
+    const hybridLocalUsers = Number(routerRow.radius_local_users) === 1;
+    const { expiryAt, hadRemaining, accountUsername } = db.transaction(() =>
+      creditMacAccount(db, routerId, macNoColon, plan.minutes, authMode))();
+
+    bindMacToken(routerId, macNoColon, accountUsername, expiryAt);
+    await propagateTimeToRouter({
+      db, routerId, macNoColon, authMode, hybridLocalUsers,
+      isExtend: hadRemaining, expiryAt, hadRemaining, accountUsername,
+      logTag: 'aircoins',
+    });
+
+    const remainingSeconds = Math.max(
+      0,
+      Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
+    );
+    recordRedeem(deviceId, coins, plan.minutes);
+    console.log(`aircoins: vendo ${deviceId} took ${coins} -> ${plan.minutes}min for ${macNoColon} (router ${routerId})`);
+    res.json({
+      status: 'ok',
+      minutes: plan.minutes,
+      spent: plan.spent,
+      leftover: plan.leftover,
+      applied: plan.applied.map((rate) => rate.name),
+      username: accountUsername,
+      expiryAt,
+      remainingSeconds,
+    });
+  } catch (error: any) {
+    recordRedeem(deviceId, coins, 0, error.message);
+    console.error('AirCoins redeem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/*
+ * Pairing requests. A vendo that has never been registered boots into the
+ * `Aircoins_setup` access point, joins the shop WiFi and posts here. The answer
+ * stays "pending" until an admin accepts it on the AirCoins subpage, so the
+ * machine cannot register itself.
+ */
+router.post('/aircoins/claim', (req: Request, res: Response) => {
+  try {
+    const claim = submitClaim(req.body || {});
+    const approved = claim.status === 'approved' && claim.deviceId ? getSettings(claim.deviceId) : null;
+    console.log(`aircoins: pairing request from ${claim.mac} (${claim.ip || 'no ip'}) -> ${claim.status}`);
+    res.json({
+      status: claim.status,
+      token: claim.token,
+      claimId: claim.id,
+      deviceId: claim.deviceId,
+      deviceKey: approved ? approved.deviceKey : '',
+      pollSeconds: approved ? approved.pollSeconds : 5,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// The machine repeats this while it waits on the setup screen, and again after
+// the admin accepts to collect the key it needs for every later call.
+router.get('/aircoins/claim/status', (req: Request, res: Response) => {
+  const claim = findClaimByToken(req.query.token);
+  if (!claim) { res.status(404).json({ error: 'Unknown pairing token' }); return; }
+  if (claim.status !== 'approved' || !claim.deviceId) {
+    res.json({ status: claim.status, token: claim.token });
+    return;
+  }
+  const device = findDevice(claim.deviceId);
+  const settings = getSettings(claim.deviceId);
+  res.json({
+    status: 'approved',
+    token: claim.token,
+    deviceId: claim.deviceId,
+    deviceKey: settings.deviceKey,
+    pollSeconds: settings.pollSeconds,
+    routerId: device ? device.routerId || 0 : 0,
+    name: device ? device.name : '',
+  });
+});
+
 router.use(authMiddleware);
 
 /**
@@ -101,6 +307,7 @@ router.post('/devices', async (req: Request, res: Response) => {
     ip,
     username: username || 'admin',
     password: password || '',
+    firmwareType: req.body.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi',
     ...(mac ? { mac } : {}),
     ...(routerId ? { routerId } : {}),
   };
@@ -158,11 +365,12 @@ router.put('/devices/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { name, ip, username, password, mac, routerId } = req.body;
+  const { name, ip, username, password, mac, routerId, firmwareType } = req.body;
   if (name !== undefined) devices[idx].name = name;
   if (ip !== undefined) devices[idx].ip = ip;
   if (username !== undefined) devices[idx].username = username;
   if (password !== undefined) devices[idx].password = password;
+  if (firmwareType !== undefined) devices[idx].firmwareType = firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
   if (mac !== undefined) devices[idx].mac = mac;
   if (routerId !== undefined) devices[idx].routerId = routerId;
   saveDevices(devices);
@@ -366,6 +574,130 @@ router.get('/devices/:id/ping', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+/*
+ * AirCoins settings. These are the only copy that exists: the machine keeps no
+ * local form and serves no admin page, so what is stored here is exactly what
+ * the next config pull will apply.
+ */
+
+// Machines sitting on their setup access point, waiting for a human to say yes.
+router.get('/aircoins/claims', (_req: Request, res: Response) => {
+  res.json({ claims: loadClaims().filter((claim) => claim.status === 'pending') });
+});
+
+router.post('/aircoins/claims/:id/approve', async (req: Request, res: Response) => {
+  const claim = findClaim(parseInt(req.params.id));
+  if (!claim) { res.status(404).json({ error: 'Pairing request not found' }); return; }
+  if (claim.status === 'rejected') { res.status(409).json({ error: 'This request was rejected' }); return; }
+
+  const devices = loadDevices();
+  const routerId = resolveVendoRouterId(req.body && req.body.routerId);
+  let device = devices.find((d) => normalizeMac(d.mac) === claim.mac);
+
+  if (!device) {
+    device = {
+      id: devices.length > 0 ? Math.max(...devices.map((d) => d.id)) + 1 : 1,
+      name: (req.body && req.body.name) || claim.name || 'AirCoins Vendo',
+      ip: claim.ip || '',
+      username: '',
+      password: '',
+      mac: claim.mac,
+      firmwareType: 'aircoins',
+      ...(routerId ? { routerId } : {}),
+    };
+    devices.push(device);
+  } else {
+    // A board that was re-flashed or re-addressed comes back with the same
+    // MAC; accepting it again must update the machine, not duplicate it.
+    device.firmwareType = 'aircoins';
+    if (claim.ip) device.ip = claim.ip;
+    if (routerId) device.routerId = routerId;
+  }
+  saveDevices(devices);
+
+  // Settings first: this is what mints the device key the vendo is waiting for.
+  const settings = getSettings(device.id);
+  approveClaim(claim.id, device.id);
+
+  // The router side is best-effort. The machine is registered either way and
+  // the operator can re-run it from the device list.
+  let provision: any = null;
+  try {
+    provision = await provisionSubVendo(routerId, { name: device.name, ip: device.ip, mac: device.mac });
+    if (provision.mac && !device.mac) {
+      device.mac = provision.mac;
+      saveDevices(loadDevices().map((d) => (d.id === device!.id ? { ...d, mac: provision.mac } : d)));
+    }
+  } catch (err: any) {
+    provision = { mac: '', ok: false, steps: [], error: err.message };
+  }
+
+  res.json({ message: 'Vendo accepted', device, settings, provision });
+});
+
+router.post('/aircoins/claims/:id/reject', (req: Request, res: Response) => {
+  const claim = rejectClaim(parseInt(req.params.id));
+  if (!claim) { res.status(404).json({ error: 'Pairing request not found' }); return; }
+  res.json({ message: 'Pairing request rejected' });
+});
+
+// Every coin value and rate, the PC the box credits, plus the key the firmware
+// needs and what the machine last reported about itself.
+router.get('/devices/:id/aircoins', (req: Request, res: Response) => {
+  const device = findDevice(parseInt(req.params.id));
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
+  if (firmwareTypeOf(device) !== 'aircoins') {
+    res.status(409).json({ error: 'This device is not an AirCoins sub-vendo' });
+    return;
+  }
+  const settings = getSettings(device.id);
+  const status = getStatus(device.id);
+  res.json({
+    device,
+    settings,
+    status,
+    online: statusIsOnline(status, settings.pollSeconds),
+  });
+});
+
+router.put('/devices/:id/aircoins', (req: Request, res: Response) => {
+  const device = findDevice(parseInt(req.params.id));
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
+  if (firmwareTypeOf(device) !== 'aircoins') {
+    res.status(409).json({ error: 'This device is not an AirCoins sub-vendo' });
+    return;
+  }
+  res.json({ message: 'Settings saved', settings: saveSettings(device.id, req.body) });
+});
+
+router.post('/devices/:id/aircoins/key', (req: Request, res: Response) => {
+  const device = findDevice(parseInt(req.params.id));
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
+  if (firmwareTypeOf(device) !== 'aircoins') {
+    res.status(409).json({ error: 'This device is not an AirCoins sub-vendo' });
+    return;
+  }
+  res.json({ message: 'Device key replaced. Re-flash or re-enter it on the vendo.', settings: regenerateKey(device.id) });
+});
+
+router.post('/devices/:id/aircoins/command', (req: Request, res: Response) => {
+  const device = findDevice(parseInt(req.params.id));
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
+  if (firmwareTypeOf(device) !== 'aircoins') {
+    res.status(409).json({ error: 'This device is not an AirCoins sub-vendo' });
+    return;
+  }
+  const command = String(req.body && req.body.command || '');
+  if (!['restart', 'sync'].includes(command)) {
+    res.status(400).json({ error: 'command must be restart or sync' });
+    return;
+  }
+  res.json({
+    message: command === 'restart' ? 'Restart queued for the next poll' : 'Config refresh queued',
+    settings: queueCommand(device.id, command),
+  });
 });
 
 export default router;

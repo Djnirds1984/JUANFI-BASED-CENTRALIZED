@@ -7723,30 +7723,56 @@ Then join your network:
     }
   },
 
+  // Two kinds of coin machine live under this page, and they are managed in
+  // completely different ways: a JuanFi board keeps its own admin page and the
+  // panel talks to it, while an AirCoins board has no web UI at all and takes
+  // every setting from here. Each type is its own subpage so the two setting
+  // sets can never be applied to the wrong firmware.
+  _subvendoType: 'juanfi',
+  _subvendoTab: 'config',
+
   async renderSubVendo() {
     const content = document.getElementById('page-content');
-    const routers = (await api.getRouters()).filter((r) => r.connected);
+    this._subvendoType = this._subvendoType || 'juanfi';
+    this._subvendoTab = this._subvendoTab || 'config';
 
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
           <h3>SubVendo</h3>
+          <span style="font-size:.8rem;opacity:.7">Settings are kept per firmware type</span>
         </div>
-        <div class="tab-bar">
-          <button class="tab-btn active" data-subtab="config" onclick="App.switchSubVendoTab('config')">Configuration</button>
-          <button class="tab-btn" data-subtab="devices" onclick="App.switchSubVendoTab('devices')">Sub-Vendo Devices</button>
+        <div class="tab-bar subvendo-type-tabs">
+          <button class="tab-btn ${this._subvendoType === 'juanfi' ? 'active' : ''}" data-type="juanfi" onclick="App.switchSubVendoType('juanfi')">JuanFi Subvendo</button>
+          <button class="tab-btn ${this._subvendoType === 'aircoins' ? 'active' : ''}" data-type="aircoins" onclick="App.switchSubVendoType('aircoins')">AirCoins Subvendo</button>
+        </div>
+        <div class="tab-bar subvendo-view-tabs" style="border-bottom:1px solid var(--border)">
+          <button class="tab-btn ${this._subvendoTab === 'config' ? 'active' : ''}" data-subtab="config" onclick="App.switchSubVendoTab('config')">Configuration</button>
+          <button class="tab-btn ${this._subvendoTab === 'devices' ? 'active' : ''}" data-subtab="devices" onclick="App.switchSubVendoTab('devices')">Sub-Vendo Devices</button>
         </div>
         <div id="subvendo-tab-content"></div>
       </div>
     `;
 
-    this._subvendoTab = 'config';
+    await this.loadSubVendoTab();
+  },
+
+  async switchSubVendoType(type) {
+    const wanted = type === 'aircoins' ? 'aircoins' : 'juanfi';
+    if (wanted === this._subvendoType) return;
+    this._subvendoType = wanted;
+    // A machine belongs to exactly one type, so a selection made on one
+    // subpage is meaningless on the other.
+    this._nodemcuSelectedId = null;
+    document.querySelectorAll('.subvendo-type-tabs .tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.type === wanted);
+    });
     await this.loadSubVendoTab();
   },
 
   async switchSubVendoTab(tab) {
     this._subvendoTab = tab;
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    document.querySelectorAll('.subvendo-view-tabs .tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.subtab === tab);
     });
     await this.loadSubVendoTab();
@@ -7754,11 +7780,15 @@ Then join your network:
 
   async loadSubVendoTab() {
     const container = document.getElementById('subvendo-tab-content');
-    if (this._subvendoTab === 'config') {
-      await this.renderSubVendoConfig(container);
-    } else {
-      await this.renderNodeMcu(container);
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    if (this._subvendoType === 'aircoins') {
+      if (this._subvendoTab === 'devices') await this.renderNodeMcu(container, 'aircoins');
+      else await this.renderAirCoinsConfig(container);
+      return;
     }
+    if (this._subvendoTab === 'devices') await this.renderNodeMcu(container, 'juanfi');
+    else await this.renderSubVendoConfig(container);
   },
 
   async renderSubVendoConfig(container) {
@@ -8105,6 +8135,452 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       await api.pushSubVendoConfig(routerId);
       this.updateSubVendoPreview();
       this.toast('Config saved and pushed to router', 'success');
+    } catch (err) {
+      this.toast('Failed: ' + err.message, 'error');
+    }
+  },
+
+  // ---------- AirCoins sub-vendos (panel-managed firmware) ----------
+  //
+  // An AirCoins board has no admin page and no API to configure it with: it
+  // boots with a panel address and a device key, then reads everything else
+  // from here. That is why this page is the only settings screen these
+  // machines have, and why every field below is stored on the controller.
+
+  async renderAirCoinsConfig(container) {
+    // Pairing requests come first: they are the only thing on this page that a
+    // machine can cause by itself, and they expire when the vendo gives up.
+    let claims = [];
+    try { claims = (await api.nodemcuAirCoinsClaims()).claims || []; } catch (err) { claims = []; }
+    this._airCoinsClaims = claims;
+    const pending = this.renderAirCoinsClaims(claims);
+
+    const data = await api.nodemcuListDevices();
+    const devices = (data.devices || []).filter((d) => (d.firmwareType || 'juanfi') === 'aircoins');
+    this._nodemcuDevices = devices;
+
+    if (!devices.length) {
+      container.innerHTML = `
+        <div class="subvendo-form">
+          ${pending}
+          <div class="empty-state">
+            <h3>No AirCoins sub-vendos yet</h3>
+            <p>Power the vendo, join its <strong>Aircoins_setup</strong> WiFi and pick the shop network there.
+            It then asks this panel to accept it - nothing is registered until you press Accept above.</p>
+            <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice('aircoins')">Add Manually</button>
+          </div>
+        </div>
+      `;
+      this.startAirCoinsClaimPoller();
+      return;
+    }
+
+    if (!this._nodemcuSelectedId || !devices.find((d) => d.id === this._nodemcuSelectedId)) {
+      this._nodemcuSelectedId = devices[0].id;
+    }
+
+    let payload;
+    try {
+      payload = await api.nodemcuGetAirCoins(this._nodemcuSelectedId);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><h3>Could not load settings</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+      return;
+    }
+
+    const s = payload.settings || {};
+    const status = payload.status || {};
+    const online = !!payload.online;
+    const pollSeconds = parseInt(s.pollSeconds, 10) || 30;
+    const lastSeen = status.lastSeen ? new Date(status.lastSeen).toLocaleString() : 'never';
+    const panelUrl = window.location.origin;
+    // 0 is a real GPIO (D3), so only a missing value falls back.
+    const pinValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+
+    container.innerHTML = `
+      <div class="subvendo-form">
+        ${pending}
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between;margin-bottom:1rem">
+          <div style="display:flex;gap:.5rem;align-items:center">
+            <select id="aircoins-device-select" class="btn btn-outline" onchange="App.selectAirCoinsDevice(this.value)">
+              ${devices.map((d) => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
+            </select>
+            <span class="status-badge ${online ? 'connected' : 'disconnected'}">${online ? 'Online' : 'Offline'}</span>
+          </div>
+          <div style="display:flex;gap:.5rem">
+            <button class="btn btn-sm btn-outline" onclick="App.showAddNodeMcuDevice('aircoins')">Add Vendo</button>
+            <button class="btn btn-sm btn-outline" onclick="App.showEditNodeMcuDevice()">Edit Device</button>
+          </div>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Machine Status</h4>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            Reported by the vendo itself every ${pollSeconds}s. There is no page to open on the machine.
+          </p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem">
+            ${this.renderAirCoinsStat('Last report', lastSeen)}
+            ${this.renderAirCoinsStat('Uptime', this.formatAirCoinsUptime(status.uptimeSeconds))}
+            ${this.renderAirCoinsStat('Firmware', status.firmwareVersion || 'not reported yet')}
+            ${this.renderAirCoinsStat('Coins taken', status.coins || 0)}
+            ${this.renderAirCoinsStat('Customers', status.customers || 0)}
+            ${this.renderAirCoinsStat('Last sale', `${status.lastCoins || 0} coins / ${status.lastMinutes || 0} min`)}
+          </div>
+          ${status.lastError ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Last error: ${this.escapeHtml(status.lastError)}</p>` : ''}
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Panel Link</h4>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            Enter these on the vendo the first time it boots. After that the machine only reads from
+            the panel, so replacing the key here is the only way to cut one off.
+          </p>
+          <div class="form-row">
+            <label>Panel URL:</label>
+            <input class="form-control" readonly value="${this.escapeHtml(panelUrl)}">
+          </div>
+          <div class="form-row">
+            <label>Device Key:</label>
+            <input id="aircoins-device-key" class="form-control" readonly value="${this.escapeHtml(s.deviceKey || '')}">
+          </div>
+          <div style="display:flex;gap:.5rem">
+            <button class="btn btn-sm btn-outline" onclick="App.copyAirCoinsKey()">Copy Key</button>
+            <button class="btn btn-sm btn-outline" onclick="App.rotateAirCoinsKey()">Replace Key</button>
+          </div>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Sale Target</h4>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            The box has no screen, so it always credits this PC. Enter the MAC of the computer
+            on this table - the same address the hotspot sees.
+          </p>
+          <div class="form-row">
+            <label>PC MAC:</label>
+            <input id="ac-clientMac" class="form-control" placeholder="AA:BB:CC:DD:EE:FF" value="${this.escapeHtml(s.clientMac || '')}">
+          </div>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Coin Slot</h4>
+          <div class="form-row">
+            <label>Pesos per pulse:</label>
+            <input id="ac-coinValue" class="form-control" type="number" min="1" value="${parseInt(s.coinValue, 10) || 1}">
+          </div>
+          <div class="form-row">
+            <label>Pulses per coin:</label>
+            <input id="ac-pulsesPerCoin" class="form-control" type="number" min="1" value="${parseInt(s.pulsesPerCoin, 10) || 1}">
+          </div>
+          <div class="form-row">
+            <label>Wait for more coins (sec):</label>
+            <input id="ac-coinWaitSeconds" class="form-control" type="number" min="1" value="${parseInt(s.coinWaitSeconds, 10) || 10}">
+          </div>
+          <div class="form-row">
+            <label>Sale cap (0 = none):</label>
+            <input id="ac-maxCoins" class="form-control" type="number" min="0" value="${parseInt(s.maxCoins, 10) || 0}">
+          </div>
+          <div class="form-row">
+            <label>Pulses before ban:</label>
+            <input id="ac-abuseCount" class="form-control" type="number" min="0" value="${parseInt(s.abuseCount, 10) || 0}">
+          </div>
+          <div class="form-row">
+            <label>Ban minutes:</label>
+            <input id="ac-banMinutes" class="form-control" type="number" min="0" value="${parseInt(s.banMinutes, 10) || 0}">
+          </div>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Hardware Pins</h4>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            GPIO numbers, not the D labels: D1 = 5, D2 = 4, D4 = 2, D5 = 14, D6 = 12, D7 = 13,
+            D8 = 15. Use -1 for anything this box does not have. The vendo re-wires itself on its
+            next report - no reflash.
+          </p>
+          <div class="form-row">
+            <label>Coin slot pin:</label>
+            <input id="ac-coinPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.coinPin, 4)}">
+          </div>
+          <div class="form-row">
+            <label>Buzzer pin:</label>
+            <input id="ac-buzzerPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.buzzerPin, 14)}">
+          </div>
+          <div class="form-row">
+            <label>Status LED pin:</label>
+            <input id="ac-ledPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.ledPin, 2)}">
+          </div>
+          <div class="form-row">
+            <label>Slot lock relay pin:</label>
+            <input id="ac-slotLockPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.slotLockPin, -1)}">
+          </div>
+        </div>
+
+        <div class="subvendo-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+            <h4 style="margin:0">Rates</h4>
+            <button class="btn btn-sm btn-primary" onclick="App.addAirCoinsRate()">Add Rate</button>
+          </div>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            The coins buy the most expensive rate they can still pay for, over and over.
+            The panel credits the time, so a change here applies to the next sale - no reflash.
+          </p>
+          <table class="table" id="aircoins-rates-table">
+            <thead><tr><th>Name</th><th>Price</th><th>Minutes</th><th></th></tr></thead>
+            <tbody>${(s.rates || []).map((r) => this.airCoinsRateRow(r)).join('')}</tbody>
+          </table>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Feedback</h4>
+          <div class="form-row">
+            <label>Cooldown after sale (sec):</label>
+            <input id="ac-thankYouSeconds" class="form-control" type="number" min="1" value="${parseInt(s.thankYouSeconds, 10) || 5}">
+          </div>
+          <div class="form-row">
+            <label>Report every (sec):</label>
+            <input id="ac-pollSeconds" class="form-control" type="number" min="5" value="${pollSeconds}">
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="ac-buzzer" ${s.buzzer ? 'checked' : ''}>
+            <span>Beep on coin and on sale</span>
+          </label>
+        </div>
+
+        <div class="subvendo-section">
+          <h4>Remote Controls</h4>
+          <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
+            Commands are handed to the vendo on its next report, because the panel never opens a connection to the machine.
+          </p>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="btn btn-sm btn-outline" onclick="App.sendAirCoinsCommand('sync')">Refresh Config</button>
+            <button class="btn btn-sm btn-outline" onclick="App.sendAirCoinsCommand('restart')">Restart Vendo</button>
+          </div>
+          ${s.pendingCommand ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Waiting for the vendo: ${this.escapeHtml(s.pendingCommand)}</p>` : ''}
+        </div>
+
+        <div class="subvendo-actions">
+          <button class="btn btn-primary" onclick="App.saveAirCoinsSettings()">Save Settings</button>
+        </div>
+      </div>
+    `;
+
+    this.startAirCoinsClaimPoller();
+  },
+
+  // Always rendered, even empty, so the poller can fill it in without
+  // rebuilding the settings form the operator may be typing into.
+  renderAirCoinsClaims(claims) {
+    return `<div id="aircoins-claims">${this.renderAirCoinsClaimsInner(claims)}</div>`;
+  },
+
+  renderAirCoinsClaimsInner(claims) {
+    if (!claims || !claims.length) return '';
+    const rows = claims.map((c) => {
+      const seen = c.lastSeen ? new Date(c.lastSeen).toLocaleTimeString() : 'just now';
+      return `
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding:.7rem 0">
+          <div>
+            <div style="font-weight:600">${this.escapeHtml(c.name || 'AirCoins Vendo')}</div>
+            <div style="font-size:.78rem;opacity:.75">
+              ${this.escapeHtml(c.ip || 'no address reported')} · MAC ${this.escapeHtml(c.mac)}<br>
+              joined ${this.escapeHtml(c.ssid || 'unknown WiFi')} · seen ${this.escapeHtml(seen)}
+              ${c.firmwareVersion ? ` · firmware ${this.escapeHtml(c.firmwareVersion)}` : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:.5rem">
+            <button class="btn btn-sm btn-primary" onclick="App.acceptAirCoinsClaim(${c.id})">Accept</button>
+            <button class="btn btn-sm btn-outline" onclick="App.rejectAirCoinsClaim(${c.id})">Reject</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="subvendo-section" style="border-color:#ff9800;margin-bottom:1rem">
+        <h4 style="margin-top:0">Machines waiting to be accepted</h4>
+        <p style="font-size:.8rem;opacity:.75;margin:0 0 .25rem">
+          A vendo on its <strong>Aircoins_setup</strong> access point is asking to join this panel.
+          It stays in setup mode, showing "waiting for admin", until you accept it.
+        </p>
+        ${rows}
+      </div>`;
+  },
+
+  async acceptAirCoinsClaim(id) {
+    const claim = (this._airCoinsClaims || []).find((c) => c.id === id);
+    const label = claim
+      ? `${claim.name || 'this vendo'} at ${claim.ip || 'its reported address'} (MAC ${claim.mac})`
+      : `pairing request #${id}`;
+    if (!confirm(`Accept ${label}?\n\nIt will be registered as an AirCoins sub-vendo, given its device key and allowed to leave setup mode.`)) return;
+
+    try {
+      const res = await api.nodemcuApproveAirCoinsClaim(id, {});
+      const name = res.device ? res.device.name : 'Vendo';
+      this.toast(`${name} accepted - it is leaving setup mode now`, 'success');
+      if (res.provision && res.provision.ok === false) {
+        this.toast('Router setup needs attention: ' + (res.provision.error || 'run Register on Router'), 'error');
+      }
+      if (res.device) {
+        this._nodemcuSelectedId = res.device.id;
+        this._subvendoTab = 'config';
+      }
+      await this.loadSubVendoTab();
+    } catch (err) {
+      this.toast('Failed to accept: ' + err.message, 'error');
+    }
+  },
+
+  async rejectAirCoinsClaim(id) {
+    if (!confirm('Reject this pairing request? The vendo keeps its setup access point and can ask again.')) return;
+    try {
+      await api.nodemcuRejectAirCoinsClaim(id);
+      this.toast('Pairing request rejected', 'success');
+      await this.loadSubVendoTab();
+    } catch (err) {
+      this.toast('Failed to reject: ' + err.message, 'error');
+    }
+  },
+
+  // A machine can only appear while this page is open, so keep the pair of
+  // buttons coming without touching the settings form being edited.
+  startAirCoinsClaimPoller() {
+    if (this._airCoinsClaimTimer) clearInterval(this._airCoinsClaimTimer);
+    this._airCoinsClaimTimer = setInterval(async () => {
+      if (this.currentPage !== 'subvendo' || this._subvendoType !== 'aircoins' || this._subvendoTab !== 'config') {
+        clearInterval(this._airCoinsClaimTimer);
+        this._airCoinsClaimTimer = null;
+        return;
+      }
+      const box = document.getElementById('aircoins-claims');
+      if (!box) return;
+      try {
+        const res = await api.nodemcuAirCoinsClaims();
+        const claims = res.claims || [];
+        const previous = (this._airCoinsClaims || []).map((c) => c.id).join(',');
+        if (claims.map((c) => c.id).join(',') === previous) return;
+        this._airCoinsClaims = claims;
+        box.innerHTML = this.renderAirCoinsClaimsInner(claims);
+      } catch (err) {
+        // pairing is a convenience; a failed poll must not disturb the page
+      }
+    }, 8000);
+  },
+
+  renderAirCoinsStat(label, value) {
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem">
+      <div style="font-size:.75rem;opacity:.65">${this.escapeHtml(label)}</div>
+      <div style="font-weight:600">${this.escapeHtml(String(value))}</div>
+    </div>`;
+  },
+
+  formatAirCoinsUptime(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    return days > 0 ? `${days}d ${hours}h` : `${hours}h ${minutes}m`;
+  },
+
+  airCoinsRateRow(rate) {
+    const r = rate || { name: '', price: 1, minutes: 10 };
+    return `<tr>
+      <td><input class="form-control ac-rate-name" value="${this.escapeHtml(r.name || '')}"></td>
+      <td><input class="form-control ac-rate-price" type="number" min="1" value="${parseInt(r.price, 10) || 0}"></td>
+      <td><input class="form-control ac-rate-minutes" type="number" min="1" value="${parseInt(r.minutes, 10) || 0}"></td>
+      <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()">X</button></td>
+    </tr>`;
+  },
+
+  addAirCoinsRate() {
+    const tbody = document.querySelector('#aircoins-rates-table tbody');
+    if (tbody) tbody.insertAdjacentHTML('beforeend', this.airCoinsRateRow(null));
+  },
+
+  selectAirCoinsDevice(id) {
+    this._nodemcuSelectedId = parseInt(id, 10);
+    this.loadSubVendoTab();
+  },
+
+  collectAirCoinsSettings() {
+    const num = (id, fallback) => {
+      const el = document.getElementById(id);
+      const value = el ? parseInt(el.value, 10) : NaN;
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const rates = [];
+    document.querySelectorAll('#aircoins-rates-table tbody tr').forEach((row) => {
+      rates.push({
+        name: row.querySelector('.ac-rate-name').value.trim(),
+        price: parseInt(row.querySelector('.ac-rate-price').value, 10) || 0,
+        minutes: parseInt(row.querySelector('.ac-rate-minutes').value, 10) || 0,
+      });
+    });
+    return {
+      clientMac: (document.getElementById('ac-clientMac') || {}).value || '',
+      coinPin: num('ac-coinPin', 4),
+      buzzerPin: num('ac-buzzerPin', 14),
+      ledPin: num('ac-ledPin', 2),
+      slotLockPin: num('ac-slotLockPin', -1),
+      coinValue: num('ac-coinValue', 1),
+      pulsesPerCoin: num('ac-pulsesPerCoin', 1),
+      coinWaitSeconds: num('ac-coinWaitSeconds', 10),
+      maxCoins: num('ac-maxCoins', 0),
+      abuseCount: num('ac-abuseCount', 0),
+      banMinutes: num('ac-banMinutes', 0),
+      rates,
+      thankYouSeconds: num('ac-thankYouSeconds', 5),
+      buzzer: !!(document.getElementById('ac-buzzer') || {}).checked,
+      pollSeconds: num('ac-pollSeconds', 30),
+    };
+  },
+
+  async saveAirCoinsSettings() {
+    const id = this._nodemcuSelectedId;
+    if (!id) return;
+    const settings = this.collectAirCoinsSettings();
+    if (!settings.rates.length) {
+      this.toast('Add at least one rate before saving', 'error');
+      return;
+    }
+    try {
+      await api.nodemcuSaveAirCoins(id, settings);
+      this.toast('AirCoins settings saved - the vendo picks them up on its next report', 'success');
+      await this.loadSubVendoTab();
+    } catch (err) {
+      this.toast('Failed to save: ' + err.message, 'error');
+    }
+  },
+
+  async copyAirCoinsKey() {
+    const input = document.getElementById('aircoins-device-key');
+    if (!input) return;
+    try {
+      await navigator.clipboard.writeText(input.value);
+      this.toast('Device key copied', 'success');
+    } catch (err) {
+      input.select();
+      this.toast('Press Ctrl+C to copy the selected key', 'info');
+    }
+  },
+
+  async rotateAirCoinsKey() {
+    const id = this._nodemcuSelectedId;
+    if (!id) return;
+    if (!confirm('Replace the device key? The vendo stops reading settings until the new key is entered on the machine.')) return;
+    try {
+      await api.nodemcuRotateAirCoinsKey(id);
+      this.toast('Device key replaced', 'success');
+      await this.loadSubVendoTab();
+    } catch (err) {
+      this.toast('Failed: ' + err.message, 'error');
+    }
+  },
+
+  async sendAirCoinsCommand(command) {
+    const id = this._nodemcuSelectedId;
+    if (!id) return;
+    if (command === 'restart' && !confirm('Queue a restart for this vendo? It reboots on its next report.')) return;
+    try {
+      const res = await api.nodemcuAirCoinsCommand(id, command);
+      this.toast(res.message || 'Command queued', 'success');
+      await this.loadSubVendoTab();
     } catch (err) {
       this.toast('Failed: ' + err.message, 'error');
     }
@@ -10599,17 +11075,28 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
   _nodemcuSelectedId: null,
   _nodemcuTab: 'dashboard',
 
-  async renderNodeMcu(container) {
+  async renderNodeMcu(container, type) {
+    const wanted = (type || this._nodemcuType) === 'aircoins' ? 'aircoins' : 'juanfi';
+    this._nodemcuType = wanted;
+    if (!container) container = document.getElementById('subvendo-tab-content');
+    if (!container) return;
+
     const data = await api.nodemcuListDevices();
-    const devices = data.devices || [];
+    const devices = (data.devices || []).filter((d) => (d.firmwareType || 'juanfi') === wanted);
     this._nodemcuDevices = devices;
 
     if (devices.length === 0) {
-      container.innerHTML = `
+      container.innerHTML = wanted === 'aircoins' ? `
         <div class="empty-state">
-          <h3>No Sub-Vendo Devices configured</h3>
-          <p>Add a JuanFI NodeMCU vending machine to manage it from this panel.</p>
-          <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
+          <h3>No AirCoins sub-vendos configured</h3>
+          <p>Add the machine, then flash the AirCoins firmware with the device key from its Configuration tab.</p>
+          <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice('aircoins')">Add AirCoins Vendo</button>
+        </div>
+      ` : `
+        <div class="empty-state">
+          <h3>No JuanFi sub-vendos configured</h3>
+          <p>Add a JuanFi NodeMCU vending machine to manage it from this panel.</p>
+          <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice('juanfi')">Add Device</button>
         </div>
       `;
       return;
@@ -10622,12 +11109,12 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     container.innerHTML = `
       <div class="card">
         <div class="card-header">
-          <h3>Sub-Vendo Devices</h3>
+          <h3>${wanted === 'aircoins' ? 'AirCoins Vending Machines' : 'Sub-Vendo Devices'}</h3>
           <div style="display:flex;gap:0.5rem;align-items:center">
             <select id="nodemcu-device-select" class="btn btn-outline" onchange="App.selectNodeMcuDevice(this.value)">
               ${devices.map(d => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
             </select>
-            <button class="btn btn-sm btn-primary" onclick="App.showAddNodeMcuDevice()">Add Device</button>
+            <button class="btn btn-sm btn-primary" onclick="App.showAddNodeMcuDevice('${wanted}')">Add Device</button>
             <button class="btn btn-sm btn-outline" onclick="App.provisionSelectedNodeMcuDevice()">Register on Router</button>
             <button class="btn btn-sm btn-outline" onclick="App.showEditNodeMcuDevice()">Edit</button>
             <button class="btn btn-sm btn-danger" onclick="App.deleteNodeMcuDevice()">Delete</button>
@@ -11006,13 +11493,14 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     } catch (err) { container.innerHTML = `<div style="color:#f44336">${this.escapeHtml(err.message)}</div>`; }
   },
 
-  async showAddNodeMcuDevice() {
+  async showAddNodeMcuDevice(type) {
     const modal = document.getElementById('modal-overlay');
     const body = document.getElementById('modal-body');
     const title = document.getElementById('modal-title');
     const footer = document.getElementById('modal-footer');
     const routers = await api.getRouters();
     const connected = routers.filter((r) => r.connected);
+    const firmware = type === 'aircoins' || (!type && this._subvendoType === 'aircoins') ? 'aircoins' : 'juanfi';
 
     title.textContent = 'Add Sub-Vendo (NodeMCU)';
     const formHtml = `
@@ -11020,6 +11508,17 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         The machine is registered on the router as well: static address, hotspot
         login bypassed and allowed in the Walled Garden, so a customer can insert
         a coin before being logged in.
+      </p>
+      <div class="form-row">
+        <label>Firmware</label>
+        <select id="nd-firmware" class="form-control" onchange="App.toggleAddDeviceFirmware()">
+          <option value="juanfi" ${firmware === 'juanfi' ? 'selected' : ''}>JuanFi (has its own admin page)</option>
+          <option value="aircoins" ${firmware === 'aircoins' ? 'selected' : ''}>AirCoins (panel managed, no web UI)</option>
+        </select>
+      </div>
+      <p id="nd-aircoins-note" style="display:none;font-size:.8rem;opacity:.75;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.6rem">
+        AirCoins machines have no login page and no web interface. After adding one, copy its
+        device key from the AirCoins Configuration tab and enter it in the firmware.
       </p>
       <div class="form-row"><label>Device Name</label><input id="nd-name" class="form-control" placeholder="e.g. Vendo 1"></div>
       <div class="form-row"><label>IP Address</label><input id="nd-ip" class="form-control" placeholder="10.0.0.243"></div>
@@ -11035,18 +11534,22 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <label>MAC Address (optional)</label>
         <input id="nd-mac" class="form-control" placeholder="8C:AA:B5:00:00:00 - leave blank to detect on the router">
       </div>
-      <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="admin"></div>
-      <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password"></div>
+      <div id="nd-credentials">
+        <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="admin"></div>
+        <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password"></div>
+      </div>
     `;
 
     const showForm = () => {
       body.innerHTML = formHtml;
+      this.toggleAddDeviceFirmware();
       footer.innerHTML = '';
       [
         { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
         { label: 'Add Device', cls: 'btn-primary', action: async () => {
           const ip = document.getElementById('nd-ip').value.trim();
-          if (!document.getElementById('nd-name').value.trim() || !ip) {
+          const name = document.getElementById('nd-name').value.trim();
+          if (!name || !ip) {
             this.toast('Device name and IP are required', 'error');
             return;
           }
@@ -11054,14 +11557,20 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           if (btn) { btn.disabled = true; btn.textContent = 'Registering...'; }
           try {
             const res = await api.nodemcuAddDevice({
-              name: document.getElementById('nd-name').value,
+              name,
               ip,
-              username: document.getElementById('nd-user').value,
-              password: document.getElementById('nd-pass').value,
+              username: document.getElementById('nd-user') ? document.getElementById('nd-user').value : undefined,
+              password: document.getElementById('nd-pass') ? document.getElementById('nd-pass').value : undefined,
               mac: document.getElementById('nd-mac').value.trim(),
               routerId: parseInt(document.getElementById('nd-router').value) || undefined,
+              firmwareType: document.getElementById('nd-firmware').value,
             });
-            this.renderNodeMcu(document.getElementById('subvendo-tab-content'));
+            if (res.device) {
+              this._subvendoType = res.device.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
+              this._nodemcuSelectedId = res.device.id;
+            }
+            this._subvendoTab = 'config';
+            await this.renderSubVendo();
             this.showProvisionResult(`Added ${res.device ? res.device.name : ip}`, res.provision, showForm);
           } catch (err) {
             this.toast('Failed: ' + err.message, 'error');
@@ -11079,6 +11588,18 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
 
     showForm();
     modal.classList.add('active');
+  },
+
+  // JuanFi boards are reached over their admin login; AirCoins boards are not
+  // reachable that way at all, so the credentials are not asked for.
+  toggleAddDeviceFirmware() {
+    const select = document.getElementById('nd-firmware');
+    if (!select) return;
+    const aircoins = select.value === 'aircoins';
+    const credentials = document.getElementById('nd-credentials');
+    const note = document.getElementById('nd-aircoins-note');
+    if (credentials) credentials.style.display = aircoins ? 'none' : '';
+    if (note) note.style.display = aircoins ? '' : 'none';
   },
 
   /*
@@ -11147,7 +11668,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     try {
       const res = await api.nodemcuProvisionDevice(device.id, { routerId: device.routerId });
       this.showProvisionResult(`${device.name} (${device.ip})`, res.provision);
-      this.renderNodeMcu(document.getElementById('subvendo-tab-content'));
+      this.renderNodeMcu(document.getElementById('subvendo-tab-content'), this._nodemcuType);
     } catch (err) {
       body.innerHTML = `<p style="color:#f44336">Failed: ${this.escapeHtml(err.message)}</p>`;
     }
@@ -11162,9 +11683,18 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const body = document.getElementById('modal-body');
     const title = document.getElementById('modal-title');
     title.textContent = 'Edit NodeMCU Device';
+    const firmware = device.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
     body.innerHTML = `
       <div class="form-row"><label>Device Name</label><input id="nd-name" class="form-control" value="${this.escapeHtml(device.name)}"></div>
       <div class="form-row"><label>IP Address</label><input id="nd-ip" class="form-control" value="${this.escapeHtml(device.ip)}"></div>
+      <div class="form-row">
+        <label>Firmware</label>
+        <select id="nd-firmware" class="form-control">
+          <option value="juanfi" ${firmware === 'juanfi' ? 'selected' : ''}>JuanFi (has its own admin page)</option>
+          <option value="aircoins" ${firmware === 'aircoins' ? 'selected' : ''}>AirCoins (panel managed, no web UI)</option>
+        </select>
+      </div>
+      <p style="font-size:.8rem;opacity:.75">Changing the firmware type moves this machine to the other subpage and stops the panel from using the matching settings.</p>
       <div class="form-row"><label>Admin Username</label><input id="nd-user" class="form-control" value="${this.escapeHtml(device.username)}"></div>
       <div class="form-row"><label>Admin Password</label><input id="nd-pass" class="form-control" type="password" value="${this.escapeHtml(device.password)}"></div>
     `;
@@ -11174,15 +11704,18 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       { label: 'Cancel', cls: 'btn-outline', action: () => this.closeModal() },
       { label: 'Save', cls: 'btn-primary', action: async () => {
         try {
-          await api.nodemcuUpdateDevice(this._nodemcuSelectedId, {
+          const firmwareType = document.getElementById('nd-firmware').value;
+          const res = await api.nodemcuUpdateDevice(this._nodemcuSelectedId, {
             name: document.getElementById('nd-name').value,
             ip: document.getElementById('nd-ip').value,
             username: document.getElementById('nd-user').value,
             password: document.getElementById('nd-pass').value,
+            firmwareType,
           });
+          this._subvendoType = res.device && res.device.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
           this.closeModal();
           this.toast('Device updated', 'success');
-          this.renderNodeMcu();
+          await this.renderSubVendo();
         } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
       }},
     ];

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { NodeMcuDevice } from './nodemcu';
+import { NodeMcuDevice, NodeMcuFirmwareType } from './nodemcu';
 
 /*
  * The registered coin machines. This file used to be read and written only by
@@ -14,10 +14,20 @@ const DEVICES_FILE = path.join(__dirname, '..', '..', 'data', 'nodemcu-devices.j
 export function loadDevices(): NodeMcuDevice[] {
   try {
     const raw = fs.readFileSync(DEVICES_FILE, 'utf8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Devices registered before firmware types existed are all JuanFi boards.
+    return parsed.map((device: NodeMcuDevice) => ({
+      ...device,
+      firmwareType: firmwareTypeOf(device),
+    }));
   } catch {
     return [];
   }
+}
+
+export function firmwareTypeOf(device: Partial<NodeMcuDevice> | undefined): NodeMcuFirmwareType {
+  return device && device.firmwareType === 'aircoins' ? 'aircoins' : 'juanfi';
 }
 
 export function saveDevices(devices: NodeMcuDevice[]): void {

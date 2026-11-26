@@ -1,5 +1,7 @@
 import http from 'http';
 
+export type NodeMcuFirmwareType = 'juanfi' | 'aircoins';
+
 export interface NodeMcuDevice {
   id: number;
   name: string;
@@ -10,6 +12,13 @@ export interface NodeMcuDevice {
   mac?: string;
   /** Router this coin machine is provisioned on. */
   routerId?: number;
+  /**
+   * Which firmware the board runs. JuanFi keeps its own admin page and is
+   * managed through it; AirCoins is our firmware, has no web interface and
+   * takes every setting from the panel. Missing means JuanFi, which is what
+   * every machine registered before this field existed is.
+   */
+  firmwareType?: NodeMcuFirmwareType;
 }
 
 interface DeviceSession {

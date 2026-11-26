@@ -365,6 +365,37 @@ class ApiClient {
     return this.delete(`/nodemcu/devices/${id}`);
   }
 
+  // AirCoins sub-vendos: the machine has no web UI, so all of its settings are
+  // read from and written to the panel.
+  async nodemcuGetAirCoins(id) {
+    return this.get(`/nodemcu/devices/${id}/aircoins`);
+  }
+
+  async nodemcuSaveAirCoins(id, data) {
+    return this.put(`/nodemcu/devices/${id}/aircoins`, data);
+  }
+
+  async nodemcuRotateAirCoinsKey(id) {
+    return this.post(`/nodemcu/devices/${id}/aircoins/key`, {});
+  }
+
+  async nodemcuAirCoinsCommand(id, command) {
+    return this.post(`/nodemcu/devices/${id}/aircoins/command`, { command });
+  }
+
+  // Pairing: a new vendo waits on its own access point until the panel accepts it.
+  async nodemcuAirCoinsClaims() {
+    return this.get('/nodemcu/aircoins/claims');
+  }
+
+  async nodemcuApproveAirCoinsClaim(id, data) {
+    return this.post(`/nodemcu/aircoins/claims/${id}/approve`, data || {});
+  }
+
+  async nodemcuRejectAirCoinsClaim(id) {
+    return this.post(`/nodemcu/aircoins/claims/${id}/reject`, {});
+  }
+
   async nodemcuDashboard(id) {
     return this.get(`/nodemcu/devices/${id}/dashboard`);
   }

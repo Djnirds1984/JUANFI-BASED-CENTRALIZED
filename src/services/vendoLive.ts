@@ -3,8 +3,8 @@ import { findDevice } from './deviceRegistry';
 import {
   findSession, livePulses, previewSession, sessionIsLive, sessionRemainingMs, sessionTxnId,
 } from './aircoinsSession';
-import { vendoCandidates } from './vendoRoster';
-import { vendoServesClient } from './vendoAutoSelect';
+import { getStatus } from './aircoins';
+import { ipInSubnet } from './vendoAutoSelect';
 import { SHOP_SQL_SHIFT, shopToday } from './shopTime';
 
 /*
@@ -16,10 +16,11 @@ import { SHOP_SQL_SHIFT, shopToday } from './shopTime';
  * place that can say how many customers are connected right now, how much this
  * slot has taken in pesos, and which transaction is open on it.
  *
- * "Connected" is the machine's own network, not the whole router: the same rule
- * the portal uses to decide which slot a phone may feed (its own /24 plus the
- * subnets declared on the device). A shop on VLAN 2001 therefore sees only the
- * customers standing in front of its coin slot.
+ * "Connected" is the machine's own network, not the whole router: the subnets
+ * declared on the device, or its own /24 when none are. A device on another
+ * subnet is somebody else's customer, and one the panel cannot place at all is
+ * nobody's - this is a count, so a guess would only inflate it. A shop on VLAN
+ * 2001 therefore sees only the customers standing in front of its coin slot.
  */
 
 export interface VendoLiveSale {
@@ -61,30 +62,46 @@ const ledgerTotals = (deviceId: number, today: string, dayFilter: boolean) => {
   ).get(...params) as any;
 };
 
-/** Devices online on the networks this machine serves. */
-function customersOnline(deviceId: number, routerId: number, deviceIp: string, deviceMac: string): number {
+/**
+ * Devices online on the networks this machine serves.
+ *
+ * The portal may still answer "yes" on a network it cannot place (it must not
+ * lock a customer out), but a count must not: that answer would credit every
+ * machine in the shop with the same stranger.
+ */
+function customersOnline(device: any, reportedIp: string): number {
+  const routerId = Number(device && device.routerId) || 0;
   if (!routerId) return 0;
-  const value = `aircoins:${deviceId}`;
-  const candidates = vendoCandidates();
+
+  const declared = (Array.isArray(device && device.hotspotSubnets) ? device.hotspotSubnets : [])
+    .map((subnet: any) => String(subnet || '').trim())
+    .filter(Boolean);
+  // A bare address is read as its own /24, which is the wiring default: one
+  // coin box, one DHCP server, one segment.
+  const networks: string[] = declared.length
+    ? declared
+    : [String((device && device.ip) || '').trim(), reportedIp].filter(Boolean);
+  if (!networks.length) return 0;
+
   const key = (mac: any) => String(mac || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
-  const selfMac = key(deviceMac);
+  const selfIps = new Set([String((device && device.ip) || '').trim(), reportedIp].filter(Boolean));
+  const selfMac = key(device && device.mac);
   const rows = getDb().prepare(
     "SELECT ip_address, mac_address FROM active_devices WHERE router_id = ? AND status = 'active'"
   ).all(routerId) as any[];
+
   return rows.filter((row) => {
     const ip = String(row.ip_address || '').trim();
-    // The coin box is on that same network, and it is not a customer.
-    if (ip === '' || ip === deviceIp) return false;
+    // The coin box sits on that same network, and it is not a customer.
+    if (ip === '' || selfIps.has(ip)) return false;
     if (selfMac && key(row.mac_address) === selfMac) return false;
-    return vendoServesClient(ip, routerId, candidates, value, deviceIp);
+    return networks.some((network) => ipInSubnet(ip, network));
   }).length;
 }
 
 export function vendoLiveSummary(deviceId: number): VendoLiveSummary {
   const device = findDevice(deviceId);
-  const routerId = Number(device?.routerId) || 0;
-  const deviceIp = String(device?.ip || '').trim();
-  const deviceMac = String(device?.mac || '').trim();
+  const reportedIp = String(getStatus(deviceId)?.ip || '').trim();
   const today = shopToday();
 
   const all = ledgerTotals(deviceId, today, false);
@@ -117,7 +134,7 @@ export function vendoLiveSummary(deviceId: number): VendoLiveSummary {
     salesToday: Number(day.sales) || 0,
     minutesTotal: Number(all.minutes) || 0,
     minutesToday: Number(day.minutes) || 0,
-    customersLive: customersOnline(deviceId, routerId, deviceIp, deviceMac),
+    customersLive: customersOnline(device, reportedIp),
     customersToday: Number(day.customers) || 0,
     lastSale: last ? {
       coins: Number(last.coins) || 0,

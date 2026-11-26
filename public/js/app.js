@@ -8657,7 +8657,6 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const status = payload.status || {};
     const online = !!payload.online;
     const pollSeconds = parseInt(s.pollSeconds, 10) || 30;
-    const lastSeen = status.lastSeen ? new Date(status.lastSeen).toLocaleString() : 'never';
     const panelUrl = window.location.origin;
     // 0 is a real GPIO (D3), so only a missing value falls back.
     const pinValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -8704,7 +8703,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             <select id="aircoins-device-select" class="btn btn-outline" onchange="App.selectAirCoinsDevice(this.value)">
               ${devices.map((d) => `<option value="${d.id}" ${d.id === this._nodemcuSelectedId ? 'selected' : ''}>${this.escapeHtml(d.name)} (${this.escapeHtml(d.ip)})</option>`).join('')}
             </select>
-            <span class="status-badge ${online ? 'connected' : 'disconnected'}">${online ? 'Online' : 'Offline'}</span>
+            <span id="aircoins-online-badge" class="status-badge ${online ? 'connected' : 'disconnected'}">${online ? 'Online' : 'Offline'}</span>
           </div>
           <div style="display:flex;gap:.5rem">
             <button class="btn btn-sm btn-outline" onclick="App.showAddNodeMcuDevice('aircoins')">Add Vendo</button>
@@ -8727,23 +8726,11 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="subvendo-section">
           <h4>Machine Status</h4>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
-            Reported by the vendo itself every ${pollSeconds}s. There is no page to open on the machine.
+            Live, refreshed every 5 seconds while this page is open. The money and the customers are
+            counted here on the panel; the health figures come from the board's own report every
+            ${pollSeconds}s. There is no page to open on the machine.
           </p>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem">
-            ${this.renderAirCoinsStat('Last report', lastSeen)}
-            ${this.renderAirCoinsStat('Uptime', this.formatAirCoinsUptime(status.uptimeSeconds))}
-            ${this.renderAirCoinsStat('Firmware', status.firmwareVersion || 'not reported yet')}
-            ${this.renderAirCoinsStat('Coins taken', status.coins || 0)}
-            ${this.renderAirCoinsStat('Customers', status.customers || 0)}
-            ${this.renderAirCoinsStat('Last sale', `${status.lastCoins || 0} coins / ${status.lastMinutes || 0} min`)}
-            ${this.renderAirCoinsStat('Coin pulses', status.pulses || 0)}
-            ${this.renderAirCoinsStat('Banked pulses', status.bank || 0)}
-          </div>
-          <p style="font-size:.78rem;opacity:.7;margin:.6rem 0 0">
-            Coin pulses count what the acceptor sent since the board booted. If a coin drops and this
-            stays at 0, the acceptor is not reaching its GPIO - check the coin pin and the 3.3V signal wire.
-          </p>
-          ${status.lastError ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Last error: ${this.escapeHtml(status.lastError)}</p>` : ''}
+          <div id="aircoins-status-live">${this.renderAirCoinsLive(payload)}</div>
         </div>
 
         <div class="subvendo-section">
@@ -8915,6 +8902,114 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     `;
 
     this.startAirCoinsClaimPoller();
+    this.startAirCoinsStatusPoller(this._nodemcuSelectedId);
+  },
+
+  // Everything the status card shows, as one string, so the poller can swap the
+  // card without touching the settings form around it. The board's own counters
+  // stay apart: an AirCoins box only counts the sales it sold itself, so on a
+  // panel-held slot they read 0 while the ledger already holds the money.
+  renderAirCoinsLive(payload) {
+    const status = (payload && payload.status) || {};
+    const live = (payload && payload.summary) || {};
+    const money = (v) => this.formatMoney(Number(v) || 0);
+    const duration = (v) => {
+      const total = Math.max(0, Math.round(Number(v) || 0));
+      if (total < 60) return `${total} min`;
+      const hours = Math.floor(total / 60);
+      const mins = total % 60;
+      return mins ? `${hours}h ${mins}m` : `${hours}h`;
+    };
+
+    const slot = live.slot;
+    const slotTile = slot
+      ? this.renderAirCoinsStat('Slot now', `${money(slot.coins)} in slot`,
+        `${slot.txnId} · closes in ${Math.max(0, Math.ceil((Number(slot.remainMs) || 0) / 1000))}s`)
+      : this.renderAirCoinsStat('Slot now', 'idle', 'no coin slot open');
+
+    const last = live.lastSale;
+    const lastTile = last
+      ? this.renderAirCoinsStat('Last sale', `${money(last.coins)} · ${duration(last.minutes)}`,
+        `${this.airCoinsAgo(last.at)} · ${last.mac || 'unassigned'}`)
+      : this.renderAirCoinsStat('Last sale', 'none yet', 'no coins sold on this machine');
+
+    const errorAt = status.lastErrorAt ? ` (${this.airCoinsAgo(status.lastErrorAt)})` : '';
+    const errorLine = status.lastError
+      ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Last error${this.escapeHtml(errorAt)}: ${this.escapeHtml(status.lastError)}</p>`
+      : '';
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem">
+        ${this.renderAirCoinsStat('Customers online', live.customersLive || 0, `${live.customersToday || 0} paid today`)}
+        ${this.renderAirCoinsStat('Coins taken', money(live.coinsTotal), `${money(live.coinsToday)} today`)}
+        ${this.renderAirCoinsStat('Transactions', live.sales || 0, `${live.salesToday || 0} today`)}
+        ${this.renderAirCoinsStat('Time given', duration(live.minutesTotal), `${duration(live.minutesToday)} today`)}
+        ${slotTile}
+        ${lastTile}
+      </div>
+      <p style="font-size:.75rem;opacity:.6;margin:.6rem 0 0">
+        Counts come from the panel's own ledger for this machine: pesos taken, one transaction per
+        coin feed. "Customers online" is how many devices are connected on this machine's network
+        right now, not a lifetime total.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-top:.75rem">
+        ${this.renderAirCoinsStat('Last report', this.airCoinsAgo(status.lastSeen), status.lastSeen ? this.shopTime(status.lastSeen) : '')}
+        ${this.renderAirCoinsStat('Uptime', this.formatAirCoinsUptime(status.uptimeSeconds), 'since the board booted')}
+        ${this.renderAirCoinsStat('Firmware', status.firmwareVersion || 'not reported yet')}
+        ${this.renderAirCoinsStat('Coin pulses', status.pulses || 0, 'acceptor pulses since boot')}
+        ${this.renderAirCoinsStat('Banked pulses', status.bank || 0, 'held, not sold yet')}
+        ${status.freeHeap ? this.renderAirCoinsStat('Free memory', `${Math.round(Number(status.freeHeap) / 1024)} KB`, 'board heap') : ''}
+      </div>
+      <p style="font-size:.78rem;opacity:.7;margin:.6rem 0 0">
+        Coin pulses count what the acceptor sent since the board booted. If a coin drops and this
+        stays at 0, the acceptor is not reaching its GPIO - check the coin pin and the 3.3V signal wire.
+      </p>
+      ${errorLine}`;
+  },
+
+  // "14 min ago" for a stamp that may come either from SQLite (bare UTC, no
+  // zone) or from the panel (ISO with Z) - both are UTC, so both are readable.
+  airCoinsAgo(value) {
+    if (!value) return 'never';
+    const text = String(value).replace(' ', 'T');
+    const ms = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text}Z`);
+    if (!Number.isFinite(ms)) return '';
+    const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (secs < 45) return 'just now';
+    if (secs < 90) return '1 min ago';
+    const mins = Math.round(secs / 60);
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.round(hours / 24)}d ago`;
+  },
+
+  // These numbers move on their own - a customer walks onto the network, a
+  // coin lands, a slot closes - so the card is re-read while the page is open.
+  // Only the card is replaced: the settings form below may be half-typed.
+  startAirCoinsStatusPoller(deviceId) {
+    if (this._airCoinsStatusTimer) clearInterval(this._airCoinsStatusTimer);
+    const id = Number(deviceId) || 0;
+    this._airCoinsStatusTimer = setInterval(async () => {
+      if (this.currentPage !== 'subvendo' || this._subvendoType !== 'aircoins' || this._subvendoTab !== 'config') {
+        clearInterval(this._airCoinsStatusTimer);
+        this._airCoinsStatusTimer = null;
+        return;
+      }
+      const box = document.getElementById('aircoins-status-live');
+      if (!box || Number(this._nodemcuSelectedId) !== id) return;
+      try {
+        const payload = await api.nodemcuGetAirCoins(id);
+        const badge = document.getElementById('aircoins-online-badge');
+        if (badge) {
+          const online = !!payload.online;
+          badge.textContent = online ? 'Online' : 'Offline';
+          badge.className = `status-badge ${online ? 'connected' : 'disconnected'}`;
+        }
+        box.innerHTML = this.renderAirCoinsLive(payload);
+      } catch (err) {
+        // a dropped poll is not worth a toast; the next one may work
+      }
+    }, 5000);
   },
 
   // Always rendered, even empty, so the poller can fill it in without
@@ -9015,10 +9110,11 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     }, 8000);
   },
 
-  renderAirCoinsStat(label, value) {
+  renderAirCoinsStat(label, value, note) {
     return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem">
       <div style="font-size:.75rem;opacity:.65">${this.escapeHtml(label)}</div>
       <div style="font-weight:600">${this.escapeHtml(String(value))}</div>
+      ${note ? `<div style="font-size:.72rem;opacity:.6;margin-top:.15rem">${this.escapeHtml(String(note))}</div>` : ''}
     </div>`;
   },
 

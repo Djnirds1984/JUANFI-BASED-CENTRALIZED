@@ -20,6 +20,7 @@ import {
   recordSettled, sessionCoinCount, sessionIsLive, sessionRemainingMs,
 } from '../services/aircoinsSession';
 import { creditAirCoinsSale, recordUnassignedSale, settleAirCoinsSession } from '../services/aircoinsSale';
+import { vendoLiveSummary } from '../services/vendoLive';
 import { bankTopupCoins } from '../services/wallet';
 
 const router = Router();
@@ -782,10 +783,14 @@ router.get('/devices/:id/aircoins', (req: Request, res: Response) => {
   }
   const settings = getSettings(device.id);
   const status = getStatus(device.id);
+  // `status` only holds what the board itself can see. The peso totals, the
+  // customers standing on this machine's network and the open slot are held by
+  // the panel, so they travel beside it rather than inside it.
   res.json({
     device,
     settings,
     status,
+    summary: vendoLiveSummary(device.id),
     online: statusIsOnline(status, settings.pollSeconds),
   });
 });

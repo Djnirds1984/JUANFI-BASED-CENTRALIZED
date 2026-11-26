@@ -98,6 +98,9 @@ export interface AirCoinsStatus {
   lastMinutes: number;
   lastRedeemAt: string | null;
   lastError: string;
+  /** When that message was raised, and whether the board or the panel said it. */
+  lastErrorAt?: string | null;
+  lastErrorSource?: '' | 'board' | 'panel';
 }
 
 const DEFAULT_RATES: AirCoinsRate[] = [
@@ -107,6 +110,11 @@ const DEFAULT_RATES: AirCoinsRate[] = [
 ];
 
 const COMMANDS = ['', 'restart', 'sync'];
+
+// The board keeps a failure in memory until it re-reads its config, so one lost
+// report leaves "The panel did not answer the report" attached to every good
+// report that follows. A report that arrived disproves that very message.
+const STALE_LINK_ERROR = /did not answer the report/i;
 
 /** Runtime data lives beside the device registry; tests point this elsewhere. */
 export function airCoinsDataDir(): string {
@@ -383,12 +391,22 @@ export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
     pulses: 0, bank: 0, sessionId: '', sessionPulses: 0,
     lastCoins: 0, lastMinutes: 0, lastRedeemAt: null, lastError: '',
   };
-  // The machine reports what went wrong on its own side; keep the last message
-  // until it either reports another one or a sale clears it.
+  // The machine reports what went wrong on its own side. Its memory is sticky,
+  // so the same text comes back on every report until the board fetches its
+  // config again; a message about a report that failed cannot be true of the
+  // report carrying it.
   const reportedError = toText(payload && payload.lastError, '', 200);
+  const boardError = STALE_LINK_ERROR.test(reportedError) ? '' : reportedError;
+  // A panel-side failure (a credit that did not go through) must survive the
+  // reports that follow it, or the operator never gets to see it.
+  const keepPanelError = !boardError && current.lastErrorSource === 'panel';
+  const sameBoardError = boardError !== ''
+    && boardError === current.lastError
+    && current.lastErrorSource !== 'panel';
+  const now = new Date().toISOString();
   const next: AirCoinsStatus = {
     ...current,
-    lastSeen: new Date().toISOString(),
+    lastSeen: now,
     ip: toText(payload && payload.ip, current.ip, 40),
     mac: toText(payload && payload.mac, current.mac, 40).toUpperCase(),
     firmwareVersion: toText(payload && payload.firmwareVersion, current.firmwareVersion, 30),
@@ -403,7 +421,11 @@ export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
     // the last one: a stale id would let a leftover counter be credited.
     sessionId: toText(payload && payload.sessionId, '', 32),
     sessionPulses: toInt(payload && payload.sessionPulses, 0, 0, 2147483647),
-    lastError: reportedError || current.lastError,
+    lastError: boardError || (keepPanelError ? current.lastError : ''),
+    lastErrorAt: boardError
+      ? (sameBoardError ? current.lastErrorAt || now : now)
+      : (keepPanelError ? current.lastErrorAt || null : null),
+    lastErrorSource: boardError ? 'board' : (keepPanelError ? 'panel' : ''),
   };
   all[String(deviceId)] = next;
   writeJson(statusFile(), all);
@@ -418,7 +440,11 @@ export function recordRedeem(deviceId: number, coins: number, minutes: number, e
     lastCoins: coins,
     lastMinutes: minutes,
     lastRedeemAt: new Date().toISOString(),
-    lastError: error.slice(0, 200),
+    // A credit that worked clears the panel's own error; a board-side one is
+    // left for the board to clear.
+    lastError: error ? error.slice(0, 200) : (current.lastErrorSource === 'panel' ? '' : current.lastError),
+    lastErrorAt: error ? new Date().toISOString() : (current.lastErrorSource === 'panel' ? null : current.lastErrorAt || null),
+    lastErrorSource: error ? 'panel' : (current.lastErrorSource === 'panel' ? '' : current.lastErrorSource || ''),
   };
   all[String(deviceId)] = next;
   writeJson(statusFile(), all);

@@ -67,6 +67,12 @@ export interface AirCoinsStatus {
   customers: number;
   routerConnected: boolean;
   freeHeap: number;
+  // Coin pulses the acceptor has produced since boot. The panel shows this
+  // because it is the only way to tell a dead wire from a refused sale: a
+  // machine that never sells but counts pulses has a wiring problem, and one
+  // that counts nothing has never seen a coin at all.
+  pulses: number;
+  bank: number;
   lastCoins: number;
   lastMinutes: number;
   lastRedeemAt: string | null;
@@ -314,8 +320,12 @@ export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
   const current = all[String(deviceId)] || {
     lastSeen: null, ip: '', mac: '', firmwareVersion: '', uptimeSeconds: 0,
     coins: 0, customers: 0, routerConnected: false, freeHeap: 0,
+    pulses: 0, bank: 0,
     lastCoins: 0, lastMinutes: 0, lastRedeemAt: null, lastError: '',
   };
+  // The machine reports what went wrong on its own side; keep the last message
+  // until it either reports another one or a sale clears it.
+  const reportedError = toText(payload && payload.lastError, '', 200);
   const next: AirCoinsStatus = {
     ...current,
     lastSeen: new Date().toISOString(),
@@ -327,6 +337,9 @@ export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
     customers: toInt(payload && payload.customers, current.customers, 0, 2147483647),
     routerConnected: payload && payload.routerConnected !== undefined ? !!payload.routerConnected : current.routerConnected,
     freeHeap: toInt(payload && payload.freeHeap, current.freeHeap, 0, 2147483647),
+    pulses: toInt(payload && payload.pulses, current.pulses || 0, 0, 2147483647),
+    bank: toInt(payload && payload.bank, current.bank || 0, 0, 2147483647),
+    lastError: reportedError || current.lastError,
   };
   all[String(deviceId)] = next;
   writeJson(statusFile(), all);

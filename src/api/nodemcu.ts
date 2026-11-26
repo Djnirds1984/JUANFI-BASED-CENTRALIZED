@@ -158,15 +158,18 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
   const deviceId = airCoinsDeviceId(body.key);
   if (!deviceId) { res.status(401).json({ error: 'Unknown device key' }); return; }
 
-  const macNoColon = String(body.mac || '').replace(/[:\-]/g, '').toUpperCase();
+  const settings = getSettings(deviceId);
+  // The panel owns the target, so its copy wins: an older firmware that still
+  // has an empty sale target is credited to whatever the operator set here.
+  const macNoColon = String(body.mac || settings.clientMac || '').replace(/[:\-]/g, '').toUpperCase();
   if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
-    res.status(400).json({ error: 'mac (12 hex chars) is required' });
+    recordRedeem(deviceId, 0, 0, 'No sale target set on the panel');
+    res.status(409).json({ error: 'No sale target: set the PC MAC this vendo should credit' });
     return;
   }
   const coins = Math.floor(Number(body.amount) || 0);
   if (coins <= 0) { res.status(400).json({ error: 'amount must be a positive number' }); return; }
 
-  const settings = getSettings(deviceId);
   const plan = planCoinAllocation(settings.rates, coins);
   if (plan.minutes <= 0) {
     recordRedeem(deviceId, coins, 0, 'No rate covers this amount');

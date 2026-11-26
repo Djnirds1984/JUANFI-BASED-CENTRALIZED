@@ -516,7 +516,7 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define AIRCOINS_BUZZER_PASSIVE 0     // 1 = piezo driven with tone(), 0 = active buzzer
 #endif
 
-#define AIRCOINS_VERSION "1.0.0"
+#define AIRCOINS_VERSION "1.0.1"
 #define PULSE_DEBOUNCE_MS 25
 #define PULSE_BANK_MAX 60000
 #define BOOT_WIFI_TIMEOUT_MS 25000
@@ -550,6 +550,7 @@ static volatile uint16_t coinPulses = 0;
 static volatile uint32_t lastPulseMs = 0;
 
 static uint16_t pulseBank = 0;        // pulses not sold yet, carries remainders
+static uint32_t pulsesSeen = 0;       // everything the acceptor ever sent, for wiring checks
 static uint32_t coinsTaken = 0;
 static uint32_t customers = 0;
 static uint32_t lastCoinMs = 0;
@@ -761,7 +762,7 @@ static bool fetchConfig() {
 }
 
 static bool sendStatus() {
-  DynamicJsonDocument doc(768);
+  DynamicJsonDocument doc(1024);
   doc["key"] = cfg.deviceKey;
   doc["ip"] = WiFi.localIP().toString();
   doc["mac"] = macNoColon();
@@ -769,6 +770,8 @@ static bool sendStatus() {
   doc["uptime"] = (uint32_t)(millis() / 1000);
   doc["coins"] = coinsTaken;
   doc["customers"] = customers;
+  doc["pulses"] = pulsesSeen;
+  doc["bank"] = pulseBank;
   doc["routerConnected"] = routerReachable;
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["configVersion"] = settings.version;
@@ -832,9 +835,12 @@ static void handleServerCommand(const String &command) {
  */
 static void sellBank(uint16_t coins) {
   if (settings.clientMac[0] == '\0') {
+    // Nothing is wrong with the coins, only with the panel, so the slot stays
+    // open and the bank is kept: closing it here would block a customer from
+    // paying for a mistake made on the panel.
     lastError = "No PC set on the panel to credit";
+    retryAfterMs = millis() + 30000UL;
     beepError();
-    closeSlot(30000, false);
     return;
   }
 
@@ -907,6 +913,7 @@ static void serviceCoins() {
   }
 
   if (pulses) {
+    pulsesSeen += pulses;
     lastCoinMs = now;
     retryAfterMs = 0;
     if (banActive) {

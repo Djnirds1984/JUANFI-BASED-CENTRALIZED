@@ -8212,6 +8212,15 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           </div>
         </div>
 
+        ${!s.clientMac ? `
+        <div class="subvendo-section" style="border-left:3px solid #f44336;padding-left:.75rem">
+          <h4 style="color:#f44336">No sale target set</h4>
+          <p style="font-size:.85rem;margin:0">
+            Until you enter the MAC of the PC this machine credits, the vendo banks every coin it
+            takes and cannot buy any time. Fill in <strong>Sale Target</strong> below, then press Save Settings.
+          </p>
+        </div>` : ''}
+
         <div class="subvendo-section">
           <h4>Machine Status</h4>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
@@ -8224,7 +8233,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             ${this.renderAirCoinsStat('Coins taken', status.coins || 0)}
             ${this.renderAirCoinsStat('Customers', status.customers || 0)}
             ${this.renderAirCoinsStat('Last sale', `${status.lastCoins || 0} coins / ${status.lastMinutes || 0} min`)}
+            ${this.renderAirCoinsStat('Coin pulses', status.pulses || 0)}
+            ${this.renderAirCoinsStat('Banked pulses', status.bank || 0)}
           </div>
+          <p style="font-size:.78rem;opacity:.7;margin:.6rem 0 0">
+            Coin pulses count what the acceptor sent since the board booted. If a coin drops and this
+            stays at 0, the acceptor is not reaching its GPIO - check the coin pin and the 3.3V signal wire.
+          </p>
           ${status.lastError ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Last error: ${this.escapeHtml(status.lastError)}</p>` : ''}
         </div>
 
@@ -11080,6 +11095,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     this._nodemcuType = wanted;
     if (!container) container = document.getElementById('subvendo-tab-content');
     if (!container) return;
+
+    // An AirCoins board runs no web server, so every "open the device" call the
+    // JuanFi view makes ends in ECONNREFUSED. Its whole page is panel-owned.
+    if (wanted === 'aircoins') { await this.renderAirCoinsConfig(container); return; }
 
     const data = await api.nodemcuListDevices();
     const devices = (data.devices || []).filter((d) => (d.firmwareType || 'juanfi') === wanted);

@@ -414,3 +414,25 @@ test('the portal loops the insert-coin sound from the click and blips on every c
   assert.match(portalJsSource, /\/hotspot-assets\/assets\/insertcoinbg\.mp3/, 'still playable if the request never lands');
   assert.match(portalJsSource, /if \(p && p\.catch\) p\.catch\(function\(\) \{\}\);/, 'a blocked play() must not break coin polling');
 });
+
+// The vendo rate table has two time columns: `minutes` (uptime the coins buy)
+// and `validity` (how long the voucher CODE stays usable). Crediting validity
+// turned a "10 peso / 2hour" rate whose validity is 4320 into a 3-day balance.
+test('a coin insert credits the time the coins bought, never the rate validity', () => {
+  const save = portalJsSource.slice(
+    portalJsSource.indexOf('function saveVoucherAndLogin'),
+    portalJsSource.indexOf('function refreshSessionAfterExtend')
+  );
+  assert.doesNotMatch(save, /durationMinutes: validityMin/, 'validity must never be sent as credited time');
+  assert.match(save, /var creditMin = durationMin > 0 \? durationMin : \(parseInt\(data\.validity\) \|\| 0\);/);
+  assert.match(save, /var durationMin = Math\.floor\(durationSec \/ 60\);/, 'timeAdded (seconds of uptime) is the paid time');
+  assert.equal((save.match(/durationMinutes: creditMin/g) || []).length, 2,
+    'the first login and the hit-less extend both credit the paid time');
+
+  const promo = portalJsSource.slice(
+    portalJsSource.indexOf('function loadPromoRates'),
+    portalJsSource.indexOf('function loadChargingStations')
+  );
+  assert.match(promo, /secondsToDhms\(parseInt\(cols\[2\] \|\| '0'\) \* 60\)/,
+    'the promo card shows the minutes the rate buys (cols[2]), not the code validity (cols[3])');
+});

@@ -1089,10 +1089,13 @@ function saveVoucherAndLogin() {
 				localStorage.removeItem('totalCoinReceived');
 				var durationSec = parseInt(data.timeAdded) || 0;
 				var durationMin = Math.floor(durationSec / 60);
-				// validity = minutes the coin insert adds to the account (validity
-				// expiration). timeAdded is only the live-session seconds counter —
-				// sending that as durationMinutes under-credits the account.
-				var validityMin = parseInt(data.validity) || durationMin;
+				// Credit the PAID time: timeAdded is the uptime the coins bought (the
+				// same number the coin dialog shows). data.validity is how long the
+				// voucher CODE stays usable - a different vendo rate column - so
+				// sending it as durationMinutes credited whatever the operator had
+				// typed there (a "10 peso / 2hour" rate with validity 4320 handed out
+				// 3 days). Only fall back to it if the vendo sent no time at all.
+				var creditMin = durationMin > 0 ? durationMin : (parseInt(data.validity) || 0);
 
 					// If extend mode and already connected: HIT-LESS top-up.
 				// Never kick, never redirect, never re-login — that chain is what
@@ -1104,7 +1107,7 @@ function saveVoucherAndLogin() {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ mac: macNoColon, durationMinutes: validityMin, routerId: routerId, extend: true }),
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: creditMin, routerId: routerId, extend: true }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
 						hideModal('coinModal');
@@ -1126,7 +1129,7 @@ function saveVoucherAndLogin() {
 					fetch(window.location.origin + '/api/vouchers/coin-auth', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ mac: macNoColon, durationMinutes: validityMin, routerId: routerId }),
+						body: JSON.stringify({ mac: macNoColon, durationMinutes: creditMin, routerId: routerId }),
 					}).then(function(r) { return r.json(); })
 					.then(function(result) {
 						hideModal('coinModal');
@@ -1300,7 +1303,10 @@ function loadPromoRates() {
 				var cols = row.split('#');
 				html += '<div style="background:#f5f5f5;border-radius:10px;padding:12px;margin-bottom:8px;">';
 				html += '<div style="font-weight:bold;color:#333;">' + (cols[0] || '') + '</div>';
-				html += '<div style="color:#888;font-size:13px;">Validity: ' + secondsToDhms(parseInt(cols[3] || '0') * 60) + '</div>';
+				// Show the time the rate BUYS (cols[2], minutes). cols[3] is the
+				// voucher-code validity, not session time, and on a misconfigured rate
+				// it reads like a 3-day balance next to a "2hour" title.
+				html += '<div style="color:#888;font-size:13px;">Time: ' + secondsToDhms(parseInt(cols[2] || '0') * 60) + '</div>';
 				if (cols[4]) html += '<div style="color:#888;font-size:13px;">Data: ' + cols[4] + ' MB</div>';
 				else html += '<div style="color:#888;font-size:13px;">Data: unlimited</div>';
 				html += '</div>';

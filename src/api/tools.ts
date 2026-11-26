@@ -146,7 +146,24 @@ router.post('/turso/config', (req: Request, res: Response) => {
       return;
     }
     turso.saveConfig(url, authToken, autoSync || false, autoSyncInterval || 10000);
-    res.json({ success: true, message: 'Turso configuration saved' });
+
+    // Apply the switch now instead of waiting for the next restart, and fill the
+    // cloud the moment Turso is turned on: activating it should mean every table
+    // is already up there, not "will be after a reboot".
+    if (autoSync) {
+      turso.startAutoSync(autoSyncInterval || 10000);
+    } else {
+      turso.stopAutoSync();
+    }
+    turso
+      .syncToCloud(true)
+      .then((result) => console.log(`[Turso] Initial upload: ${result.message}`))
+      .catch((err) => console.warn('[Turso] Initial upload failed:', err.message));
+
+    res.json({
+      success: true,
+      message: autoSync ? 'Configuration saved — uploading this panel to Turso now' : 'Turso configuration saved',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

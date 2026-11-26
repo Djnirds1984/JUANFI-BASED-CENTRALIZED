@@ -13,6 +13,12 @@ export interface NodeMcuDevice {
   /** Router this coin machine is provisioned on. */
   routerId?: number;
   /**
+   * Hotspot networks this machine serves, as CIDR ("10.0.200.0/24"). The
+   * portal uses them to hand a customer the sub-vendo of the network they are
+   * connected to; unset, the machine's own /24 is used.
+   */
+  hotspotSubnets?: string[];
+  /**
    * Which firmware the board runs. JuanFi keeps its own admin page and is
    * managed through it; AirCoins is our firmware, has no web interface and
    * takes every setting from the panel. Missing means JuanFi, which is what

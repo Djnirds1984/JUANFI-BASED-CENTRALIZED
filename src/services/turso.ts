@@ -1,8 +1,20 @@
 import { createClient, Client } from '@libsql/client';
 import { getDb } from '../database';
 import { mikroTikService } from './mikrotik';
+import {
+  PULL_TABLES,
+  SYNC_TABLES,
+  SYNC_TABLE_NAMES,
+  SyncPlan,
+  cloudDdl,
+  fingerprintSql,
+  listSyncTables,
+  pushStatements,
+} from './tursoTables';
 import fs from 'fs';
 import path from 'path';
+
+export { listSyncTables };
 
 const TURSO_CONFIG_PATH = path.join(__dirname, '..', 'data', 'turso-config.json');
 
@@ -56,96 +68,6 @@ export async function testConnection(): Promise<{ success: boolean; message: str
   }
 }
 
-/*
- * Only the roaming identity tables go to the shared cloud: an account, voucher
- * or session must follow the device to another router. The wallet tables are
- * deliberately NOT here - customer balances are cash this panel is holding for
- * a customer, and the cloud database is merged/upserted by several panels, so
- * money rows must never be duplicated or overwritten between sites.
- */
-const SYNC_TABLES = ['hotspot_users', 'vouchers', 'device_sessions', 'device_macs'];
-
-const TABLE_SCHEMAS: Record<string, string> = {
-  hotspot_users: `
-    CREATE TABLE IF NOT EXISTS hotspot_users (
-      id INTEGER PRIMARY KEY,
-      router_id INTEGER NOT NULL,
-      username TEXT NOT NULL,
-      password TEXT NOT NULL,
-      profile TEXT NOT NULL DEFAULT 'default',
-      uptime_limit TEXT DEFAULT '00:00:00',
-      bytes_in_quota INTEGER DEFAULT 0,
-      bytes_out_quota INTEGER DEFAULT 0,
-      comment TEXT,
-      disabled INTEGER NOT NULL DEFAULT 0,
-      source TEXT NOT NULL DEFAULT 'api',
-      radius_profile_id INTEGER,
-      total_bytes_in INTEGER NOT NULL DEFAULT 0,
-      total_bytes_out INTEGER NOT NULL DEFAULT 0,
-      total_session_time INTEGER NOT NULL DEFAULT 0,
-      last_login_at TEXT,
-      last_logout_at TEXT,
-      first_login_at TEXT,
-      expiry_at TEXT,
-      price REAL NOT NULL DEFAULT 0,
-      shared_users INTEGER NOT NULL DEFAULT 1,
-      paused INTEGER NOT NULL DEFAULT 0,
-      grace_used_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `,
-  vouchers: `
-    CREATE TABLE IF NOT EXISTS vouchers (
-      id INTEGER PRIMARY KEY,
-      router_id INTEGER NOT NULL,
-      code TEXT NOT NULL UNIQUE,
-      username TEXT NOT NULL,
-      password TEXT,
-      profile TEXT NOT NULL,
-      duration_minutes INTEGER,
-      data_limit_mb INTEGER,
-      is_used INTEGER NOT NULL DEFAULT 0,
-      used_at TEXT,
-      expires_at TEXT,
-      radius_profile_id INTEGER,
-      price REAL NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `,
-  device_macs: `
-    CREATE TABLE IF NOT EXISTS device_macs (
-      id INTEGER PRIMARY KEY,
-      mac_address TEXT NOT NULL UNIQUE,
-      username TEXT NOT NULL DEFAULT '',
-      router_id INTEGER,
-      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `,
-  device_sessions: `
-    CREATE TABLE IF NOT EXISTS device_sessions (
-      id INTEGER PRIMARY KEY,
-      session_token TEXT NOT NULL UNIQUE,
-      mac_address TEXT NOT NULL DEFAULT '',
-      previous_mac TEXT,
-      username TEXT NOT NULL DEFAULT '',
-      password TEXT,
-      profile TEXT,
-      router_id INTEGER NOT NULL DEFAULT 1,
-      hotspot_server TEXT NOT NULL DEFAULT '',
-      total_seconds INTEGER NOT NULL DEFAULT 0,
-      remaining_seconds INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'pending',
-      is_online INTEGER NOT NULL DEFAULT 0,
-      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
-      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
-      last_rebind_at TEXT,
-      expires_at TEXT
-    )
-  `,
-};
-
 // Literal-only defaults can be used in ALTER TABLE ADD COLUMN; expression
 // defaults like (datetime('now')) cannot, so those columns are added bare.
 function literalDefault(dflt: unknown): string | null {
@@ -155,31 +77,68 @@ function literalDefault(dflt: unknown): string | null {
   return null;
 }
 
-export async function ensureTables(client: Client): Promise<void> {
+function tableExists(localDb: any, table: string): boolean {
+  return !!localDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+}
+
+function localColumnSet(localDb: any, table: string): Set<string> {
+  return new Set((localDb.prepare(`PRAGMA table_info('${table}')`).all() as any[]).map((c) => String(c.name)));
+}
+
+/** This panel's CREATE TABLE text, ready for the cloud (see cloudDdl). */
+function localDdl(table: string): string | null {
+  const row = getDb()
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as any;
+  return row?.sql ? cloudDdl(String(row.sql)) : null;
+}
+
+// The schema work (create + column healing) is per cloud database, not per
+// sync: it is re-armed by a restart, a changed URL or a forced sync.
+let cloudSchemaFor: string | null = null;
+
+export async function ensureTables(client: Client, force = false): Promise<void> {
+  const url = getConfig()?.url || '';
+  if (!force && cloudSchemaFor === url) return;
+  if (cloudSchemaFor !== url) {
+    for (const key of Object.keys(pushedFingerprints)) delete pushedFingerprints[key];
+  }
+
   const localDb = getDb();
-  for (const table of SYNC_TABLES) {
-    const schema = TABLE_SCHEMAS[table];
-    if (schema) {
-      await client.execute(schema);
+  for (const table of SYNC_TABLE_NAMES) {
+    const ddl = localDdl(table);
+    if (!ddl) continue; // this build does not have the table
+    try {
+      await client.execute(ddl);
+    } catch (err: any) {
+      console.warn(`[Turso] Could not create ${table} in the cloud: ${err.message}`);
+      continue;
     }
-    // Heal schema drift: panels upgrade over their old cloud database, so a
-    // table created weeks ago may lack columns the local schema added since
-    // (hotspot_users.paused/grace_used_at). Without this the sync INSERT
-    // fails with "table hotspot_users has no column named paused".
-    const localCols = localDb.prepare(`PRAGMA table_info('${table}')`).all() as any[];
-    const cloudResult = await client.execute(`PRAGMA table_info(${table})`);
-    const cloudCols = new Set((cloudResult.rows as any[]).map((c) => String(c.name)));
-    for (const col of localCols) {
-      if (cloudCols.has(col.name)) continue;
-      const dflt = literalDefault(col.dflt_value);
-      // NOT NULL without a usable default cannot be added to a populated table.
-      if (col.notnull === 1 && dflt === null) continue;
-      await client.execute(
-        `ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type || 'TEXT'}` +
-          `${col.notnull === 1 ? ' NOT NULL' : ''}${dflt !== null ? ` DEFAULT ${dflt}` : ''}`
-      );
-      console.log(`[Turso] Cloud schema healed: ${table}.${col.name} added`);
-    }
+    await healColumns(client, localDb, table);
+  }
+
+  cloudSchemaFor = url;
+  console.log(`[Turso] Cloud schema ready (${SYNC_TABLE_NAMES.length} tables)`);
+}
+
+// Heal schema drift: panels upgrade over their old cloud database, so a table
+// created weeks ago may lack columns the local schema added since
+// (hotspot_users.paused/grace_used_at). Without this the sync INSERT fails
+// with "table hotspot_users has no column named paused".
+async function healColumns(client: Client, localDb: any, table: string): Promise<void> {
+  const localCols = localDb.prepare(`PRAGMA table_info('${table}')`).all() as any[];
+  const cloudResult = await client.execute(`PRAGMA table_info(${table})`);
+  const cloudCols = new Set((cloudResult.rows as any[]).map((c) => String(c.name)));
+  for (const col of localCols) {
+    if (cloudCols.has(col.name)) continue;
+    const dflt = literalDefault(col.dflt_value);
+    // NOT NULL without a usable default cannot be added to a populated table.
+    if (col.notnull === 1 && dflt === null) continue;
+    await client.execute(
+      `ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type || 'TEXT'}` +
+        `${col.notnull === 1 ? ' NOT NULL' : ''}${dflt !== null ? ` DEFAULT ${dflt}` : ''}`
+    );
+    console.log(`[Turso] Cloud schema healed: ${table}.${col.name} added`);
   }
 }
 
@@ -188,52 +147,103 @@ function getLocalRouterId(localDb: any): number {
   return row?.id ?? 1;
 }
 
-function deduplicateRows(rows: any[], keyCol: string): any[] {
+function deduplicateRows(rows: any[], key: string[]): any[] {
   const seen = new Map<string, any>();
   for (const row of rows) {
-    const key = String(row[keyCol] ?? '');
-    seen.set(key, row);
+    const id = key.map((k) => String(row[k] ?? '')).join('\u0001');
+    seen.set(id, row);
   }
   return Array.from(seen.values());
 }
 
-export async function syncToCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
+// Last successfully uploaded fingerprint per table (auto-sync skip cache).
+const pushedFingerprints: Record<string, string> = {};
+
+function tableFingerprint(localDb: any, table: string, plan: SyncPlan): string | null {
+  const sql = fingerprintSql(table, plan);
+  if (!sql) return null;
+  try {
+    const row = localDb.prepare(sql).get() as any;
+    return `${row.n}:${row.s}`;
+  } catch {
+    // An older local database may lack the stamp column: just always push.
+    return null;
+  }
+}
+
+// One HTTP round trip per chunk instead of one per statement: a full first
+// upload is thousands of DELETEs and INSERTs.
+const CHUNK_STATEMENTS = 100;
+
+async function pushInChunks(client: Client, stmts: { sql: string; args: any[] }[]): Promise<void> {
+  for (let i = 0; i < stmts.length; i += CHUNK_STATEMENTS) {
+    await client.batch(stmts.slice(i, i + CHUNK_STATEMENTS), 'write');
+  }
+}
+
+/**
+ * Upload the whole panel to Turso.
+ *
+ * force = true (the admin "Sync to Cloud" button) re-sends every table.
+ * force = false (auto-sync) skips tables that did not change since the last
+ * successful push - see SyncPlan.stamp.
+ */
+export async function syncToCloud(
+  force = true
+): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
     if (!client) {
       return { success: false, message: 'Turso not configured', counts: {} };
     }
 
-    await ensureTables(client);
+    await ensureTables(client, force);
 
     const localDb = getDb();
     const routerId = getLocalRouterId(localDb);
     const counts: Record<string, number> = {};
+    const failures: string[] = [];
 
-    for (const table of SYNC_TABLES) {
+    for (const table of SYNC_TABLE_NAMES) {
+      const plan = SYNC_TABLES[table];
+      if (!tableExists(localDb, table)) {
+        counts[table] = 0;
+        continue;
+      }
+
       const rows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       counts[table] = rows.length;
-      if (rows.length === 0) continue;
 
-      const key = SYNC_KEYS[table] || 'id';
-      const columns = Object.keys(rows[0]);
-      const placeholders = columns.map(() => '?').join(', ');
-      const insertSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
-      const deleteSql = `DELETE FROM ${table} WHERE ${key} = ?`;
-
-      // UPSERT by global key. We no longer wipe the cloud table, so multiple
-      // panels MERGE into the same central database instead of overwriting
-      // each other (this is what makes it centralized across routers).
-      for (const row of rows) {
-        const values = columns.map(col => (col === 'router_id' ? routerId : row[col]));
-        await client.execute({ sql: deleteSql, args: [row[key]] });
-        await client.execute({ sql: insertSql, args: values });
+      // Roaming rows are small and change constantly; push them every cycle.
+      const fingerprint = plan.pull ? null : tableFingerprint(localDb, table, plan);
+      if (!force && fingerprint && pushedFingerprints[table] === fingerprint) continue;
+      if (rows.length === 0) {
+        if (fingerprint) pushedFingerprints[table] = fingerprint;
+        continue;
       }
+
+      try {
+        await pushInChunks(client, pushStatements(table, plan, rows, routerId));
+        if (fingerprint) pushedFingerprints[table] = fingerprint;
+        else delete pushedFingerprints[table];
+      } catch (err: any) {
+        // One broken table must not stop the rest of the backup.
+        failures.push(`${table}: ${err.message}`);
+        console.error(`[Turso] Upload of ${table} failed:`, err.message);
+      }
+    }
+
+    if (failures.length > 0) {
+      return {
+        success: false,
+        message: `Uploaded ${SYNC_TABLE_NAMES.length - failures.length} of ${SYNC_TABLE_NAMES.length} tables — ${failures.join('; ')}`,
+        counts,
+      };
     }
 
     return {
       success: true,
-      message: `Synced ${SYNC_TABLES.length} tables to Turso`,
+      message: `Uploaded ${SYNC_TABLE_NAMES.length} tables to Turso`,
       counts,
     };
   } catch (error: any) {
@@ -241,17 +251,11 @@ export async function syncToCloud(): Promise<{ success: boolean; message: string
   }
 }
 
-// GLOBAL identity per synced table. These are the merge keys for the
-// centralized (multi-router) cloud: an account is shared by USERNAME, a voucher
-// by CODE, a device session by TOKEN - NOT per router. This is what lets the
-// same account work on any router.
-const SYNC_KEYS: Record<string, string> = {
-  hotspot_users: 'username',
-  vouchers: 'code',
-  device_sessions: 'session_token',
-  device_macs: 'mac_address',
-};
-
+/**
+ * Merge the shared identity tables (accounts, vouchers, sessions, device MACs)
+ * from the cloud into this panel. This panel's own book - sales, payments,
+ * wallets, settings - is never touched by a restore.
+ */
 export async function restoreFromCloud(): Promise<{ success: boolean; message: string; counts: Record<string, number> }> {
   try {
     const client = getClient();
@@ -267,21 +271,36 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
     const routerId = getLocalRouterId(localDb);
     const counts: Record<string, number> = {};
 
-    for (const table of SYNC_TABLES) {
+    for (const table of PULL_TABLES) {
+      const plan = SYNC_TABLES[table];
+      if (!tableExists(localDb, table)) continue;
+
       const result = await client.execute(`SELECT * FROM ${table}`);
-      let rows = result.rows as any[];
-      const key = SYNC_KEYS[table] || 'id';
-      rows = deduplicateRows(rows, key);
+      // The cloud also holds rows written by other panel versions, so only the
+      // columns this build actually has may reach the UPDATE/INSERT below.
+      const localCols = localColumnSet(localDb, table);
+      let rows = (result.rows as any[])
+        .map((row) => {
+          const clean: any = {};
+          for (const [col, value] of Object.entries(row)) {
+            if (localCols.has(col)) clean[col] = value;
+          }
+          return clean;
+        })
+        .filter((row) => plan.key.every((k) => row[k] !== undefined));
+      rows = deduplicateRows(rows, plan.key);
+
       counts[table] = rows.length;
       if (rows.length === 0) continue;
 
       // MERGE by key: keep this panel's own rows and add/update the shared
       // accounts + device-session tokens coming from the other routers.
       const columns = Object.keys(rows[0] as object).filter((c) => c !== 'id');
-      const updCols = columns.filter((c) => c !== key);
-      const updSql = `UPDATE ${table} SET ${updCols.map((c) => `${c} = ?`).join(', ')} WHERE ${key} = ?`;
+      const updCols = columns.filter((c) => !plan.key.includes(c));
+      const whereSql = plan.key.map((k) => `${k} = ?`).join(' AND ');
+      const updSql = `UPDATE ${table} SET ${updCols.map((c) => `${c} = ?`).join(', ')} WHERE ${whereSql}`;
       const insSql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
-      const stmtUpd = localDb.prepare(updSql);
+      const stmtUpd = updCols.length > 0 ? localDb.prepare(updSql) : null;
       const stmtIns = localDb.prepare(insSql);
       // device_sessions has a unique (router_id, mac): free the slot first.
       const freeMacStmt = table === 'device_sessions'
@@ -291,8 +310,10 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       const mergeMany = localDb.transaction((batch: any[]) => {
         for (const row of batch) {
           const value = (col: string) => (col === 'router_id' ? routerId : row[col]);
-          if (freeMacStmt && row.mac_address) freeMacStmt.run(row.mac_address, row[key]);
-          const info = stmtUpd.run(...updCols.map(value), row[key]);
+          if (freeMacStmt && row.mac_address) freeMacStmt.run(row.mac_address, row[plan.key[0]]);
+          const info = stmtUpd
+            ? stmtUpd.run(...updCols.map(value), ...plan.key.map((k) => row[k]))
+            : { changes: 0 };
           if (info.changes === 0) stmtIns.run(...columns.map(value));
         }
       });
@@ -302,7 +323,7 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
     // Push restored users/vouchers to the MikroTik router
     const syncResult = await syncUsersToRouter();
 
-    if (SYNC_TABLES.every((t) => (counts[t] || 0) === 0)) {
+    if (PULL_TABLES.every((t) => (counts[t] || 0) === 0)) {
       return {
         success: true,
         message: 'Cloud database is empty — tables are ready. Use Sync to Cloud first to upload this panel\'s data.',
@@ -310,7 +331,7 @@ export async function restoreFromCloud(): Promise<{ success: boolean; message: s
       };
     }
 
-    const parts = [`Merged ${SYNC_TABLES.length} tables from Turso (centralized)`];
+    const parts = [`Merged ${PULL_TABLES.length} shared tables from Turso (centralized)`];
     if (syncResult.skipped) {
       parts.push(syncResult.skipped);
     } else {
@@ -394,7 +415,7 @@ export async function pullIfLocalEmpty(): Promise<{ pulled: boolean; message: st
 
     const localDb = getDb();
     let hasData = false;
-    for (const table of SYNC_TABLES) {
+    for (const table of PULL_TABLES) {
       const count = localDb.prepare(`SELECT COUNT(*) as cnt FROM ${table}`).get() as any;
       if (count.cnt > 0) {
         hasData = true;
@@ -421,10 +442,11 @@ export function startAutoSync(intervalMs = 10000): void {
   const config = getConfig();
   if (!config?.url || !config?.authToken) return;
 
-  console.log(`[Turso] Auto-sync started (push every ${intervalMs / 1000}s)`);
+  console.log(`[Turso] Auto-sync started (push every ${intervalMs / 1000}s, ${SYNC_TABLE_NAMES.length} tables)`);
   autoSyncIntervalId = setInterval(async () => {
     try {
-      await syncToCloud();
+      // Incremental: only tables that moved since the last upload are re-sent.
+      await syncToCloud(false);
     } catch (err: any) {
       console.error('[Turso] Auto-sync error:', err.message);
     }

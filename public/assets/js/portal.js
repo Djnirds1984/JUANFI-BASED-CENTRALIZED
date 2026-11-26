@@ -27,6 +27,9 @@ window.controllerRouterId = routerId || '';
 // ---- Vendo config ----
 var vendoConfig = null;
 var vendorIpAddress = '';
+// Set while this phone is holding an AirCoins coin session on the panel. An
+// empty value means the selected machine is a JuanFi one and is called directly.
+var airCoinsSessionId = '';
 var voucher = '';
 var totalCoinReceived = 0;
 var coinTimer = null;
@@ -185,6 +188,14 @@ function setupEventListeners() {
 	document.getElementById('coinCancelBtn').addEventListener('click', function() {
 		if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
 		hideModal('coinModal');
+		if (airCoinsSessionId) {
+			// Anything dropped stays with the customer: the panel has already
+			// credited it, so cancelling only stops the slot waiting for more.
+			panelPost('/coins/cancel', { deviceId: airCoinsDevice(), sessionId: airCoinsSessionId })
+				.catch(function() {});
+			airCoinsSessionId = '';
+			return;
+		}
 		if (totalCoinReceived === 0) {
 			nodeMcuPost('/cancelTopUp', 'voucher=' + voucher + '&mac=' + mac).catch(function() {});
 		}
@@ -541,7 +552,14 @@ function directRescueLogin(sessionData) {
 
 // ---- Vendo Config ----
 function loadVendoConfig() {
-	fetch('/api/portal/vendo-config')
+	var url = '/api/portal/vendo-config';
+	var query = [];
+	// The panel cannot see the customer's address through nginx, and it is the
+	// one thing that says which network (and so which sub-vendo) they belong to.
+	if (ip) query.push('ip=' + encodeURIComponent(ip));
+	if (routerId) query.push('routerId=' + encodeURIComponent(routerId));
+	if (query.length) url += '?' + query.join('&');
+	fetch(url)
 		.then(function(r) { return r.json(); })
 		.then(function(cfg) {
 			vendoConfig = cfg;
@@ -568,46 +586,89 @@ function loadVendoConfig() {
 function populateVendoSelect(selectId, divId, cfg) {
 	var sel = document.getElementById(selectId);
 	var selDiv = document.getElementById(divId);
+	var juanfi = (cfg.isMultiVendo && cfg.multiVendoAddresses) ? cfg.multiVendoAddresses : [];
+	var aircoins = cfg.aircoinsVendos || [];
 
-	if (cfg.isMultiVendo && cfg.multiVendoAddresses.length > 0) {
-		if (cfg.multiVendoOption === 0) {
-			selDiv.style.display = '';
-			sel.innerHTML = '';
-			cfg.multiVendoAddresses.forEach(function(v) {
-				var opt = document.createElement('option');
-				opt.value = v.vendoIp;
-				opt.textContent = v.vendoName;
-				sel.appendChild(opt);
-			});
-			// The dropdown opens on the first listed machine, so the coin requests
-			// must go there too. This used to keep vendorIpAddress on the config
-			// default until the customer touched the select, and a stored choice from
-			// before a machine was replaced/renumbered was trusted blindly - either way
-			// the phone POSTs /topUp to an address that is not the one on screen and
-			// INSERT COIN reports "Coin slot is not available".
-			var stored = localStorage.getItem('selectedVendo');
-			var known = cfg.multiVendoAddresses.some(function(v) { return v && v.vendoIp === stored; });
-			var chosen = known ? stored : (cfg.multiVendoAddresses[0].vendoIp || cfg.vendorIpAddress || '');
-			if (chosen) {
-				sel.value = chosen;
-				vendorIpAddress = chosen;
-				if (!known) localStorage.setItem('selectedVendo', chosen);
-			}
-			sel.addEventListener('change', function() {
-				vendorIpAddress = sel.value;
-				localStorage.setItem('selectedVendo', vendorIpAddress);
-				syncVendoSelect(selectId);
-				updateActionButtons();
-			});
-		} else {
-			selDiv.style.display = 'none';
-			cfg.multiVendoAddresses.forEach(function(v) {
-				vendorIpAddress = v.vendoIp;
-			});
-		}
-	} else {
+	if (juanfi.length === 0 && aircoins.length === 0) {
 		selDiv.style.display = 'none';
+		return;
 	}
+
+	if (cfg.isMultiVendo && juanfi.length > 0 && cfg.multiVendoOption !== 0) {
+		// A fixed JuanFi machine: no dropdown, and the coins go to the last entry,
+		// which is what this has always done.
+		selDiv.style.display = 'none';
+		juanfi.forEach(function(v) {
+			vendorIpAddress = v.vendoIp;
+		});
+		return;
+	}
+
+	selDiv.style.display = '';
+	sel.innerHTML = '';
+
+	// A JuanFi vendo is addressed by IP and answers the phone itself. An AirCoins
+	// machine has no web server at all, so its option carries the panel id and
+	// the phone talks to /api/portal/coins/* instead. The prefix is what tells
+	// the two apart when INSERT COIN is pressed.
+	var wanted = [];
+	juanfi.forEach(function(v) {
+		var opt = document.createElement('option');
+		opt.value = v.vendoIp;
+		opt.textContent = v.vendoName;
+		sel.appendChild(opt);
+		wanted.push(v.vendoIp);
+	});
+	aircoins.forEach(function(v) {
+		var opt = document.createElement('option');
+		opt.value = 'aircoins:' + v.deviceId;
+		opt.textContent = v.vendoName;
+		sel.appendChild(opt);
+		wanted.push('aircoins:' + v.deviceId);
+	});
+
+	// Which machine serves this phone comes from its own address: the hotspot
+	// hands out one lease per DHCP server and each sub-vendo is wired to one of
+	// those networks, so the list simply opens on the right machine. A pick made
+	// by hand is still honoured while that machine exists - a replaced or
+	// renumbered one used to be trusted blindly, and the phone POSTed to an
+	// address that was not the one on screen.
+	var auto = typeof cfg.autoVendo === 'string' ? cfg.autoVendo : '';
+	var stored = localStorage.getItem('selectedVendo');
+	var chosen = auto && wanted.indexOf(auto) >= 0
+		? auto
+		: (wanted.indexOf(stored) >= 0 ? stored : wanted[0]);
+	sel.value = chosen;
+	vendorIpAddress = chosen;
+	if (stored !== chosen) localStorage.setItem('selectedVendo', chosen);
+	showAutoVendoNote(divId, auto && chosen === auto ? cfg : null);
+
+	sel.addEventListener('change', function() {
+		vendorIpAddress = sel.value;
+		localStorage.setItem('selectedVendo', vendorIpAddress);
+		showAutoVendoNote(divId, null);
+		syncVendoSelect(selectId);
+		updateActionButtons();
+	});
+}
+
+// A short line under the dropdown, so the customer knows the portal placed them
+// on their network's machine instead of having to trust the first entry.
+function showAutoVendoNote(divId, cfg) {
+	var div = document.getElementById(divId);
+	if (!div) return;
+	var note = document.getElementById(divId + 'Auto');
+	if (!note) {
+		note = document.createElement('small');
+		note.id = divId + 'Auto';
+		note.style.display = 'none';
+		note.style.color = '#0f766e';
+		note.style.fontSize = '12px';
+		div.appendChild(note);
+	}
+	if (!cfg) { note.style.display = 'none'; return; }
+	note.textContent = 'Auto-selected for your network' + (cfg.autoVendoName ? ': ' + cfg.autoVendoName : '');
+	note.style.display = '';
 }
 
 function syncVendoSelect(changedId) {
@@ -659,16 +720,99 @@ function secondsToDhms(seconds) {
 	return dD + (h < 10 ? '0' : '') + h + 'h : ' + (m < 10 ? '0' : '') + m + 'm : ' + (s < 10 ? '0' : '') + s + 's';
 }
 
-function showModal(id) {
+function showModal(id, silent) {
 	document.getElementById(id).style.display = 'flex';
 	// The coin modal only ever opens from the INSERT COIN / ADD TIME press, so
 	// this is still inside the customer's tap - the one moment the browser is
-	// guaranteed to allow audio.
-	if (id === 'coinModal') playCoinSound(insertCoinSound, true);
+	// guaranteed to allow audio. `silent` is for the flow that arms the loop in
+	// the tap and opens the dialog only after the slot has answered.
+	if (id === 'coinModal' && !silent) playCoinSound(insertCoinSound, true);
 }
 function hideModal(id) {
 	document.getElementById(id).style.display = 'none';
-	if (id === 'coinModal') stopCoinLoop();
+	if (id === 'coinModal') {
+		stopCoinLoop();
+		stopCoinWait();
+	}
+}
+
+// ---- Coin slot countdown ----
+// The slot is open for a short window only. The panel (AirCoins) or the vendo
+// itself (JuanFi) owns the real deadline and reports it on every poll; this is
+// the copy the customer watches, and the safety net that closes the dialog and
+// cancels the transaction when no coin arrives.
+var COIN_WAIT_SECONDS = 60;
+var COIN_OPEN_TIMEOUT_MS = 7000;
+var coinDeadline = 0;
+var coinWaitTimer = null;
+
+function coinModalOpen() {
+	var modal = document.getElementById('coinModal');
+	return !!modal && modal.style.display !== 'none';
+}
+
+function renderCoinWait() {
+	var el = document.getElementById('coinWaitTimer');
+	if (!el) return;
+	var left = Math.max(0, Math.ceil((coinDeadline - Date.now()) / 1000));
+	el.textContent = left > 0 ? 'Waiting for coin... ' + left + 's' : 'No coin inserted';
+	el.style.color = left <= 10 ? '#dc2626' : '#9c27b0';
+}
+
+function startCoinWait(ms) {
+	var seconds = Math.round((parseInt(ms, 10) || 0) / 1000);
+	if (!(seconds > 0)) seconds = COIN_WAIT_SECONDS;
+	coinDeadline = Date.now() + seconds * 1000;
+	renderCoinWait();
+	if (coinWaitTimer) return;
+	coinWaitTimer = setInterval(function() {
+		if (!coinDeadline) return;
+		renderCoinWait();
+		if (Date.now() >= coinDeadline) {
+			stopCoinWait();
+			if (coinModalOpen()) coinWaitExpired();
+		}
+	}, 250);
+}
+
+// Server truth wins, but a poll is only once a second: do not let rounding
+// jitter the number on screen.
+function syncCoinWait(remainMs) {
+	var left = parseInt(remainMs, 10);
+	if (!(left > 0) || !coinDeadline) return;
+	if (Math.abs(Date.now() + left - coinDeadline) > 1200) coinDeadline = Date.now() + left;
+}
+
+function stopCoinWait() {
+	if (coinWaitTimer) { clearInterval(coinWaitTimer); coinWaitTimer = null; }
+	coinDeadline = 0;
+	var el = document.getElementById('coinWaitTimer');
+	if (el) el.textContent = '';
+}
+
+// Out of time: close the dialog and cancel the transaction. Anything already
+// counted was credited as it landed, so the customer keeps it either way - and
+// a customer who dropped nothing is simply told the slot closed.
+function coinWaitExpired() {
+	var got = totalCoinReceived;
+	var onPanel = !!airCoinsSessionId;
+	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
+	if (onPanel) {
+		panelPost('/coins/cancel', { deviceId: airCoinsDevice(), sessionId: airCoinsSessionId }).catch(function() {});
+		airCoinsSessionId = '';
+	}
+	document.getElementById('coinLoader').style.display = 'none';
+	hideModal('coinModal');
+	if (got > 0) {
+		alert('Coin slot closed. ' + got + ' peso(s) were already added to this device.');
+		if (onPanel) afterAirCoinsCredit();
+		else saveVoucherAndLogin();
+		return;
+	}
+	if (!onPanel) nodeMcuPost('/cancelTopUp', 'voucher=' + voucher + '&mac=' + mac).catch(function() {});
+	totalCoinReceived = 0;
+	localStorage.removeItem('totalCoinReceived');
+	alert('No coin inserted. The coin slot has been cancelled.');
 }
 
 function nodeMcuPost(apiPath, data) {
@@ -684,6 +828,79 @@ function nodeMcuGet(apiPath) {
 	return fetch('http://' + vendorIpAddress + apiPath, { mode: 'cors' }).then(function(r) { return r.text(); });
 }
 
+// ---- AirCoins coin session ----
+// The selected machine, or 0 when a JuanFi vendo is on screen.
+function airCoinsDevice() {
+	var value = String(vendorIpAddress || '');
+	if (value.indexOf('aircoins:') !== 0) return 0;
+	return parseInt(value.substring(9), 10) || 0;
+}
+
+function panelPost(apiPath, payload) {
+	return fetch(window.location.origin + '/api/portal' + apiPath, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(payload),
+	}).then(function(r) { return r.json(); });
+}
+
+// The coins are credited as they land, so closing the session never needs a
+// voucher step: the device only has to pick up the new time.
+function afterAirCoinsCredit() {
+	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
+	airCoinsSessionId = '';
+	totalCoinReceived = 0;
+	localStorage.removeItem('totalCoinReceived');
+	hideModal('coinModal');
+	// The coin flow always authenticates as the MAC, whatever the slot did.
+	document.getElementById('voucherInput').value = macVoucherCode();
+	if (!(isExtendMode && isConnected) && chapId && chapChallenge && linkLoginOnly) {
+		setTimeout(function() { doLogin(); }, 500);
+	}
+	refreshSessionAfterExtend();
+	setTimeout(function() { syncSessionTime(); }, 2500);
+}
+
+function airCoinsCheck() {
+	// A close already happened (SAVE, CANCEL or the countdown), so a reply that
+	// lands afterwards must not credit or close anything a second time.
+	if (!airCoinsSessionId || !coinModalOpen()) return;
+	panelPost('/coins/check', { deviceId: airCoinsDevice(), sessionId: airCoinsSessionId })
+		.then(function(data) {
+			document.getElementById('coinNotice').style.display = 'none';
+			if (!data || !airCoinsSessionId) return;
+			syncCoinWait(data.remainTime);
+
+			totalCoinReceived = parseInt(data.totalCoin) || 0;
+			document.getElementById('modalTotalCoin').textContent = String(totalCoinReceived);
+			document.getElementById('modalTotalTime').textContent = secondsToDhms(parseInt(data.timeAdded) || 0);
+			if (totalCoinReceived > 0) {
+				document.getElementById('coinSaveBtn').disabled = false;
+				document.getElementById('coinSaveBtn').style.opacity = '1';
+				document.getElementById('coinCodeBlock').style.display = 'none';
+				localStorage.setItem('totalCoinReceived', totalCoinReceived);
+			}
+
+			if (data.status === 'true') {
+				playCoinSound(coinDropSound, true);
+				return;
+			}
+
+			if (data.errorCode === 'coins.wait.expired' || data.errorCode === 'coin.slot.notavailable') {
+				// The window closed. Anything dropped was already credited batch by
+				// batch, so the customer loses nothing by us closing here.
+				var got = totalCoinReceived;
+				afterAirCoinsCredit();
+				if (got > 0) {
+					alert('Coin slot expired! ' + got + ' peso(s) were already added to this device.');
+				} else {
+					alert('Coin slot expired');
+				}
+			}
+		})
+		.catch(function() {});
+}
+
 var errorCodeMap = {
 	'coins.wait.expired': 'Coin slot expired',
 	'coin.not.inserted': 'Coin not inserted',
@@ -691,6 +908,10 @@ var errorCodeMap = {
 	'coinslot.busy': 'Coin slot is busy',
 	'coin.slot.banned': 'Banned from coin slot',
 	'coin.slot.notavailable': 'Coin slot not available',
+	'coin.slot.offline': 'This sub-vendo is offline. Please tell the operator.',
+	'coins.no.rate': 'Not enough for the lowest rate yet',
+	'invalid.mac': 'Invalid device address, please refresh the portal',
+	'server.error': 'The panel could not answer, please try again',
 	'no.internet.detected': 'No internet connection',
 	'product.hash.invalid': 'Product hash invalid',
 	'convertVoucher.empty': 'Please enter voucher code',
@@ -952,52 +1173,129 @@ function insertBtnAction() {
 	}
 	var postData = 'voucher=' + voucher + '&mac=' + mac;
 
-	showModal('coinModal');
+	// An AirCoins machine serves nothing, so its half of this conversation runs
+	// on the panel. Both answers are JSON with the same field names, which keeps
+	// everything below identical for the two kinds of vendo.
+	var airDevice = airCoinsDevice();
+	var request = airDevice
+		? panelPost('/coins/topup', { deviceId: airDevice, mac: mac, routerId: routerId, voucher: voucher })
+		: nodeMcuPost('/topUp', postData).then(function(resp) {
+			try { return JSON.parse(resp); } catch(e) { return { status: 'false', errorCode: 'coin.slot.notavailable' }; }
+		});
+
+	// Ask the slot FIRST, show the dialog second. A vendo that is unplugged used
+	// to open the dialog and only then fail inside it, which looked ready and
+	// left the customer feeding a dead box. The tap still arms the coin loop,
+	// because by the time the answer comes back the browser no longer allows
+	// audio to start on its own.
+	setCoinButtonBusy(true);
+	playCoinSound(insertCoinSound, true);
+	coinOpenRequest(request).then(function(data) {
+		if (!data || data.status !== 'true') {
+			coinSlotUnavailable(data);
+			return;
+		}
+		openCoinSlot(data, airDevice);
+	}).catch(function() {
+		coinSlotUnavailable({ errorCode: 'coin.slot.offline' });
+	});
+}
+
+// Nothing at all is the same answer as "offline": the phone must not wait on a
+// box that is not there.
+function coinOpenRequest(request) {
+	return new Promise(function(resolve, reject) {
+		var settled = false;
+		var timer = setTimeout(function() {
+			if (settled) return;
+			settled = true;
+			reject({ errorCode: 'coin.slot.offline' });
+		}, COIN_OPEN_TIMEOUT_MS);
+		request.then(function(data) {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(data);
+		}, function(err) {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			reject(err);
+		});
+	});
+}
+
+// No slot to feed: say why and leave the dialog closed.
+function coinSlotUnavailable(data) {
+	var code = (data && data.errorCode) || 'coin.slot.offline';
+	airCoinsSessionId = '';
+	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
+	setCoinButtonBusy(false);
+	document.getElementById('coinLoader').style.display = 'none';
+	hideModal('coinModal');
+	alert(errorMsg(code));
+}
+
+// The slot is open: show the dialog, start the countdown and poll for coins.
+function openCoinSlot(data, airDevice) {
+	// MAC-as-voucher: keep the MAC identity. Never adopt the NodeMCU random
+	// voucher for auth — it would conflict with the coin-auth MAC session.
+	if (!macAsVoucherCode && data.voucher) {
+		voucher = data.voucher;
+	} else {
+		voucher = macVoucherCode();
+		document.getElementById('voucherInput').value = voucher;
+	}
+	airCoinsSessionId = data.sessionId || '';
+	document.getElementById('coinCodeBlock').style.display = 'none';
+	document.getElementById('coinLoader').style.display = 'none';
 	document.getElementById('coinModalTitle').textContent = isExtendMode
 		? 'Insert coin to extend time'
 		: 'Please insert the coin';
+	if ((vendoConfig && vendoConfig.isMultiVendo) || airDevice) {
+		var sel = document.getElementById(isConnected ? 'connectedVendoSelected' : 'vendoSelected');
+		if (sel && sel.selectedIndex >= 0) {
+			document.getElementById('coinModalTitle').textContent =
+				(isExtendMode ? 'Extend time on ' : 'Insert coin on ') + sel.options[sel.selectedIndex].text;
+		}
+	}
+	setCoinButtonBusy(false);
+	showModal('coinModal', true);
+	startCoinWait(data.waitTime);
+	syncCoinWait(data.remainTime);
+	if (!coinTimer) coinTimer = setInterval(checkCoin, 1000);
+}
 
-	nodeMcuPost('/topUp', postData)
-		.then(function(resp) {
-			document.getElementById('coinLoader').style.display = 'none';
-			var data;
-			try { data = JSON.parse(resp); } catch(e) { data = { status: 'false', errorCode: 'coin.slot.notavailable' }; }
-			if (data.status === 'true') {
-				// MAC-as-voucher: keep the MAC identity. Never adopt the
-				// NodeMCU random voucher for auth — it would conflict with
-				// the coin-auth MAC session.
-				if (!macAsVoucherCode) {
-					voucher = data.voucher;
-				} else {
-					voucher = macVoucherCode();
-					document.getElementById('voucherInput').value = voucher;
-				}
-				document.getElementById('coinCodeBlock').style.display = 'none';
-				if (vendoConfig && vendoConfig.isMultiVendo) {
-					var sel = document.getElementById(isConnected ? 'connectedVendoSelected' : 'vendoSelected');
-					if (sel.selectedIndex >= 0) {
-						document.getElementById('coinModalTitle').textContent =
-							(isExtendMode ? 'Extend time on ' : 'Insert coin on ') + sel.options[sel.selectedIndex].text;
-					}
-				}
-				if (!coinTimer) coinTimer = setInterval(checkCoin, 1000);
-			} else {
-				alert(errorMsg(data.errorCode));
-				hideModal('coinModal');
-			}
-		})
-		.catch(function() {
-			document.getElementById('coinLoader').style.display = 'none';
-			alert('Coin slot is not available as of the moment, Please try again later');
-			hideModal('coinModal');
-		});
+// INSERT COIN / ADD TIME both wait on the slot; say so without opening a dialog
+// the customer would read as "the machine is ready".
+function setCoinButtonBusy(busy) {
+	['insertBtn', 'extendBtn'].forEach(function(id) {
+		var btn = document.getElementById(id);
+		if (!btn) return;
+		if (busy) {
+			if (btn.getAttribute('data-label') === null) btn.setAttribute('data-label', btn.textContent);
+			btn.disabled = true;
+			btn.textContent = 'CHECKING SLOT...';
+			return;
+		}
+		btn.disabled = false;
+		if (btn.getAttribute('data-label') !== null) btn.textContent = btn.getAttribute('data-label');
+	});
 }
 
 function checkCoin() {
+	// The dialog is the only place this poll belongs: once SAVE, CANCEL or the
+	// countdown closed it, a late answer must not credit anything again.
+	if (!coinModalOpen()) return;
+	// The panel-held session answers for an AirCoins machine; a JuanFi one is
+	// asked directly, as before.
+	if (airCoinsSessionId) { airCoinsCheck(); return; }
 	nodeMcuPost('/checkCoin', 'voucher=' + voucher)
 		.then(function(resp) {
 			var data;
 			try { data = JSON.parse(resp); } catch(e) { return; }
+			// The countdown may have closed the dialog while this was in flight.
+			if (!coinModalOpen()) return;
 			document.getElementById('coinNotice').style.display = 'none';
 
 			if (data.status === 'true') {
@@ -1013,6 +1311,9 @@ function checkCoin() {
 				document.getElementById('coinNotice').textContent = 'Verifying, please wait..';
 			} else if (data.errorCode === 'coin.not.inserted') {
 				var remainTime = parseInt(parseInt(data.remainTime) / 1000);
+				// The vendo re-opens the slot after every coin, so its own remaining
+				// time is what the countdown has to show.
+				syncCoinWait(data.remainTime);
 				totalCoinReceived = parseInt(data.totalCoin) || 0;
 				if (totalCoinReceived > 0) {
 					document.getElementById('coinSaveBtn').disabled = false;
@@ -1054,7 +1355,33 @@ function checkCoin() {
 		.catch(function() {});
 }
 
+// SAVE on an AirCoins session. The coins were credited as they landed, so this
+// only closes the slot and lets the device pick the time up. Asking the voucher
+// route here as well would pay the same pesos a second time.
+function saveAirCoinsSession() {
+	var saveBtn = document.getElementById('coinSaveBtn');
+	saveBtn.disabled = true;
+	saveBtn.textContent = 'SAVING...';
+
+	panelPost('/coins/use', { deviceId: airCoinsDevice(), sessionId: airCoinsSessionId })
+		.then(function(data) {
+			saveBtn.textContent = 'SAVE';
+			if (data && data.status === 'true') {
+				afterAirCoinsCredit();
+				return;
+			}
+			saveBtn.disabled = false;
+			alert(errorMsg(data && data.errorCode));
+		})
+		.catch(function() {
+			// The money is already on the device; only the close call failed.
+			saveBtn.textContent = 'SAVE';
+			afterAirCoinsCredit();
+		});
+}
+
 function saveVoucherAndLogin() {
+	if (airCoinsSessionId) { saveAirCoinsSession(); return; }
 	if (coinTimer) { clearInterval(coinTimer); coinTimer = null; }
 	// Panel MAC-as-voucher auth: identity is ALWAYS the MAC. Never the
 	// random voucher the NodeMCU returned from /topUp.
@@ -1291,9 +1618,35 @@ function payOnline(rateId) {
 }
 
 // ---- PROMO RATES ----
+// An AirCoins box serves no page: the panel holds its rate ladder and is the
+// one that prices the coins, so the quote has to come from there. A JuanFi
+// vendo still answers /getRates itself, exactly as before.
+function loadAirCoinsPromoRates(list) {
+	fetch(window.location.origin + '/api/portal/coins/rates?deviceId=' + airCoinsDevice(), { cache: 'no-store' })
+		.then(function(r) { return r.json(); })
+		.then(function(data) {
+			var rates = (data && data.rates) || [];
+			var html = '';
+			rates.forEach(function(rate) {
+				if (!rate) return;
+				html += '<div style="background:#f5f5f5;border-radius:10px;padding:12px;margin-bottom:8px;">';
+				html += '<div style="font-weight:bold;color:#333;">' + (rate.name || '') + '</div>';
+				html += '<div style="color:#888;font-size:13px;">Time: ' + secondsToDhms(parseInt(rate.minutes || '0') * 60) + '</div>';
+				html += '<div style="color:#888;font-size:13px;">Data: unlimited</div>';
+				html += '</div>';
+			});
+			list.innerHTML = html || '<div style="text-align:center;color:#999;">No rates</div>';
+		})
+		.catch(function() { list.innerHTML = '<div style="text-align:center;color:#f44336;">Failed to load rates</div>'; });
+}
+
 function loadPromoRates() {
 	var list = document.getElementById('promoRatesList');
 	list.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Loading...</div>';
+	if (airCoinsDevice() > 0) {
+		loadAirCoinsPromoRates(list);
+		return;
+	}
 	nodeMcuGet('/getRates?rateType=1&date=' + Date.now())
 		.then(function(data) {
 			var rows = data.split('|');

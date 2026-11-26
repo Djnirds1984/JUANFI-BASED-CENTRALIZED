@@ -4860,6 +4860,7 @@ const App = {
           <button class="tab ${this.radiusTab === 'profiles' ? 'active' : ''}" data-tab="profiles">Profiles</button>
           <button class="tab ${this.radiusTab === 'sessions' ? 'active' : ''}" data-tab="sessions">Sessions</button>
           <button class="tab ${this.radiusTab === 'active' ? 'active' : ''}" data-tab="active">Active</button>
+          <button class="tab ${this.radiusTab === 'offline' ? 'active' : ''}" data-tab="offline">Offline Devices<span id="radius-offline-tab-badge" class="radius-tab-badge" style="display:none">0</span></button>
           <button class="tab ${this.radiusTab === 'logs' ? 'active' : ''}" data-tab="logs">Logs</button>
         </div>
         <div id="radius-tab-content">Loading...</div>
@@ -4917,6 +4918,8 @@ const App = {
     });
 
     this.loadRadiusTab();
+    // The Offline Devices badge is filled even when another tab is opened first.
+    if (this.radiusTab !== 'active' && this.radiusTab !== 'offline') this.refreshRadiusOfflineBadge();
   },
 
   async loadRadiusTab() {
@@ -4931,12 +4934,26 @@ const App = {
         await this.loadRadiusSessions(container);
       } else if (this.radiusTab === 'active') {
         await this.loadRadiusActiveSessions(container);
+      } else if (this.radiusTab === 'offline') {
+        await this.loadRadiusOfflineDevices(container);
       } else if (this.radiusTab === 'logs') {
         await this.loadRadiusLogs(container);
       }
     } catch (err) {
       container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
     }
+  },
+
+  // Tab switching from markup (notes, toolbar buttons) goes through here so the
+  // tab strip, the pollers and the content always stay in sync.
+  openRadiusTab(tab) {
+    this.radiusTab = tab;
+    const container = document.getElementById('radius-tab-content');
+    const card = container && container.parentElement;
+    if (card) {
+      card.querySelectorAll('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+    }
+    this.loadRadiusTab();
   },
 
   async loadRadiusProfiles(container) {
@@ -5362,21 +5379,21 @@ const App = {
         <div class="radius-toolbar">
           <div class="radius-search">
             ${icons.search}
-            <input type="text" id="radius-device-search" class="form-control" placeholder="Search MAC, IP, hostname or user&hellip;" autocomplete="off">
+            <input type="text" id="radius-device-search" class="form-control" placeholder="Search online devices by MAC, IP, hostname or user&hellip;" autocomplete="off">
           </div>
           <div class="radius-filters" id="radius-device-filters">
             <button class="radius-filter-chip active" data-filter="all">All <span class="radius-filter-count" data-radius-count="all">0</span></button>
-            <button class="radius-filter-chip" data-filter="online"><span class="radius-filter-dot"></span>Online <span class="radius-filter-count" data-radius-count="online">0</span></button>
-            <button class="radius-filter-chip" data-filter="offline">Offline <span class="radius-filter-count" data-radius-count="offline">0</span></button>
             <button class="radius-filter-chip" data-filter="blocked">Blocked <span class="radius-filter-count" data-radius-count="blocked">0</span></button>
             <button class="radius-filter-chip" data-filter="bypassed">Bypassed <span class="radius-filter-count" data-radius-count="bypassed">0</span></button>
           </div>
           <div class="radius-toolbar-actions">
             <span class="radius-live"><span class="radius-live-dot"></span>Live &middot; 1s</span>
+            <button class="btn btn-outline btn-sm" onclick="App.openRadiusTab('offline')">Offline Devices</button>
             <button class="btn btn-primary btn-sm" onclick="App.showRadiusDeviceModal()">${icons.userPlus} Add Device</button>
             <button class="btn btn-outline btn-sm" onclick="App.showAddRadiusUserModal()">Add User</button>
           </div>
         </div>
+        <div class="radius-offline-note">Only devices connected right now are listed here. Offline devices and ended sessions are in the <a href="#" onclick="App.openRadiusTab('offline');return false;">Offline Devices</a> tab.</div>
         <div class="radius-table-card">
           <div class="table-wrapper">
             <table class="radius-devices-table">
@@ -5470,6 +5487,124 @@ const App = {
     }
   },
 
+  // Offline Devices subpage: every known device whose session already ended
+  // (router dropped it, or its paid time ran out). The Active tab never lists
+  // these, so the two lists stay a clean split of the same device table.
+  async loadRadiusOfflineDevices(container) {
+    if (!container) container = document.getElementById('radius-tab-content');
+    this.clearRadiusPollers();
+    this._radiusDevices = [];
+    this._radiusOfflineSearch = '';
+    this._radiusOfflineFilter = 'all';
+    const routerId = this.selectedRouterId;
+    const viewId = this._radiusDeviceViewId;
+    const isCurrent = () => this._radiusDeviceViewId === viewId && this.selectedRouterId === routerId &&
+      this.currentPage === 'radius' && this.radiusTab === 'offline';
+
+    try {
+      this._radiusDevices = this.mapActiveDevices(await api.getActiveDevices(routerId));
+      if (!isCurrent()) return;
+      const icons = this.radiusIcons;
+
+      container.innerHTML = `
+        <div class="radius-toolbar">
+          <div class="radius-search">
+            ${icons.search}
+            <input type="text" id="radius-offline-search" class="form-control" placeholder="Search offline devices by MAC, IP, hostname or user&hellip;" autocomplete="off">
+          </div>
+          <div class="radius-filters" id="radius-offline-filters">
+            <button class="radius-filter-chip active" data-filter="all">All <span class="radius-filter-count" data-radius-offline-count="all">0</span></button>
+            <button class="radius-filter-chip" data-filter="ended">Session ended <span class="radius-filter-count" data-radius-offline-count="ended">0</span></button>
+            <button class="radius-filter-chip" data-filter="blocked">Blocked <span class="radius-filter-count" data-radius-offline-count="blocked">0</span></button>
+            <button class="radius-filter-chip" data-filter="bypassed">Bypassed <span class="radius-filter-count" data-radius-offline-count="bypassed">0</span></button>
+          </div>
+          <div class="radius-toolbar-actions">
+            <span class="radius-live"><span class="radius-live-dot"></span>Live &middot; 3s</span>
+            <button class="btn btn-outline btn-sm" onclick="App.openRadiusTab('active')">Back to Online</button>
+          </div>
+        </div>
+        <div class="radius-table-card">
+          <div class="table-wrapper">
+            <table class="radius-devices-table radius-offline-table">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th>IP Address</th>
+                  <th>User</th>
+                  <th>Status</th>
+                  <th>Uptime</th>
+                  <th>Time Left</th>
+                  <th>Ended</th>
+                  <th>Data Usage</th>
+                  <th>Last Seen</th>
+                  <th class="th-actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="radius-offline-devices-tbody">
+                ${this.renderRadiusDeviceRows(this.filterRadiusOfflineDevices(this._radiusDevices), this.radiusOfflineRowOpts())}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      this.updateRadiusOfflineCounts(this._radiusDevices);
+
+      const tbody = document.getElementById('radius-offline-devices-tbody');
+      if (tbody) {
+        tbody.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-action]');
+          if (!btn) return;
+          const row = btn.closest('tr[data-active-id]');
+          if (!row) return;
+          const device = this._radiusDevices.find((d) => String(d.id) === row.dataset.activeId);
+          if (device) this.handleRadiusDeviceAction(btn.dataset.action, device);
+        });
+      }
+
+      const searchInput = document.getElementById('radius-offline-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          this._radiusOfflineSearch = e.target.value.trim().toLowerCase();
+          this.rerenderRadiusOfflineDeviceRows();
+        });
+      }
+
+      const filters = document.getElementById('radius-offline-filters');
+      if (filters) {
+        filters.addEventListener('click', (e) => {
+          const chip = e.target.closest('.radius-filter-chip');
+          if (!chip) return;
+          this._radiusOfflineFilter = chip.dataset.filter || 'all';
+          filters.querySelectorAll('.radius-filter-chip').forEach((c) => c.classList.toggle('active', c === chip));
+          this.rerenderRadiusOfflineDeviceRows();
+        });
+      }
+
+      // Ended sessions barely change - a relaxed poll keeps the list moving as
+      // devices drop off without hammering the router.
+      let polling = false;
+      this._radiusOfflineInterval = setInterval(async () => {
+        if (polling || !isCurrent() || this._radiusMutationBusy) return;
+        polling = true;
+        const mutationVersion = this._radiusMutationVersion;
+        try {
+          const freshDevices = this.mapActiveDevices(await api.getActiveDevices(routerId));
+          if (!isCurrent() || mutationVersion !== this._radiusMutationVersion) return;
+          this._radiusDevices = freshDevices;
+          this.refreshRadiusOfflineDeviceRows(freshDevices);
+          this.updateRadiusOfflineCounts(freshDevices);
+        } catch (err) {
+          console.error('Failed to refresh radius offline devices:', err);
+        } finally {
+          polling = false;
+        }
+      }, 3000);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><p>Error: ${err.message}</p></div>`;
+    }
+  },
+
   showRadiusDeviceModal(device = null) {
     const routerId = this.selectedRouterId;
     this.openModal(device ? 'Edit Device Hostname' : 'Add RADIUS Device', `
@@ -5543,13 +5678,19 @@ const App = {
       if (closeModal) this.closeModal();
       this.toast(result.message || 'Device updated', 'success');
       if (result.warning) this.toast(result.warning, 'warning');
-      if (this.currentPage === 'radius' && this.radiusTab === 'active' && this.selectedRouterId === routerId) {
+      if (this.currentPage === 'radius' && this.selectedRouterId === routerId &&
+        (this.radiusTab === 'active' || this.radiusTab === 'offline')) {
         const devices = this.mapActiveDevices(await api.getActiveDevices(routerId));
         if (this._radiusDeviceViewId !== viewId || this.selectedRouterId !== routerId) return;
         this._radiusDevices = devices;
-        this.rerenderRadiusDeviceRows();
-        this.updateRadiusFilterCounts(devices);
-        this.updateRadiusKpiValues(devices, null);
+        if (this.radiusTab === 'active') {
+          this.rerenderRadiusDeviceRows();
+          this.updateRadiusFilterCounts(devices);
+          this.updateRadiusKpiValues(devices, null);
+        } else {
+          this.rerenderRadiusOfflineDeviceRows();
+          this.updateRadiusOfflineCounts(devices);
+        }
       }
     } catch (err) {
       this.toast(err.message, 'error');
@@ -5667,18 +5808,23 @@ const App = {
     }
   },
 
-  renderRadiusDeviceRows(devices) {
+  renderRadiusDeviceRows(devices, opts = {}) {
     const list = devices || [];
+    const searchTerm = opts.search !== undefined ? opts.search : this._radiusDeviceSearch;
     if (list.length === 0) {
+      const title = searchTerm
+        ? (opts.noMatchTitle || 'No matching devices')
+        : (opts.emptyTitle || 'No devices yet');
+      const text = searchTerm
+        ? (opts.noMatchText || 'No devices match your search. Try a different MAC, IP, hostname or username.')
+        : (opts.emptyText || 'Devices will appear here as soon as they connect to this router.');
       return `
         <tr class="radius-no-devices">
           <td colspan="10">
             <div class="radius-empty-state">
               <span class="radius-empty-icon">${this.radiusIcons.wifiOff}</span>
-              <h4>${this._radiusDeviceSearch ? 'No matching devices' : 'No devices yet'}</h4>
-              <p>${this._radiusDeviceSearch
-                ? 'No devices match your search. Try a different MAC, IP, hostname or username.'
-                : 'Devices will appear here as soon as they connect to this router.'}</p>
+              <h4>${title}</h4>
+              <p>${text}</p>
             </div>
           </td>
         </tr>
@@ -5707,6 +5853,11 @@ const App = {
       const outPct = dataTotal ? ((bytesOut / dataTotal) * 100).toFixed(1) : 0;
 
       const sessionCell = this.radiusDeviceTimeCell(d);
+
+      // The Offline Devices table swaps the live throughput column for the time
+      // the session ended, which is the only thing that still changes.
+      const endedAt = d['ended-at'] || '';
+      const endedCell = `<span class="radius-muted" data-field="ended-at" title="${escAttr(endedAt)}">${endedAt ? this.formatTimeAgo(endedAt) : '&mdash;'}</span>`;
 
       const trafficCell = isActive
         ? `
@@ -5772,7 +5923,7 @@ const App = {
           <td>${statusCell}</td>
           <td class="radius-mono" data-field="uptime">${this.escapeHtml(d.uptime || '-')}</td>
           <td data-field="device-time">${sessionCell}</td>
-          <td>${trafficCell}</td>
+          <td>${opts.endedColumn ? endedCell : trafficCell}</td>
           <td>${dataCell}</td>
           <td class="radius-muted" data-field="last-seen" title="${escAttr(d['last-seen'] || '')}">${this.formatTimeAgo(d['last-seen'])}</td>
           <td class="radius-actions">${actions}</td>
@@ -5780,17 +5931,18 @@ const App = {
     }).join('');
   },
 
-  refreshRadiusActiveDeviceRows(devices) {
-    const tbody = document.getElementById('radius-active-devices-tbody');
+  // Patch a device table in place: re-render only when the row set changed,
+  // otherwise refresh just the cells that animate.
+  refreshRadiusRows(tbodyId, visible, opts = {}) {
+    const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
 
-    const visible = this.filterRadiusDevices(devices);
     const rows = Array.from(tbody.querySelectorAll('tr[data-active-id]'));
     const rowKey = (d) => this.radiusDeviceRowKey(d);
     const domKey = (r) => r.dataset.rowKey;
 
     if (visible.map(rowKey).join('|') !== rows.map(domKey).join('|')) {
-      tbody.innerHTML = this.renderRadiusDeviceRows(visible);
+      tbody.innerHTML = this.renderRadiusDeviceRows(visible, opts);
       return;
     }
 
@@ -5808,6 +5960,12 @@ const App = {
       }
       const timeCell = row.querySelector('[data-field="device-time"]');
       if (timeCell) timeCell.innerHTML = this.radiusDeviceTimeCell(device);
+
+      const endedCell = row.querySelector('[data-field="ended-at"]');
+      if (endedCell) {
+        endedCell.textContent = device['ended-at'] ? this.formatTimeAgo(device['ended-at']) : '\u2014';
+        endedCell.title = device['ended-at'] || '';
+      }
 
       // Ended sessions keep their stored values - only live ones animate.
       if (device['is-active'] !== true) return;
@@ -5841,14 +5999,21 @@ const App = {
     });
   },
 
-  filterRadiusDevices(devices) {
-    let list = devices || [];
+  refreshRadiusActiveDeviceRows(devices) {
+    this.refreshRadiusRows('radius-active-devices-tbody', this.filterRadiusDevices(devices));
+  },
 
-    if (this._radiusDeviceFilter === 'online') {
-      list = list.filter((d) => d['is-active'] === true);
-    } else if (this._radiusDeviceFilter === 'offline') {
-      list = list.filter((d) => d['is-active'] !== true);
-    } else if (['blocked', 'bypassed'].includes(this._radiusDeviceFilter)) {
+  refreshRadiusOfflineDeviceRows(devices) {
+    this.refreshRadiusRows('radius-offline-devices-tbody',
+      this.filterRadiusOfflineDevices(devices), this.radiusOfflineRowOpts());
+  },
+
+  filterRadiusDevices(devices) {
+    // The Active tab only lists devices that are on the router now. Offline and
+    // ended sessions are moved to the Offline Devices tab.
+    let list = (devices || []).filter((d) => d['is-active'] === true);
+
+    if (['blocked', 'bypassed'].includes(this._radiusDeviceFilter)) {
       list = list.filter((d) => d['access-mode'] === this._radiusDeviceFilter);
     }
 
@@ -5863,22 +6028,108 @@ const App = {
     return list;
   },
 
+  filterRadiusOfflineDevices(devices) {
+    const offline = (devices || []).filter((d) => d['is-active'] !== true);
+    let list = offline;
+
+    if (this._radiusOfflineFilter === 'ended') {
+      list = offline.filter((d) => !!d['ended-at']);
+    } else if (['blocked', 'bypassed'].includes(this._radiusOfflineFilter)) {
+      list = offline.filter((d) => d['access-mode'] === this._radiusOfflineFilter);
+    }
+
+    const q = (this._radiusOfflineSearch || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter((d) =>
+        [d['mac-address'], d.address, d['host-name'], d.user, d.server]
+          .some((v) => String(v || '').toLowerCase().includes(q))
+      );
+    }
+
+    // Most recently ended first, so the freshest drop-offs stay on top.
+    const stamp = (d) => {
+      const ts = new Date(String(d['ended-at'] || d['last-seen'] || '').replace(' ', 'T')).getTime();
+      return isNaN(ts) ? 0 : ts;
+    };
+    return list.slice().sort((a, b) => stamp(b) - stamp(a));
+  },
+
+  radiusOfflineRowOpts() {
+    return {
+      search: this._radiusOfflineSearch,
+      endedColumn: true,
+      emptyTitle: 'No offline devices',
+      emptyText: 'Devices move here when they disconnect or when their paid session ends.',
+      noMatchTitle: 'No matching offline devices',
+      noMatchText: 'No offline device matches your search. Try a different MAC, IP, hostname or username.',
+    };
+  },
+
   rerenderRadiusDeviceRows() {
     const tbody = document.getElementById('radius-active-devices-tbody');
     if (!tbody) return;
     tbody.innerHTML = this.renderRadiusDeviceRows(this.filterRadiusDevices(this._radiusDevices || []));
   },
 
+  rerenderRadiusOfflineDeviceRows() {
+    const tbody = document.getElementById('radius-offline-devices-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = this.renderRadiusDeviceRows(
+      this.filterRadiusOfflineDevices(this._radiusDevices || []), this.radiusOfflineRowOpts());
+  },
+
   updateRadiusFilterCounts(devices) {
     const list = devices || [];
-    const online = list.filter((d) => d['is-active'] === true).length;
-    const counts = { all: list.length, online, offline: list.length - online,
-      blocked: list.filter((d) => d['access-mode'] === 'blocked').length,
-      bypassed: list.filter((d) => d['access-mode'] === 'bypassed').length };
+    const online = list.filter((d) => d['is-active'] === true);
+    const offline = list.length - online.length;
+    const counts = {
+      all: online.length,
+      online: online.length,
+      offline,
+      blocked: online.filter((d) => d['access-mode'] === 'blocked').length,
+      bypassed: online.filter((d) => d['access-mode'] === 'bypassed').length,
+    };
 
     document.querySelectorAll('[data-radius-count]').forEach((el) => {
       if (counts[el.dataset.radiusCount] !== undefined) el.textContent = counts[el.dataset.radiusCount];
     });
+    this.updateRadiusOfflineTabBadge(offline);
+  },
+
+  updateRadiusOfflineCounts(devices) {
+    const offline = (devices || []).filter((d) => d['is-active'] !== true);
+    const counts = {
+      all: offline.length,
+      ended: offline.filter((d) => !!d['ended-at']).length,
+      blocked: offline.filter((d) => d['access-mode'] === 'blocked').length,
+      bypassed: offline.filter((d) => d['access-mode'] === 'bypassed').length,
+    };
+
+    document.querySelectorAll('[data-radius-offline-count]').forEach((el) => {
+      const key = el.dataset.radiusOfflineCount;
+      if (counts[key] !== undefined) el.textContent = counts[key];
+    });
+    this.updateRadiusOfflineTabBadge(offline.length);
+  },
+
+  updateRadiusOfflineTabBadge(count) {
+    const badge = document.getElementById('radius-offline-tab-badge');
+    if (!badge || typeof count !== 'number') return;
+    badge.textContent = String(count);
+    badge.style.display = count > 0 ? 'inline-flex' : 'none';
+  },
+
+  // Cosmetic badge fill when the RADIUS page opens on a tab that never loads
+  // the device list (Profiles / Sessions / Logs).
+  async refreshRadiusOfflineBadge() {
+    const routerId = this.selectedRouterId;
+    try {
+      const devices = this.mapActiveDevices(await api.getActiveDevices(routerId));
+      if (this.currentPage !== 'radius' || this.selectedRouterId !== routerId) return;
+      this.updateRadiusOfflineTabBadge(devices.filter((d) => d['is-active'] !== true).length);
+    } catch (err) {
+      // A failed count must never break the page.
+    }
   },
 
   // Deterministic per-device identity helpers for the avatars.
@@ -5922,6 +6173,10 @@ const App = {
     if (this._radiusStatsInterval) {
       clearInterval(this._radiusStatsInterval);
       this._radiusStatsInterval = null;
+    }
+    if (this._radiusOfflineInterval) {
+      clearInterval(this._radiusOfflineInterval);
+      this._radiusOfflineInterval = null;
     }
     if (this._radiusLogsInterval) {
       clearInterval(this._radiusLogsInterval);
@@ -7012,7 +7267,7 @@ Then join your network:
                 <span style="font-size:1.3rem">&#9729;</span> Turso Cloud Database
               </h4>
               <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
-                Sync your devices, vouchers, and session tokens to Turso cloud database for backup and multi-panel access.
+                Upload this panel's whole database to a Turso cloud database — accounts, vouchers, sessions, sales, payments, wallets, chats and settings — for backup and multi-panel reporting.
               </p>
 
               <div style="margin-bottom:1rem">
@@ -7034,7 +7289,7 @@ Then join your network:
                 <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem">
                   Automatically sync to cloud every
                   <input type="number" id="turso-sync-interval" value="${cfg.autoSyncInterval || 10}" min="5" max="300" style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
-                  seconds. New controllers with empty database will auto-pull from cloud on startup.
+                  seconds. Only tables that changed are re-sent, so history is not re-uploaded on every tick. New controllers with empty database will auto-pull from cloud on startup.
                 </div>
               </div>
 
@@ -7052,7 +7307,7 @@ Then join your network:
                 ${uiIcon('upload')} Sync &amp; Restore
               </h4>
               <p style="color:var(--text-muted);margin:0.5rem 0 1rem">
-                Sync pushes local data to Turso. Restore pulls from Turso and replaces local data.
+                Sync uploads every table of this panel. Restore only merges the shared roaming tables (accounts, vouchers, session tokens, device MACs) back — it never overwrites this panel's own sales, payments, wallet balances or settings.
               </p>
               <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
                 <button class="btn btn-primary" onclick="App.syncToTurso()" id="turso-sync-btn">
@@ -7070,9 +7325,10 @@ Then join your network:
             <div style="padding:1.5rem">
               <h4 style="margin-top:0;color:var(--text-muted);font-size:1rem">What Gets Synced</h4>
               <ul style="color:var(--text-muted);margin:0.5rem 0 0;padding-left:1.25rem;line-height:1.8">
-                <li><strong>hotspot_users</strong> — All device/user accounts</li>
-                <li><strong>vouchers</strong> — All voucher codes and status</li>
-                <li><strong>device_sessions</strong> — Active session tokens and roaming data</li>
+                <li><strong>Roaming, two-way</strong> — hotspot_users, vouchers, device_sessions, device_macs. An account or voucher follows the device to any router.</li>
+                <li><strong>Panel book, upload only</strong> — routers, admin_users, portal_files, bandwidth/radius profiles, radius_clients, radius_sessions, session_bindings, ppp_customers, pppoe_servers, billing plans/settings, ppp_payments, payments, payment_rates, aircoins_sales, cafe machines/settings/sessions, trial claims, chat threads and messages.</li>
+                <li><strong>Wallet, upload only</strong> — wallet_accounts, wallet_transactions, wallet_topup_sessions, wallet_devices, wallet_settings. Balances are never merged back, so no panel can overwrite another shop's money.</li>
+                <li><strong>Kept local</strong> — active_devices (live router state), radius_logs and monitoring_logs (high-volume telemetry), wallet_auth_codes (one-shot codes), cafe_candidates (discovery beacons).</li>
               </ul>
             </div>
           </div>
@@ -7132,9 +7388,11 @@ Then join your network:
     try {
       const res = await api.syncToTurso();
       if (res.success) {
-        const counts = Object.entries(res.counts || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-        this.toast(`Synced to cloud (${counts})`, 'success');
-        if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = `${res.message} — ${counts}`; }
+        const entries = Object.entries(res.counts || {});
+        const total = entries.reduce((n, [, v]) => n + v, 0);
+        const rows = entries.filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ');
+        this.toast(`Synced ${entries.length} tables to cloud`, 'success');
+        if (statusEl) { statusEl.style.color = 'var(--success)'; statusEl.textContent = `${res.message} — ${total} rows (${rows})`; }
       } else {
         this.toast(res.message, 'error');
         if (statusEl) { statusEl.style.color = 'var(--danger)'; statusEl.textContent = res.message; }
@@ -7148,7 +7406,7 @@ Then join your network:
   },
 
   async restoreFromTurso() {
-    if (!confirm('This will replace your local database with data from Turso cloud. All current local data will be lost. Continue?')) return;
+    if (!confirm('Merge the shared roaming tables (accounts, vouchers, session tokens, device MACs) from Turso into this panel? Sales, payments, wallet balances and settings stay exactly as they are locally. Continue?')) return;
     const btn = document.getElementById('turso-restore-btn');
     const statusEl = document.getElementById('turso-sync-status');
     if (btn) { btn.disabled = true; btn.textContent = 'Restoring...'; }
@@ -7746,7 +8004,7 @@ Then join your network:
           <button class="tab-btn ${this._subvendoType === 'juanfi' ? 'active' : ''}" data-type="juanfi" onclick="App.switchSubVendoType('juanfi')">JuanFi Subvendo</button>
           <button class="tab-btn ${this._subvendoType === 'aircoins' ? 'active' : ''}" data-type="aircoins" onclick="App.switchSubVendoType('aircoins')">AirCoins Subvendo</button>
         </div>
-        <div class="tab-bar subvendo-view-tabs" style="border-bottom:1px solid var(--border)">
+        <div class="tab-bar subvendo-view-tabs" style="border-bottom:1px solid var(--border)${this._subvendoType === 'aircoins' ? ';display:none' : ''}">
           <button class="tab-btn ${this._subvendoTab === 'config' ? 'active' : ''}" data-subtab="config" onclick="App.switchSubVendoTab('config')">Configuration</button>
           <button class="tab-btn ${this._subvendoTab === 'devices' ? 'active' : ''}" data-subtab="devices" onclick="App.switchSubVendoTab('devices')">Sub-Vendo Devices</button>
         </div>
@@ -7767,6 +8025,11 @@ Then join your network:
     document.querySelectorAll('.subvendo-type-tabs .tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.type === wanted);
     });
+    // The Configuration / Sub-Vendo Devices switch is a JuanFi idea: its devices
+    // keep their own admin page. An AirCoins page already puts the machine
+    // selector and its settings side by side, so the second view shows nothing new.
+    const viewTabs = document.querySelector('.subvendo-view-tabs');
+    if (viewTabs) viewTabs.style.display = wanted === 'aircoins' ? 'none' : '';
     await this.loadSubVendoTab();
   },
 
@@ -7782,9 +8045,9 @@ Then join your network:
     const container = document.getElementById('subvendo-tab-content');
     if (!container) return;
     container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    // AirCoins owns one page only, so both views of it would be identical.
     if (this._subvendoType === 'aircoins') {
-      if (this._subvendoTab === 'devices') await this.renderNodeMcu(container, 'aircoins');
-      else await this.renderAirCoinsConfig(container);
+      await this.renderAirCoinsConfig(container);
       return;
     }
     if (this._subvendoTab === 'devices') await this.renderNodeMcu(container, 'juanfi');
@@ -8165,7 +8428,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           ${pending}
           <div class="empty-state">
             <h3>No AirCoins sub-vendos yet</h3>
-            <p>Power the vendo, join its <strong>Aircoins_setup</strong> WiFi and pick the shop network there.
+            <p>Power the vendo, join its <strong>Aircoins_setup</strong> WiFi and pick the shop network there -
+            or type its name when the network is hidden or not in the scan list. The board saves it and
+            joins straight away; if that fails in 10 seconds the setup network comes back for another try.
             It then asks this panel to accept it - nothing is registered until you press Accept above.</p>
             <button class="btn btn-primary" onclick="App.showAddNodeMcuDevice('aircoins')">Add Manually</button>
           </div>
@@ -8195,6 +8460,40 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const panelUrl = window.location.origin;
     // 0 is a real GPIO (D3), so only a missing value falls back.
     const pinValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+    const slotTrigger = pinValue(s.slotTriggerType, 1) === 1 ? 1 : 0;
+    // The board is labelled D0..D8 but the setting is stored as a GPIO number,
+    // so the dropdown carries the label and posts the number underneath.
+    const pinChoices = [
+      ['-1', 'NONE (not wired)'],
+      ['16', 'D0 (GPIO16)'],
+      ['5', 'D1 (GPIO5)'],
+      ['4', 'D2 (GPIO4)'],
+      ['0', 'D3 (GPIO0)'],
+      ['2', 'D4 (GPIO2, onboard LED)'],
+      ['14', 'D5 (GPIO14)'],
+      ['12', 'D6 (GPIO12)'],
+      ['13', 'D7 (GPIO13)'],
+      ['15', 'D8 (GPIO15)'],
+    ];
+    // A pin saved as a GPIO with no D label of its own (3, 1, ...) keeps its
+    // entry, so merely opening this page never rewrites it.
+    const pinSelect = (id, value, fallback) => {
+      const current = String(pinValue(value, fallback));
+      const choices = pinChoices.some(([v]) => v === current)
+        ? pinChoices
+        : [...pinChoices, [current, 'GPIO ' + current]];
+      const options = choices
+        .map(([v, label]) => `<option value="${v}" ${v === current ? 'selected' : ''}>${label}</option>`)
+        .join('');
+      return `<select id="${id}" class="form-control">${options}</select>`;
+    };
+    // The coin slot is the one job D0 cannot do on older firmware: GPIO16 has no
+    // interrupt, so 1.4.0 samples that pin instead of refusing it.
+    const firmware = String(status.firmwareVersion || '');
+    const d0NeedsFlash = pinValue(s.coinPin, 4) === 16
+      && /^\d+\.\d+/.test(firmware)
+      && (parseInt(firmware, 10) < 1
+        || (parseInt(firmware, 10) === 1 && parseInt(firmware.split('.')[1], 10) < 4));
 
     container.innerHTML = `
       <div class="subvendo-form">
@@ -8209,15 +8508,18 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <div style="display:flex;gap:.5rem">
             <button class="btn btn-sm btn-outline" onclick="App.showAddNodeMcuDevice('aircoins')">Add Vendo</button>
             <button class="btn btn-sm btn-outline" onclick="App.showEditNodeMcuDevice()">Edit Device</button>
+            <button class="btn btn-sm btn-danger" onclick="App.deleteNodeMcuDevice()">Delete</button>
           </div>
         </div>
 
         ${!s.clientMac ? `
-        <div class="subvendo-section" style="border-left:3px solid #f44336;padding-left:.75rem">
-          <h4 style="color:#f44336">No sale target set</h4>
+        <div class="subvendo-section" style="border-left:3px solid #ff9800;padding-left:.75rem">
+          <h4 style="color:#ff9800">No fixed sale target</h4>
           <p style="font-size:.85rem;margin:0">
-            Until you enter the MAC of the PC this machine credits, the vendo banks every coin it
-            takes and cannot buy any time. Fill in <strong>Sale Target</strong> below, then press Save Settings.
+            Coins are credited to whichever PC opens the coin slot in the portal, so this box does not
+            need one fixed MAC. Leave <strong>Sale Target</strong> empty to sell to any device, and fill
+            it in only when every coin here must always credit the same PC. Every coin is recorded in
+            the Sales Report either way.
           </p>
         </div>` : ''}
 
@@ -8266,8 +8568,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="subvendo-section">
           <h4>Sale Target</h4>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
-            The box has no screen, so it always credits this PC. Enter the MAC of the computer
-            on this table - the same address the hotspot sees.
+            Optional. Leave it empty and each sale credits whichever PC opened the coin slot in the
+            portal; fill it in when every coin from this box must always credit the same computer.
+            Enter the MAC the hotspot sees for that PC.
           </p>
           <div class="form-row">
             <label>PC MAC:</label>
@@ -8285,6 +8588,14 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             <label>Pulses per coin:</label>
             <input id="ac-pulsesPerCoin" class="form-control" type="number" min="1" value="${parseInt(s.pulsesPerCoin, 10) || 1}">
           </div>
+          <div class="form-row">
+            <label>Pulse gap (ms):</label>
+            <input id="ac-pulseDebounceMs" class="form-control" type="number" min="1" max="50" value="${parseInt(s.pulseDebounceMs, 10) || 6}">
+          </div>
+          <p style="font-size:.8rem;opacity:.7;margin:.25rem 0 .5rem">
+            A coin arrives as a burst - five pulses for 5 pesos - so pulses closer than this gap count
+            as one bounce. Lower it if a coin reads short (5 read as 4), raise it if one coin counts twice.
+          </p>
           <div class="form-row">
             <label>Wait for more coins (sec):</label>
             <input id="ac-coinWaitSeconds" class="form-control" type="number" min="1" value="${parseInt(s.coinWaitSeconds, 10) || 10}">
@@ -8306,26 +8617,49 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <div class="subvendo-section">
           <h4>Hardware Pins</h4>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
-            GPIO numbers, not the D labels: D1 = 5, D2 = 4, D4 = 2, D5 = 14, D6 = 12, D7 = 13,
-            D8 = 15. Use -1 for anything this box does not have. The vendo re-wires itself on its
-            next report - no reflash.
+            Pick the pin by its board label; each one maps to GPIO D0 = 16, D1 = 5, D2 = 4,
+            D3 = 0, D4 = 2, D5 = 14, D6 = 12, D7 = 13, D8 = 15. The vendo re-wires itself on
+            its next report - no reflash.
           </p>
           <div class="form-row">
             <label>Coin slot pin:</label>
-            <input id="ac-coinPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.coinPin, 4)}">
+            ${pinSelect('ac-coinPin', s.coinPin, 4)}
           </div>
+          ${d0NeedsFlash ? `<p style="font-size:.8rem;color:var(--warning);margin:.25rem 0 0">
+            This vendo reports firmware ${this.escapeHtml(firmware)}: GPIO16 cannot take coin pulses before 1.4.0.
+            Flash AirCoins-v1.4.0.bin, or put the coin slot on another pin.
+          </p>` : ''}
           <div class="form-row">
             <label>Buzzer pin:</label>
-            <input id="ac-buzzerPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.buzzerPin, 14)}">
+            ${pinSelect('ac-buzzerPin', s.buzzerPin, 14)}
           </div>
           <div class="form-row">
             <label>Status LED pin:</label>
-            <input id="ac-ledPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.ledPin, 2)}">
+            ${pinSelect('ac-ledPin', s.ledPin, 2)}
           </div>
           <div class="form-row">
             <label>Slot lock relay pin:</label>
-            <input id="ac-slotLockPin" class="form-control" type="number" min="-1" max="16" value="${pinValue(s.slotLockPin, -1)}">
+            ${pinSelect('ac-slotLockPin', s.slotLockPin, -1)}
           </div>
+          <p style="font-size:.8rem;opacity:.7;margin:.25rem 0 0">
+            D0 (GPIO16) is fine for the buzzer, LED and slot relay. For the coin slot it needs
+            firmware 1.4.0 or newer, because GPIO16 has no interrupt line - the vendo samples
+            that pin instead - and it has no internal pull-up either, so if the acceptor's
+            output is open-collector add a 10k resistor from D0 to 3V3.
+          </p>
+          <div class="form-row">
+            <label>Slot lock trigger:</label>
+            <select id="ac-slotTriggerType" class="form-control">
+              <option value="1" ${slotTrigger === 1 ? 'selected' : ''}>Signal goes HIGH while coins are accepted (active-high relay)</option>
+              <option value="0" ${slotTrigger === 0 ? 'selected' : ''}>Signal goes LOW while coins are accepted (active-low relay)</option>
+            </select>
+          </div>
+          <p style="font-size:.8rem;opacity:.7;margin:.25rem 0 0">
+            Same idea as JuanFi's Relay Trigger Type: only the level inverts, the pin itself stays as
+            you set it. With a relay pin set the acceptor is powered only while a customer is in a
+            coin session - it clicks on after INSERT COIN and drops as soon as that session is paid,
+            cancelled or times out.
+          </p>
         </div>
 
         <div class="subvendo-section">
@@ -8334,8 +8668,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
             <button class="btn btn-sm btn-primary" onclick="App.addAirCoinsRate()">Add Rate</button>
           </div>
           <p style="font-size:.8rem;opacity:.7;margin:0 0 .75rem">
-            The coins buy the most expensive rate they can still pay for, over and over.
-            The panel credits the time, so a change here applies to the next sale - no reflash.
+            The whole bank is priced together, like JuanFi: the coins buy the most expensive rate
+            they can still pay for, over and over. Ten 1-peso coins therefore reach the 10-peso rate,
+            and the coins in the portal's PROMO RATES button are exactly these. The panel credits the
+            time, so a change here applies to the next sale - no reflash.
           </p>
           <table class="table" id="aircoins-rates-table">
             <thead><tr><th>Name</th><th>Price</th><th>Minutes</th><th></th></tr></thead>
@@ -8533,8 +8869,10 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
       buzzerPin: num('ac-buzzerPin', 14),
       ledPin: num('ac-ledPin', 2),
       slotLockPin: num('ac-slotLockPin', -1),
+      slotTriggerType: num('ac-slotTriggerType', 1),
       coinValue: num('ac-coinValue', 1),
       pulsesPerCoin: num('ac-pulsesPerCoin', 1),
+      pulseDebounceMs: num('ac-pulseDebounceMs', 6),
       coinWaitSeconds: num('ac-coinWaitSeconds', 10),
       maxCoins: num('ac-maxCoins', 0),
       abuseCount: num('ac-abuseCount', 0),
@@ -10661,6 +10999,17 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
         <td>${esc(p.paid_at)}</td>
       </tr>`).join('');
 
+    const airCoins = r.aircoins || { count: 0, amount: 0, minutes: 0, unassignedCount: 0, unassignedAmount: 0, failedCount: 0, rows: [] };
+    const airCoinsRows = (airCoins.rows || []).map((sale) => `
+      <tr>
+        <td>${esc(sale.deviceName)}</td>
+        <td>${sale.mac ? esc(sale.mac) : '<span class="status-badge disconnected">unassigned</span>'}</td>
+        <td>${fmt(sale.coins)}</td>
+        <td>${sale.minutes}</td>
+        <td>${esc(sale.status)}</td>
+        <td>${esc(sale.createdAt)}</td>
+      </tr>`).join('');
+
     body.innerHTML = `
       <div class="overview-grid">
         <div class="dash-card">
@@ -10679,14 +11028,19 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${fmt(r.totals.vendoCurrentCoins)} since reset · ${r.vendo.customerCount} customers · ${r.vendo.onlineCount}/${r.vendo.deviceCount} online</div>
         </div>
         <div class="dash-card">
+          <div class="dash-card-title">AirCoins Coins (range)</div>
+          <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(airCoins.amount)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">${airCoins.count} sale(s) · ${Math.round((airCoins.minutes || 0) / 60)} hours credited${airCoins.unassignedCount ? ` · ${airCoins.unassignedCount} unassigned (${fmt(airCoins.unassignedAmount)})` : ''}${airCoins.failedCount ? ` · ${airCoins.failedCount} not credited yet` : ''}</div>
+        </div>
+        <div class="dash-card">
           <div class="dash-card-title">Total Sales (range)</div>
           <div style="font-size:1.5rem;font-weight:650;margin-top:0.25rem">${fmt(r.totals.periodTotal)}</div>
-          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">Vouchers + GCash within ${esc(r.from)} → ${esc(r.to)}</div>
+          <div style="color:var(--text-muted);font-size:0.8125rem;margin-top:0.25rem">Vouchers + GCash + AirCoins coins within ${esc(r.from)} → ${esc(r.to)}</div>
         </div>
       </div>
       <p style="color:var(--text-muted);font-size:0.8125rem;margin:0.75rem 0">
         Sub-vendo counters are lifetime totals stored on each device (1 coin = ${fmt(1)}) and are not affected by the date range.
-        Voucher and GCash rows are filtered by UTC date.
+        AirCoins, voucher and GCash rows are filtered by UTC date.
       </p>
 
       <div class="card" style="margin-top:1rem">
@@ -10696,6 +11050,15 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <thead><tr><th>Device</th><th>IP</th><th>Status</th><th>Lifetime</th><th>Since Reset</th><th>Customers</th></tr></thead>
           <tbody>${vendoRows}</tbody>
         </table>` : '<div class="empty-state"><p>No sub-vendo devices configured. Add them under SubVendo → Sub-Vendo Devices.</p></div>'}
+      </div>
+
+      <div class="card" style="margin-top:1rem">
+        <div class="card-header"><h3>${uiIcon('store')} AirCoins Coin Sales</h3><span class="status-badge connected">${airCoins.count} · ${fmt(airCoins.amount)}</span></div>
+        ${airCoinsRows ? `
+        <table class="table">
+          <thead><tr><th>Device</th><th>Credited to</th><th>Coins</th><th>Minutes</th><th>Status</th><th>When (UTC)</th></tr></thead>
+          <tbody>${airCoinsRows}</tbody>
+        </table>` : '<div class="empty-state"><p>No AirCoins coin sales in this range.</p></div>'}
       </div>
 
       <div class="card" style="margin-top:1rem">
@@ -10728,6 +11091,9 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     lines.push(['SUMMARY', 'Count', 'Amount'].map(q).join(','));
     lines.push(['Voucher sales (redeemed in range)', r.vouchers.count, r.vouchers.amount].map(q).join(','));
     lines.push(['GCash / online (paid in range)', r.gcash.count, r.gcash.amount].map(q).join(','));
+    lines.push(['AirCoins coins (sold in range)', (r.aircoins || {}).count || 0, (r.aircoins || {}).amount || 0].map(q).join(','));
+    lines.push(['AirCoins coins (no PC to credit)', (r.aircoins || {}).unassignedCount || 0, (r.aircoins || {}).unassignedAmount || 0].map(q).join(','));
+    lines.push(['AirCoins credits that did not go through', (r.aircoins || {}).failedCount || 0, ''].map(q).join(','));
     lines.push(['Total sales in range', '', r.totals.periodTotal].map(q).join(','));
     lines.push(['Sub-vendo lifetime coins', '', r.totals.vendoLifetimeCoins].map(q).join(','));
     lines.push(['Sub-vendo coins since reset', '', r.totals.vendoCurrentCoins].map(q).join(','));
@@ -10740,6 +11106,11 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     lines.push(['REDEEMED VOUCHERS', 'Profile', 'Price', 'Minutes', 'Used At (UTC)', 'Router'].map(q).join(','));
     (r.vouchers.rows || []).forEach((v) => {
       lines.push([v.code, v.profile, v.price, v.duration_minutes, v.used_at, v.router_name || v.router_id].map(q).join(','));
+    });
+    lines.push('');
+    lines.push(['AIRCOINS COIN SALES', 'Credited To', 'Coins', 'Minutes', 'Status', 'When (UTC)'].map(q).join(','));
+    ((r.aircoins || {}).rows || []).forEach((sale) => {
+      lines.push([sale.deviceName, sale.mac || 'unassigned', sale.coins, sale.minutes, sale.status, sale.createdAt].map(q).join(','));
     });
     lines.push('');
     lines.push(['GCASH PAYMENTS', 'MAC', 'Amount', 'Minutes', 'Paid At (UTC)'].map(q).join(','));
@@ -11749,12 +12120,16 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
   },
 
   async deleteNodeMcuDevice() {
-    if (!confirm('Delete this NodeMCU device?')) return;
+    const device = (this._nodemcuDevices || []).find(d => d.id === this._nodemcuSelectedId);
+    const label = device ? `${device.name} (${device.ip})` : 'this device';
+    if (!confirm(`Delete ${label}?\n\nThe panel forgets its settings and device key, so the machine stops selling and has to be paired again.`)) return;
     try {
       await api.nodemcuDeleteDevice(this._nodemcuSelectedId);
       this._nodemcuSelectedId = null;
       this.toast('Device deleted', 'success');
-      this.renderNodeMcu();
+      // Reload the page the admin is on rather than the JuanFi list: an AirCoins
+      // machine lives on one page that also has to drop the deleted row.
+      await this.loadSubVendoTab();
     } catch (err) { this.toast('Failed: ' + err.message, 'error'); }
   },
 

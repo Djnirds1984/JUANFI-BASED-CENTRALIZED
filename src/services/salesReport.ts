@@ -2,15 +2,30 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '../database';
 import { nodeMcuService, NodeMcuDevice } from './nodemcu';
+import { firmwareTypeOf } from './deviceRegistry';
+import { getSettings, getStatus, statusIsOnline } from './aircoins';
 
 // Sales report aggregation across the three revenue sources:
 //  - Sub-vendo / NodeMCU coin sales (device-side lifetime counters)
+//  - AirCoins sub-vendo coin sales (per-sale ledger, so they date-filter)
 //  - Redeemed vouchers (price recorded at generation)
 //  - Paid GCash / PayMongo online payments
 //
-// Voucher and payment rows are date-filterable (UTC, matching datetime('now')).
-// NodeMCU counters are cumulative on the device itself, so they are reported
-// as lifetime / since-reset totals and cannot be filtered by date.
+// Voucher, payment and AirCoins rows are date-filterable (UTC, matching
+// datetime('now')). NodeMCU counters are cumulative on the device itself, so
+// they are reported as lifetime / since-reset totals and cannot be filtered.
+
+export interface AirCoinsSaleRow {
+  id: number;
+  deviceId: number;
+  deviceName: string;
+  mac: string;
+  coins: number;
+  minutes: number;
+  status: string;
+  error: string;
+  createdAt: string;
+}
 
 export interface VendoSalesRow {
   id: number;
@@ -38,6 +53,15 @@ export interface SalesReport {
     amount: number;
     rows: any[];
   };
+  aircoins: {
+    count: number;
+    amount: number;
+    minutes: number;
+    unassignedCount: number;
+    unassignedAmount: number;
+    failedCount: number;
+    rows: AirCoinsSaleRow[];
+  };
   vendo: {
     deviceCount: number;
     onlineCount: number;
@@ -49,6 +73,7 @@ export interface SalesReport {
   totals: {
     voucherSales: number;
     gcashSales: number;
+    aircoinsSales: number;
     periodTotal: number;
     vendoLifetimeCoins: number;
     vendoCurrentCoins: number;
@@ -86,6 +111,20 @@ export async function fetchVendoSales(devices: NodeMcuDevice[]): Promise<SalesRe
   const rows: VendoSalesRow[] = await Promise.all(
     devices.map(async (d): Promise<VendoSalesRow> => {
       const base = { id: d.id, name: d.name, ip: d.ip };
+      // An AirCoins box serves no page, so its counters come from the reports it
+      // already sends - otherwise every one of them would show up as offline.
+      if (firmwareTypeOf(d) === 'aircoins') {
+        const status = getStatus(Number(d.id));
+        const online = statusIsOnline(status, getSettings(Number(d.id)).pollSeconds);
+        return {
+          ...base,
+          online,
+          lifetimeCoins: status ? Number(status.coins) || 0 : 0,
+          currentCoins: status ? Number(status.bank) || 0 : 0,
+          customerCount: status ? Number(status.customers) || 0 : 0,
+          error: online ? undefined : 'not reporting yet',
+        };
+      }
       try {
         const dash = await nodeMcuService.getDashboard(d);
         return {
@@ -150,8 +189,50 @@ export async function buildSalesReport(
 
   const vendo = await fetchVendoSales(vendoDevices ?? loadVendoDevices());
 
+  // AirCoins sales are logged per sale, so unlike the JuanFi counters they can
+  // be filtered by date. Only coins that were actually banked - credited to a PC
+  // or logged as unassigned - are revenue: a no-rate or error row is the same
+  // coins waiting for a retry, and counting it would double the sale.
+  const aAgg = db.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN 1 ELSE 0 END), 0) AS n,
+            COALESCE(SUM(CASE WHEN status IN ('ok', 'unassigned') THEN coins ELSE 0 END), 0) AS coins,
+            COALESCE(SUM(CASE WHEN status = 'ok' THEN minutes ELSE 0 END), 0) AS minutes,
+            COALESCE(SUM(CASE WHEN status = 'unassigned' THEN 1 ELSE 0 END), 0) AS unassigned_n,
+            COALESCE(SUM(CASE WHEN status = 'unassigned' THEN coins ELSE 0 END), 0) AS unassigned_coins,
+            COALESCE(SUM(CASE WHEN status IN ('no-rate', 'error') THEN 1 ELSE 0 END), 0) AS failed_n
+     FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?`
+  ).get(from, to) as any;
+  const aRowsRaw = db.prepare(
+    `SELECT id, device_id, mac, coins, minutes, status, error, created_at
+     FROM aircoins_sales WHERE date(created_at) BETWEEN ? AND ?
+     ORDER BY created_at DESC, id DESC LIMIT ?`
+  ).all(from, to, limit) as any[];
+  const deviceNames = new Map<number, string>();
+  for (const d of loadVendoDevices()) deviceNames.set(Number(d.id), d.name);
+  const aRows: AirCoinsSaleRow[] = aRowsRaw.map((row) => ({
+    id: Number(row.id),
+    deviceId: Number(row.device_id),
+    deviceName: deviceNames.get(Number(row.device_id)) || `Device ${row.device_id}`,
+    mac: String(row.mac || ''),
+    coins: Number(row.coins) || 0,
+    minutes: Number(row.minutes) || 0,
+    status: String(row.status || ''),
+    error: String(row.error || ''),
+    createdAt: String(row.created_at || ''),
+  }));
+  const aircoins = {
+    count: Number(aAgg.n) || 0,
+    amount: Number(aAgg.coins) || 0,
+    minutes: Number(aAgg.minutes) || 0,
+    unassignedCount: Number(aAgg.unassigned_n) || 0,
+    unassignedAmount: Number(aAgg.unassigned_coins) || 0,
+    failedCount: Number(aAgg.failed_n) || 0,
+    rows: aRows,
+  };
+
   const voucherSales = Number(vAgg.amount) || 0;
   const gcashSales = Number(pAgg.amount) || 0;
+  const aircoinsSales = aircoins.amount;
   return {
     from,
     to,
@@ -163,11 +244,13 @@ export async function buildSalesReport(
       rows: vRows,
     },
     gcash: { count: Number(pAgg.n) || 0, amount: gcashSales, rows: pRows },
+    aircoins,
     vendo,
     totals: {
       voucherSales,
       gcashSales,
-      periodTotal: voucherSales + gcashSales,
+      aircoinsSales,
+      periodTotal: voucherSales + gcashSales + aircoinsSales,
       vendoLifetimeCoins: vendo.lifetimeCoins,
       vendoCurrentCoins: vendo.currentCoins,
     },

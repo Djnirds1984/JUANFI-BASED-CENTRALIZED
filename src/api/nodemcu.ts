@@ -10,12 +10,16 @@ import { mikroTikService } from '../services/mikrotik';
 import { provisionSubVendo } from '../services/vendoProvision';
 import { loadDevices, saveDevices, findDevice, firmwareTypeOf } from '../services/deviceRegistry';
 import {
-  planCoinAllocation, getSettings, saveSettings, regenerateKey, queueCommand,
-  acknowledgeCommand, findDeviceIdByKey, recordStatus, getStatus, recordRedeem,
+  saveSettings, regenerateKey, queueCommand,
+  acknowledgeCommand, findDeviceIdByKey, recordStatus, getStatus,
   statusIsOnline, submitClaim, findClaimByToken, findClaim, approveClaim,
-  rejectClaim, loadClaims, normalizeMac,
+  rejectClaim, loadClaims, normalizeMac, forgetDevice, getSettings,
 } from '../services/aircoins';
-import { creditMacAccount, bindMacToken, propagateTimeToRouter } from '../services/timeCredit';
+import {
+  SESSION_POLL_SECONDS, findSession, findSessionById, finishSession, sessionIsLive,
+  sessionRemainingMs,
+} from '../services/aircoinsSession';
+import { creditAirCoinsSale, recordUnassignedSale, settleAirCoinsSession } from '../services/aircoinsSale';
 
 const router = Router();
 
@@ -106,8 +110,10 @@ router.get('/aircoins/config', (req: Request, res: Response) => {
         buzzerPin: settings.buzzerPin,
         ledPin: settings.ledPin,
         slotLockPin: settings.slotLockPin,
+        slotTriggerType: settings.slotTriggerType,
         coinValue: settings.coinValue,
         pulsesPerCoin: settings.pulsesPerCoin,
+        pulseDebounceMs: settings.pulseDebounceMs,
         coinWaitSeconds: settings.coinWaitSeconds,
         maxCoins: settings.maxCoins,
         abuseCount: settings.abuseCount,
@@ -128,7 +134,11 @@ router.get('/aircoins/config', (req: Request, res: Response) => {
 // Heartbeat: records what the machine reports and hands back the config version
 // plus any command the operator queued. One call does liveness, change
 // detection and control, so the device needs no inbound port at all.
-router.post('/aircoins/status', (req: Request, res: Response) => {
+//
+// It also carries the coin session, because this is the only line the board
+// opens. What the vendo would answer for itself in a JuanFi box - how much of
+// the slot's money is already paid for - is answered here instead.
+router.post('/aircoins/status', async (req: Request, res: Response) => {
   try {
     const body = req.body || {};
     const deviceId = airCoinsDeviceId(body.key || req.query.key);
@@ -137,12 +147,52 @@ router.post('/aircoins/status', (req: Request, res: Response) => {
     recordStatus(deviceId, body);
     if (body.commandDone) acknowledgeCommand(deviceId, String(body.commandDone));
     const settings = getSettings(deviceId);
+
+    // A session whose window ran out is paid for, not discarded: the customer
+    // already dropped the coins. JuanFi commits an expired slot the same way,
+    // and doing it on the heartbeat means a closed browser tab cannot cost them
+    // their money.
+    let session = findSession(deviceId);
+    if (session && session.status === 'open' && !sessionIsLive(session)) {
+      const credited = await settleAirCoinsSession(deviceId, session);
+      // Settling already wrote the running totals onto the session; finishing it
+      // only stamps the status, or those coins would be counted twice.
+      const after = findSessionById(session.id) || session;
+      session = finishSession(session.id, 'expired', {
+        coins: after.coins,
+        minutes: after.minutes,
+        error: credited.result && credited.result.status !== 'ok' ? (credited.result.error || '') : '',
+      });
+    }
+
+    // A finished session keeps being repeated until the board reports it gone:
+    // that last reply is what tells the machine how much of its own bank the
+    // panel has already sold, so it does not offer those coins a second time.
+    const held = String(body.sessionId || '');
+    let handoff: { id: string; paidPulses: number; expiresInMs: number } | null = null;
+    if (sessionIsLive(session)) {
+      handoff = {
+        id: session!.id,
+        paidPulses: session!.settledPulses,
+        expiresInMs: sessionRemainingMs(session),
+      };
+    } else if (session && held && held === session.id) {
+      handoff = { id: session.id, paidPulses: session.settledPulses, expiresInMs: 0 };
+    }
+
+    // A wired slot-lock relay powers the acceptor only while a session is open,
+    // so the board has to notice a fresh INSERT COIN within a second or two -
+    // that poll interval is the delay the customer feels before the slot clicks on.
+    const gated = settings.slotLockPin >= 0;
     res.json({
       status: 'ok',
       version: settings.version,
-      pollSeconds: settings.pollSeconds,
+      // While a customer stands at the slot the board has to report every couple
+      // of seconds, or the phone waits for a coin count that never arrives.
+      pollSeconds: handoff || gated ? SESSION_POLL_SECONDS : settings.pollSeconds,
       pendingCommand: settings.pendingCommand,
       serverTime: new Date().toISOString(),
+      session: handoff,
     });
   } catch (error: any) {
     console.error('AirCoins status error:', error);
@@ -162,67 +212,47 @@ router.post('/aircoins/redeem', async (req: Request, res: Response) => {
   // The panel owns the target, so its copy wins: an older firmware that still
   // has an empty sale target is credited to whatever the operator set here.
   const macNoColon = String(body.mac || settings.clientMac || '').replace(/[:\-]/g, '').toUpperCase();
-  if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
-    recordRedeem(deviceId, 0, 0, 'No sale target set on the panel');
-    res.status(409).json({ error: 'No sale target: set the PC MAC this vendo should credit' });
-    return;
-  }
   const coins = Math.floor(Number(body.amount) || 0);
   if (coins <= 0) { res.status(400).json({ error: 'amount must be a positive number' }); return; }
 
-  const plan = planCoinAllocation(settings.rates, coins);
-  if (plan.minutes <= 0) {
-    recordRedeem(deviceId, coins, 0, 'No rate covers this amount');
-    res.json({ status: 'no-rate', amount: coins, leftover: plan.leftover });
-    return;
-  }
-
-  const device = findDevice(deviceId)!;
-  const routerId = settleDeviceRouter(device);
-  const db = getDb();
-  const routerRow = db.prepare(
-    'SELECT id, auth_mode, radius_local_users FROM routers WHERE id = ? AND is_active = 1'
-  ).get(routerId) as any;
-  if (!routerRow) {
-    recordRedeem(deviceId, coins, 0, 'Router not found or inactive');
-    res.status(404).json({ error: 'Router not found or inactive' });
-    return;
-  }
-
-  try {
-    const authMode = routerRow.auth_mode || 'api';
-    const hybridLocalUsers = Number(routerRow.radius_local_users) === 1;
-    const { expiryAt, hadRemaining, accountUsername } = db.transaction(() =>
-      creditMacAccount(db, routerId, macNoColon, plan.minutes, authMode))();
-
-    bindMacToken(routerId, macNoColon, accountUsername, expiryAt);
-    await propagateTimeToRouter({
-      db, routerId, macNoColon, authMode, hybridLocalUsers,
-      isExtend: hadRemaining, expiryAt, hadRemaining, accountUsername,
-      logTag: 'aircoins',
-    });
-
-    const remainingSeconds = Math.max(
-      0,
-      Math.floor((new Date(expiryAt.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 1000)
-    );
-    recordRedeem(deviceId, coins, plan.minutes);
-    console.log(`aircoins: vendo ${deviceId} took ${coins} -> ${plan.minutes}min for ${macNoColon} (router ${routerId})`);
+  if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
+    // No fixed sale target and nobody opened the portal for this bank. The coins
+    // are still money the shop took, so they are logged rather than refused - and
+    // the board is told they are sold, or it would offer the same bank forever.
+    const saleId = recordUnassignedSale(deviceId, coins, 'No fixed sale target and no open session');
     res.json({
       status: 'ok',
-      minutes: plan.minutes,
-      spent: plan.spent,
-      leftover: plan.leftover,
-      applied: plan.applied.map((rate) => rate.name),
-      username: accountUsername,
-      expiryAt,
-      remainingSeconds,
+      minutes: 0,
+      spent: coins,
+      leftover: 0,
+      applied: [],
+      username: '',
+      expiryAt: '',
+      remainingSeconds: 0,
+      unassigned: true,
+      saleId,
     });
-  } catch (error: any) {
-    recordRedeem(deviceId, coins, 0, error.message);
-    console.error('AirCoins redeem error:', error);
-    res.status(500).json({ error: error.message });
+    return;
   }
+
+  const result = await creditAirCoinsSale(deviceId, macNoColon, coins);
+  if (result.status === 'no-rate') {
+    res.json({ status: 'no-rate', amount: coins, leftover: result.leftover });
+    return;
+  }
+  if (result.status === 'no-router') { res.status(404).json({ error: result.error }); return; }
+  if (result.status !== 'ok') { res.status(500).json({ error: result.error || 'Could not credit this sale' }); return; }
+
+  res.json({
+    status: 'ok',
+    minutes: result.minutes,
+    spent: result.spent,
+    leftover: result.leftover,
+    applied: result.applied,
+    username: result.username,
+    expiryAt: result.expiryAt,
+    remainingSeconds: result.remainingSeconds,
+  });
 });
 
 /*
@@ -259,6 +289,14 @@ router.get('/aircoins/claim/status', (req: Request, res: Response) => {
     return;
   }
   const device = findDevice(claim.deviceId);
+  if (!device) {
+    // The machine was deleted while it still held this token. Minting it a key
+    // here would resurrect the vendo the operator just removed, so close the
+    // request and let it go back to its setup page.
+    rejectClaim(claim.id);
+    res.json({ status: 'rejected', token: claim.token });
+    return;
+  }
   const settings = getSettings(claim.deviceId);
   res.json({
     status: 'approved',
@@ -391,6 +429,9 @@ router.delete('/devices/:id', (req: Request, res: Response) => {
   }
   saveDevices(filtered);
   nodeMcuService.clearSession(id);
+  // An AirCoins machine keeps nothing locally, so its settings, key and reported
+  // status would outlive the row and let a deleted vendo keep selling.
+  forgetDevice(id);
   res.json({ message: 'Device removed' });
 });
 

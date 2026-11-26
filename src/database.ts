@@ -308,6 +308,26 @@ export function initializeDatabase(): void {
 
     CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 
+    -- One row per AirCoins coin sale, whoever it was sold to. An unassigned row
+    -- (mac = '') is money the box took with no PC to credit: it is still revenue
+    -- the shop earned, so it is recorded instead of refused. The sales report
+    -- reads this, which is what puts AirCoins boxes in the same report as
+    -- JuanFi counters, vouchers and GCash.
+    CREATE TABLE IF NOT EXISTS aircoins_sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id INTEGER NOT NULL,
+      router_id INTEGER NOT NULL DEFAULT 0,
+      mac TEXT NOT NULL DEFAULT '',
+      coins INTEGER NOT NULL DEFAULT 0,
+      minutes INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'ok',
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_aircoins_sales_created ON aircoins_sales(created_at);
+    CREATE INDEX IF NOT EXISTS idx_aircoins_sales_device ON aircoins_sales(device_id, created_at);
+
     CREATE TABLE IF NOT EXISTS payment_rates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       label TEXT NOT NULL DEFAULT '',

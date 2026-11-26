@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { forgetSession } from './aircoinsSession';
 
 /*
  * AirCoins sub-vendos run our own firmware: there is no web interface on the
@@ -35,10 +36,24 @@ export interface AirCoinsSettings {
   buzzerPin: number;
   ledPin: number;
   slotLockPin: number;
+  /**
+   * Which level arms the slot on `slotLockPin`: 1 = HIGH, 0 = LOW. Relay
+   * boards come in both trigger polarities, so this is a setting and not
+   * something baked into the firmware - the same idea as JuanFi's
+   * "LED Trigger Output (Relay Trigger Type)". `slotLockPin` stays editable,
+   * so any GPIO can still be picked on its own.
+   */
+  slotTriggerType: number;
   /** Pesos credited by one pulse of the coin acceptor. */
   coinValue: number;
   /** Pulses the acceptor sends for a single coin. */
   pulsesPerCoin: number;
+  /**
+   * Pulses closer together than this are treated as one contact bounce. A coin
+   * arrives as a burst of pulses, so too long a gap silently drops the last one
+   * and a 5-peso coin is read as 4.
+   */
+  pulseDebounceMs: number;
   /** How long the slot keeps waiting for more coins before it settles. */
   coinWaitSeconds: number;
   /** Highest amount one sale may reach, 0 = no cap. */
@@ -73,6 +88,12 @@ export interface AirCoinsStatus {
   // that counts nothing has never seen a coin at all.
   pulses: number;
   bank: number;
+  // Which portal session the machine is holding, and how many pulses it has
+  // counted for it. A coin dropped into the slot before the customer pressed
+  // INSERT COIN belongs to the bank, not to this session, so the count is kept
+  // apart from `bank` and only trusted while the id matches.
+  sessionId: string;
+  sessionPulses: number;
   lastCoins: number;
   lastMinutes: number;
   lastRedeemAt: string | null;
@@ -151,8 +172,10 @@ export function defaultSettings(deviceKey = newDeviceKey()): AirCoinsSettings {
     buzzerPin: 14,   // NodeMCU D5
     ledPin: 2,       // NodeMCU D4, onboard LED
     slotLockPin: -1,
+    slotTriggerType: 1,   // HIGH arms the slot, like JuanFi's coin-set line
     coinValue: 1,
     pulsesPerCoin: 1,
+    pulseDebounceMs: 6,
     coinWaitSeconds: 10,
     maxCoins: 0,
     abuseCount: 20,
@@ -197,8 +220,10 @@ export function saveSettings(deviceId: number, patch: any): AirCoinsSettings {
     buzzerPin: toInt(patch && patch.buzzerPin, current.buzzerPin, -1, 16),
     ledPin: toInt(patch && patch.ledPin, current.ledPin, -1, 16),
     slotLockPin: toInt(patch && patch.slotLockPin, current.slotLockPin, -1, 16),
+    slotTriggerType: toInt(patch && patch.slotTriggerType, current.slotTriggerType, 0, 1),
     coinValue: toInt(patch && patch.coinValue, current.coinValue, 1, 100000),
     pulsesPerCoin: toInt(patch && patch.pulsesPerCoin, current.pulsesPerCoin, 1, 1000),
+    pulseDebounceMs: toInt(patch && patch.pulseDebounceMs, current.pulseDebounceMs, 1, 50),
     coinWaitSeconds: toInt(patch && patch.coinWaitSeconds, current.coinWaitSeconds, 1, 600),
     maxCoins: toInt(patch && patch.maxCoins, current.maxCoins, 0, 1000000),
     abuseCount: toInt(patch && patch.abuseCount, current.abuseCount, 0, 10000),
@@ -315,12 +340,47 @@ export function getStatus(deviceId: number): AirCoinsStatus | null {
   return loadStatus()[String(deviceId)] || null;
 }
 
+/**
+ * Forget a machine completely. Dropping the registry row on its own would leave
+ * its device key valid, so a vendo the operator deleted would keep pulling a
+ * config and selling time. Its pairing record is closed as rejected rather than
+ * removed: the board still holds that token, and a 404 on it is indistinguishable
+ * from a panel that is down, so it would wait at "pending" forever instead of
+ * going back to its setup page.
+ */
+export function forgetDevice(deviceId: number): void {
+  const settings = loadAllSettings();
+  if (settings[String(deviceId)]) {
+    delete settings[String(deviceId)];
+    writeJson(settingsFile(), settings);
+  }
+
+  const statuses = loadStatus();
+  if (statuses[String(deviceId)]) {
+    delete statuses[String(deviceId)];
+    writeJson(statusFile(), statuses);
+  }
+
+  forgetSession(deviceId);
+
+  const claims = loadClaims();
+  let closed = false;
+  for (const claim of claims) {
+    if (claim.deviceId !== deviceId) continue;
+    claim.status = 'rejected';
+    claim.deviceId = null;
+    claim.lastSeen = new Date().toISOString();
+    closed = true;
+  }
+  if (closed) writeClaims(pruneClaims(claims));
+}
+
 export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
   const all = loadStatus();
   const current = all[String(deviceId)] || {
     lastSeen: null, ip: '', mac: '', firmwareVersion: '', uptimeSeconds: 0,
     coins: 0, customers: 0, routerConnected: false, freeHeap: 0,
-    pulses: 0, bank: 0,
+    pulses: 0, bank: 0, sessionId: '', sessionPulses: 0,
     lastCoins: 0, lastMinutes: 0, lastRedeemAt: null, lastError: '',
   };
   // The machine reports what went wrong on its own side; keep the last message
@@ -339,6 +399,10 @@ export function recordStatus(deviceId: number, payload: any): AirCoinsStatus {
     freeHeap: toInt(payload && payload.freeHeap, current.freeHeap, 0, 2147483647),
     pulses: toInt(payload && payload.pulses, current.pulses || 0, 0, 2147483647),
     bank: toInt(payload && payload.bank, current.bank || 0, 0, 2147483647),
+    // An older firmware sends neither, which must clear the id rather than keep
+    // the last one: a stale id would let a leftover counter be credited.
+    sessionId: toText(payload && payload.sessionId, '', 32),
+    sessionPulses: toInt(payload && payload.sessionPulses, 0, 0, 2147483647),
     lastError: reportedError || current.lastError,
   };
   all[String(deviceId)] = next;

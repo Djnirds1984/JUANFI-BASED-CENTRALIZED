@@ -23,6 +23,7 @@
 #include <ESP8266HTTPClient.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
+#include <Ticker.h>
 
 // ======================= config_store.h =======================
 
@@ -160,23 +161,31 @@ inline String macNoColon() {
  * First-boot setup.
  *
  * A board that has no device key yet comes up as `Aircoins_setup`. The installer
- * joins it, picks the shop WiFi from the scan list (clicking a name fills the
- * field) and submits. The board joins that network, asks the panel to accept it
- * and keeps the access point up, showing "waiting for admin", until someone
- * presses Accept on the AirCoins subpage. Only then does it receive its device
- * key and reboot into normal mode.
+ * joins it and gives the shop WiFi a name - picked from the scan list, or typed
+ * by hand when the network is hidden or not listed. The name is saved the
+ * moment it is submitted, and the board joins it straight away; a join that has
+ * not succeeded in ten seconds puts the access point back on air, so the name
+ * can be corrected without a power cycle. Once the network is up the board asks
+ * the panel to accept it and keeps the access point up, showing "waiting for
+ * admin", until someone presses Accept on the AirCoins subpage. Only then does
+ * it receive its device key and reboot into normal mode.
  *
  * This is the ONLY HTTP server in the firmware, and it only exists while the
  * machine is unpaired.
  */
 
 static const char *SETUP_AP_SSID = "Aircoins_setup";
+// How long a typed network name gets before the setup AP is put back on air.
+// A shop router answers well inside this; a wrong name must not strand the
+// installer on a portal that no longer answers.
+static const uint32_t SETUP_JOIN_TIMEOUT_MS = 10000;
 
 static String setupState = "idle";
 static String setupDetail = "Pick the shop WiFi below.";
 
 static ESP8266WebServer setupServer(80);
 static DNSServer setupDns;
+static bool setupDnsStarted = false;
 
 static String setupPendingSsid;
 static String setupPendingPass;
@@ -217,7 +226,8 @@ button{font:inherit}
 </section>
 <section>
 <form id="f" onsubmit="return join(event)">
-<label>Network name</label><input id="ssid" name="ssid" autocomplete="off" required>
+<label>Network name</label><input id="ssid" name="ssid" autocomplete="off" placeholder="Type it or pick one above" required>
+<div class="muted">Hidden network, or not in the list? Type the name exactly - it is saved as typed, no scan needed.</div>
 <label>Password</label><input id="pass" name="pass" type="password" autocomplete="off">
 <label>Panel address</label><input id="host" name="host" placeholder="10.0.0.252" required>
 <label>Panel port</label><input id="port" name="port" type="number" value="3000" required>
@@ -248,7 +258,7 @@ async function join(ev){
  var fd=new FormData(document.getElementById('f'));
  var r=await fetch('/join',{method:'POST',body:new URLSearchParams(fd)});
  var d=await r.json();
- document.getElementById('state').textContent=d.ok?'Connecting to WiFi...':(d.error||'Could not save.');
+ document.getElementById('state').textContent=d.ok?'Saved. Joining '+document.getElementById('ssid').value+' - if it fails in 10 s the setup network comes back here.':(d.error||'Could not save.');
  return false;
 }
 async function poll(){
@@ -299,6 +309,13 @@ inline void setupHandleJoin() {
     setupServer.send(400, "application/json", "{\"ok\":false,\"error\":\"Network name and panel address are required\"}");
     return;
   }
+  // A typed name is stored exactly as typed, so it has to be one the radio can
+  // carry: 32 bytes, and the password 64. Truncating silently would make the
+  // board look for a network nobody asked for.
+  if (ssid.length() > 32 || setupServer.arg("pass").length() > 64) {
+    setupServer.send(400, "application/json", "{\"ok\":false,\"error\":\"Network name is at most 32 characters and the password at most 64\"}");
+    return;
+  }
 
   int port = setupServer.arg("port").toInt();
   setupPendingSsid = ssid;
@@ -345,16 +362,32 @@ inline void setupRoutes() {
 }
 
 /*
+ * Puts the Aircoins_setup access point on air, and is called again whenever a
+ * join attempt fails: re-asserting the AP makes the SSID broadcast again even
+ * when the radio had moved to the shop's channel to look for it. The station
+ * side is left idle, because a wrong name must not keep scanning in the
+ * background while the installer re-reads the page.
+ */
+inline void startSetupAp() {
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(SETUP_AP_SSID);
+  WiFi.setAutoReconnect(false);  // setup tries on purpose, never in the background
+  delay(200);
+  if (!setupDnsStarted) {
+    setupDns.start(53, "*", WiFi.softAPIP());
+    setupDnsStarted = true;
+  }
+}
+
+/*
  * Blocks until the panel approves this machine and a device key is stored.
  * The caller restarts the board afterwards.
  */
 inline void runSetupPortal(StoredConfig &cfg) {
   WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(SETUP_AP_SSID);
-  delay(200);
+  startSetupAp();
 
-  setupDns.start(53, "*", WiFi.softAPIP());
   setupRoutes();
   setupServer.begin();
 
@@ -371,6 +404,15 @@ inline void runSetupPortal(StoredConfig &cfg) {
   for (;;) {
     setupDns.processNextRequest();
     setupServer.handleClient();
+
+    // A fresh submission always wins over an attempt already in flight: the
+    // installer re-typed the name, so drop the old try instead of waiting it out.
+    if (setupJoinRequested && phase != WAIT_JOIN) {
+      phase = WAIT_JOIN;
+      phaseStarted = millis();
+      claimToken = "";
+      WiFi.disconnect(false, false);
+    }
 
     if (phase == WAIT_JOIN && setupJoinRequested) {
       setupJoinRequested = false;
@@ -394,14 +436,19 @@ inline void runSetupPortal(StoredConfig &cfg) {
 
     if (phase == WIFI_CONNECTING) {
       if (WiFi.status() == WL_CONNECTED) {
+        WiFi.setAutoReconnect(true);  // normal mode wants the reconnect loop back
         phase = CLAIMING;
         phaseStarted = millis();
         lastAttempt = 0;
         setupDetail = "WiFi joined. Asking the panel to accept this machine...";
-      } else if (millis() - phaseStarted > 25000) {
+      } else if (millis() - phaseStarted > SETUP_JOIN_TIMEOUT_MS) {
         setupState = "failed";
-        setupDetail = String("Could not join ") + cfg.ssid + ". Check the password and rescan.";
+        setupDetail = String("Could not join ") + cfg.ssid +
+          " in 10 s. Aircoins_setup is broadcasting again - retype the name (hidden networks are fine) or pick another one.";
         phase = FAILED;
+        phaseStarted = millis();
+        // The config stayed saved either way; only the radio goes back to setup.
+        startSetupAp();
       }
     }
 
@@ -504,8 +551,10 @@ inline void runSetupPortal(StoredConfig &cfg) {
 
 
 // Which GPIO does what comes from the panel, as plain GPIO numbers - never the
-// D2/D5 style labels, which only exist for some board variants. Only the
-// electrical polarity is fixed here, because it is a property of the box.
+// D2/D5 style labels, which only exist for some board variants. The level that
+// arms the slot is a setting too (`slotTriggerType`), because relay modules
+// come active-high and active-low; the macros below only seed the value for a
+// board the panel has never configured.
 #ifndef AIRCOINS_SLOT_LOCK_ACTIVE_HIGH
 #define AIRCOINS_SLOT_LOCK_ACTIVE_HIGH 1
 #endif
@@ -516,8 +565,11 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define AIRCOINS_BUZZER_PASSIVE 0     // 1 = piezo driven with tone(), 0 = active buzzer
 #endif
 
-#define AIRCOINS_VERSION "1.0.1"
-#define PULSE_DEBOUNCE_MS 25
+#define AIRCOINS_VERSION "1.4.1"
+// Acceptors send a burst per coin - five pulses for five pesos, often less than
+// 25 ms apart. The gap only has to swallow contact bounce, and the panel can
+// raise or lower it per machine.
+#define PULSE_DEBOUNCE_DEFAULT_MS 6
 #define PULSE_BANK_MAX 60000
 #define BOOT_WIFI_TIMEOUT_MS 25000
 #define WIFI_LOST_RESTART_MS 300000UL
@@ -531,8 +583,12 @@ struct Settings {
   int8_t buzzerPin = 14;     // GPIO14 = D5
   int8_t ledPin = 2;         // GPIO2  = D4, the onboard LED
   int8_t slotLockPin = -1;   // relay that powers the slot, off unless wired
+  // 1 = the relay pin goes HIGH while coins are accepted, 0 = it goes LOW.
+  uint8_t slotTriggerType = AIRCOINS_SLOT_LOCK_ACTIVE_HIGH ? 1 : 0;
   uint16_t coinValue = 1;
   uint16_t pulsesPerCoin = 1;
+  // Pulses closer together than this are one bounce, not two coins.
+  uint16_t pulseDebounceMs = PULSE_DEBOUNCE_DEFAULT_MS;
   uint16_t coinWaitSeconds = 10;
   uint16_t maxCoins = 0;
   uint16_t abuseCount = 20;
@@ -547,7 +603,8 @@ static StoredConfig cfg;
 static Settings settings;
 
 static volatile uint16_t coinPulses = 0;
-static volatile uint32_t lastPulseMs = 0;
+static volatile uint32_t lastPulseUs = 0;
+static volatile uint32_t pulseGapUs = (uint32_t)PULSE_DEBOUNCE_DEFAULT_MS * 1000UL;
 
 static uint16_t pulseBank = 0;        // pulses not sold yet, carries remainders
 static uint32_t pulsesSeen = 0;       // everything the acceptor ever sent, for wiring checks
@@ -569,6 +626,23 @@ static uint32_t wifiLostAt = 0;
 static String lastError;
 static String commandDone;
 static String serverCommand;
+
+/*
+ * The coin session the panel is holding for this machine, if any.
+ *
+ * A JuanFi box keeps this itself: /topUp opens the slot, /checkCoin reads it
+ * and /useVoucher commits it. An AirCoins board serves nothing, so the panel
+ * owns that conversation with the phone and only needs two things from here:
+ * how many pulses this customer's session has taken, and the promise not to
+ * sell them on its own while the panel is paying for them.
+ *
+ * `sessionPaid` is the panel's watermark for those pulses - an absolute count,
+ * never a delta, so a reply lost in the air is simply repeated.
+ */
+static String liveSessionId;
+static uint16_t sessionPulses = 0;
+static uint16_t sessionPaid = 0;
+static uint32_t sessionEndsMs = 0;
 
 static void copyText(char *dst, size_t size, const char *src) {
   if (!size) return;
@@ -615,16 +689,42 @@ static void beepError() {
 
 static void applySlotLock(bool open) {
   if (settings.slotLockPin < 0) return;
-  bool level = AIRCOINS_SLOT_LOCK_ACTIVE_HIGH ? open : !open;
+  bool level = settings.slotTriggerType == 1 ? open : !open;
   digitalWrite((uint8_t)settings.slotLockPin, level ? HIGH : LOW);
+}
+
+/*
+ * What the relay should be doing right now.
+ *
+ * With a relay wired the acceptor is only powered while the panel holds a coin
+ * session - a customer pressed INSERT COIN and is feeding coins. Between sales
+ * the slot is dead, like JuanFi's coin-set line, so a coin dropped at random
+ * cannot start a sale nobody asked for. Without a relay there is nothing to
+ * gate and the bank model carries on as before.
+ */
+static bool slotRelayOn = false;
+
+static bool slotRelayWanted() {
+  if (settings.slotLockPin < 0) return false;
+  return liveSessionId.length() > 0;
+}
+
+static void syncSlotLock(bool force = false) {
+  bool wanted = slotRelayWanted();
+  if (!force && wanted == slotRelayOn) return;
+  slotRelayOn = wanted;
+  applySlotLock(wanted);
+  Serial.printf("aircoins: slot relay %s\n", wanted ? "on" : "off");
 }
 
 // ------------------------------------------------------------------- coins
 
 static IRAM_ATTR void onCoinPulse() {
-  uint32_t now = millis();
-  if ((uint32_t)(now - lastPulseMs) < PULSE_DEBOUNCE_MS) return;
-  lastPulseMs = now;
+  // Microseconds, not millis(): a 5-peso coin fires five pulses in a burst and
+  // a millisecond dead-time would round the last one away.
+  uint32_t now = micros();
+  if ((uint32_t)(now - lastPulseUs) < pulseGapUs) return;
+  lastPulseUs = now;
   if (coinPulses < 1000) coinPulses++;
 }
 
@@ -640,23 +740,58 @@ static bool slotOpen() {
   return slotBlockedUntil == 0 || (int32_t)(millis() - slotBlockedUntil) >= 0;
 }
 
+/*
+ * GPIO16 - D0 on the board - is the one pin with no interrupt line, and it has
+ * no internal pull-up either. It is still a normal input, so the coin pin is
+ * sampled by a timer when it is wired there: same falling edge, same debounce,
+ * and it keeps counting while the panel call blocks the main loop.
+ */
+static const uint8_t COIN_POLL_PIN = 16;
+static const uint32_t COIN_POLL_MS = 2;
+
+static Ticker coinPollTicker;
+static bool coinPollRunning = false;
+static bool coinPinLow = false;
+
+static void onCoinPollTick() {
+  bool low = digitalRead(COIN_POLL_PIN) == LOW;
+  if (low && !coinPinLow) onCoinPulse();
+  coinPinLow = low;
+}
+
+/*
+ * Leaves the panel's session. The pulses it already paid for were taken out of
+ * the bank as each answer arrived, so whatever is left is either unsold or too
+ * small to be a whole coin - both are the normal sale path's business again.
+ */
+static void endCoinSession() {
+  if (!liveSessionId.length()) return;
+  uint16_t unpaid = sessionPulses > sessionPaid ? sessionPulses - sessionPaid : 0;
+  Serial.printf("aircoins: coin session closed, %u pulse(s) still unpaid\n", (unsigned)unpaid);
+  liveSessionId = "";
+  sessionPulses = 0;
+  sessionPaid = 0;
+  sessionEndsMs = 0;
+}
+
 static void closeSlot(uint32_t ms, bool asBan) {
   slotBlockedUntil = millis() + ms;
   banActive = asBan;
-  applySlotLock(false);
+  syncSlotLock();
 }
 
 static void openSlot() {
   slotBlockedUntil = 0;
   banActive = false;
   failedSales = 0;
-  applySlotLock(true);
+  syncSlotLock();
 }
 
 static int8_t wiredCoinPin = -1;
 static int8_t wiredBuzzerPin = -1;
 static int8_t wiredLedPin = -1;
 static int8_t wiredLockPin = -1;
+static uint8_t wiredLockTrigger = 255;
 
 /*
  * Moves the wiring to whatever the panel says, without a reflash. Runs once at
@@ -664,11 +799,24 @@ static int8_t wiredLockPin = -1;
  */
 static void applyPins() {
   if (settings.coinPin != wiredCoinPin) {
-    if (wiredCoinPin >= 0) detachInterrupt(digitalPinToInterrupt((uint8_t)wiredCoinPin));
+    if (wiredCoinPin >= 0 && wiredCoinPin != COIN_POLL_PIN) {
+      detachInterrupt(digitalPinToInterrupt((uint8_t)wiredCoinPin));
+    }
+    if (coinPollRunning) {
+      coinPollTicker.detach();
+      coinPollRunning = false;
+    }
     wiredCoinPin = settings.coinPin;
-    // GPIO16 has no interrupt and 6-11 are the flash lines.
+    // 6-11 are the flash lines; D0 is handled on its own because GPIO16 has
+    // no interrupt (sampled instead) and no pull-up to turn on.
     bool usable = wiredCoinPin >= 0 && wiredCoinPin <= 15 && wiredCoinPin != 6;
-    if (usable) {
+    if (wiredCoinPin == COIN_POLL_PIN) {
+      pinMode(COIN_POLL_PIN, INPUT);
+      coinPinLow = digitalRead(COIN_POLL_PIN) == LOW;
+      coinPollTicker.attach_ms(COIN_POLL_MS, onCoinPollTick);
+      coinPollRunning = true;
+      Serial.println("aircoins: coin pin is D0 (GPIO16), sampled every 2 ms");
+    } else if (usable) {
       pinMode((uint8_t)wiredCoinPin, INPUT_PULLUP);
       attachInterrupt(digitalPinToInterrupt((uint8_t)wiredCoinPin), onCoinPulse, FALLING);
     } else if (wiredCoinPin >= 0) {
@@ -692,11 +840,16 @@ static void applyPins() {
     led(false);
   }
 
-  if (settings.slotLockPin != wiredLockPin) {
-    if (wiredLockPin >= 0) pinMode((uint8_t)wiredLockPin, INPUT);
-    wiredLockPin = settings.slotLockPin;
-    if (wiredLockPin >= 0) pinMode((uint8_t)wiredLockPin, OUTPUT);
-    applySlotLock(slotOpen());
+  // A polarity change alone must also re-drive the relay, so the trigger type
+  // is tracked beside the pin instead of only reacting to a re-wire.
+  if (settings.slotLockPin != wiredLockPin || settings.slotTriggerType != wiredLockTrigger) {
+    if (settings.slotLockPin != wiredLockPin) {
+      if (wiredLockPin >= 0) pinMode((uint8_t)wiredLockPin, INPUT);
+      wiredLockPin = settings.slotLockPin;
+      if (wiredLockPin >= 0) pinMode((uint8_t)wiredLockPin, OUTPUT);
+    }
+    wiredLockTrigger = settings.slotTriggerType;
+    syncSlotLock(true);
   }
 }
 
@@ -737,6 +890,10 @@ static bool fetchConfig() {
   copyText(settings.clientMac, sizeof(settings.clientMac), s["clientMac"] | "");
   settings.coinValue = s["coinValue"] | settings.coinValue;
   settings.pulsesPerCoin = s["pulsesPerCoin"] | settings.pulsesPerCoin;
+  settings.pulseDebounceMs = s["pulseDebounceMs"] | settings.pulseDebounceMs;
+  if (settings.pulseDebounceMs < 1) settings.pulseDebounceMs = 1;
+  if (settings.pulseDebounceMs > 50) settings.pulseDebounceMs = 50;
+  pulseGapUs = (uint32_t)settings.pulseDebounceMs * 1000UL;
   settings.coinWaitSeconds = s["coinWaitSeconds"] | settings.coinWaitSeconds;
   settings.maxCoins = s["maxCoins"] | settings.maxCoins;
   settings.abuseCount = s["abuseCount"] | settings.abuseCount;
@@ -748,6 +905,8 @@ static bool fetchConfig() {
   settings.buzzerPin = (int8_t)(int)(s["buzzerPin"] | (int)settings.buzzerPin);
   settings.ledPin = (int8_t)(int)(s["ledPin"] | (int)settings.ledPin);
   settings.slotLockPin = (int8_t)(int)(s["slotLockPin"] | (int)settings.slotLockPin);
+  settings.slotTriggerType = (uint8_t)(int)(s["slotTriggerType"] | (int)settings.slotTriggerType);
+  if (settings.slotTriggerType > 1) settings.slotTriggerType = 1;
   if (settings.coinValue < 1) settings.coinValue = 1;
   if (settings.pulsesPerCoin < 1) settings.pulsesPerCoin = 1;
   if (settings.pollSeconds < 5) settings.pollSeconds = 5;
@@ -772,6 +931,12 @@ static bool sendStatus() {
   doc["customers"] = customers;
   doc["pulses"] = pulsesSeen;
   doc["bank"] = pulseBank;
+  // Which session this count belongs to. Only sent while the panel is holding
+  // one, so coins banked before INSERT COIN are never credited to this customer.
+  if (liveSessionId.length()) {
+    doc["sessionId"] = liveSessionId;
+    doc["sessionPulses"] = sessionPulses;
+  }
   doc["routerConnected"] = routerReachable;
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["configVersion"] = settings.version;
@@ -799,10 +964,41 @@ static bool sendStatus() {
   if (deserializeJson(res, reply.body)) return true;
 
   uint16_t poll = res["pollSeconds"] | settings.pollSeconds;
-  if (poll >= 5 && poll <= 3600) settings.pollSeconds = poll;
+  // 2s is not a typo: while a customer is feeding the slot the panel asks for a
+  // report every couple of seconds so the phone sees each coin.
+  if (poll >= 2 && poll <= 3600) settings.pollSeconds = poll;
 
   uint32_t version = res["version"] | 0;
   if (version && version != settings.version) fetchConfig();
+
+  /*
+   * The panel's coin session. `paidPulses` is how many of sessionPulses it has
+   * already turned into time: those leave the bank here, which is what keeps a
+   * coin the phone paid for from being sold again by this board.
+   */
+  JsonObject session = res["session"].as<JsonObject>();
+  if (session.isNull()) {
+    endCoinSession();
+  } else {
+    String id = session["id"] | "";
+    if (id.length() && id != liveSessionId) {
+      endCoinSession();
+      liveSessionId = id;
+      Serial.printf("aircoins: coin session %s opened by the panel\n", id.c_str());
+    }
+    uint32_t paid = session["paidPulses"] | 0;
+    if (paid > sessionPaid) {
+      uint16_t cleared = (uint16_t)(paid - sessionPaid);
+      pulseBank = pulseBank > cleared ? pulseBank - cleared : 0;
+      sessionPaid = (uint16_t)paid;
+    }
+    uint32_t left = session["expiresInMs"] | 0;
+    if (left == 0) {
+      endCoinSession();
+    } else {
+      sessionEndsMs = millis() + left;
+    }
+  }
 
   String command = res["pendingCommand"] | "";
   if (command.length()) serverCommand = command;
@@ -834,14 +1030,12 @@ static void handleServerCommand(const String &command) {
  * spent, so nothing is charged unless the credit went through.
  */
 static void sellBank(uint16_t coins) {
+  // A machine with no fixed sale target still sells: with an empty MAC the
+  // panel credits whoever opened the coin slot, or banks the coins as an
+  // unassigned sale. Refusing here would keep money the shop already took and
+  // leave the customer's coins stuck in the bank.
   if (settings.clientMac[0] == '\0') {
-    // Nothing is wrong with the coins, only with the panel, so the slot stays
-    // open and the bank is kept: closing it here would block a customer from
-    // paying for a mistake made on the panel.
-    lastError = "No PC set on the panel to credit";
-    retryAfterMs = millis() + 30000UL;
-    beepError();
-    return;
+    Serial.println("aircoins: no fixed sale target, letting the panel route these coins");
   }
 
   DynamicJsonDocument doc(256);
@@ -924,13 +1118,34 @@ static void serviceCoins() {
       pulseBank = PULSE_BANK_MAX;
     } else {
       pulseBank += pulses;
+      // Counted for the customer's session as well, so the panel can pay for
+      // exactly these pulses and no others.
+      if (liveSessionId.length()) sessionPulses += pulses;
+      // A coin is the one moment the panel has news it does not have. Reporting
+      // at once picks up a session the phone just opened, before the acceptor
+      // goes quiet and this bank would settle on its own.
+      lastPollMs = millis() - (uint32_t)settings.pollSeconds * 1000UL;
       blink();
       beep(2200, 40);
     }
   }
 
+  if (liveSessionId.length() && sessionEndsMs && (int32_t)(now - sessionEndsMs) >= 0) {
+    // The phone stopped and the window closed: the panel has already paid for
+    // what it saw, and whatever is left is sold the normal way.
+    endCoinSession();
+  }
+
+  // The relay follows the session: the moment it ends - paid, cancelled or
+  // timed out - the acceptor loses power again.
+  syncSlotLock();
+
   if (!settings.loaded) return;
   if (pulseBank < settings.pulsesPerCoin) return;
+
+  // While the panel owns a session it is paying for these pulses itself, so
+  // selling the bank here would hand out the same time twice.
+  if (liveSessionId.length()) return;
 
   // A cooldown keeps the coins banked but holds the sale, so one customer's
   // coins are never sold into the next one's turn.
@@ -994,8 +1209,8 @@ void setup() {
   Serial.print(", ip ");
   Serial.println(WiFi.localIP());
 
-  // The interrupt on the coin pin is already attached by applyPins().
-  applySlotLock(true);
+  // The interrupt on the coin pin is already attached by applyPins(). Nothing
+  // is powered yet: the slot relay closes only once a session opens.
 
   if (!fetchConfig()) {
     Serial.println("aircoins: first config pull failed, will retry");

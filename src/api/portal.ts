@@ -10,6 +10,16 @@ import { getDb } from '../database';
 import { mikrotikTimeToSeconds, secondsToLimitUptime, generateSessionToken } from '../services/deviceSessions';
 import { grantMinutesToMac } from '../services/timeCredit';
 import { getTrialSettings, claimTrial, releaseTrialClaim } from '../services/trial';
+import { findDevice, loadDevices, firmwareTypeOf } from '../services/deviceRegistry';
+import { autoSelectVendo } from '../services/vendoAutoSelect';
+import type { VendoCandidate } from '../services/vendoAutoSelect';
+import type { NodeMcuDevice } from '../services/nodemcu';
+import { getSettings, getStatus, statusIsOnline } from '../services/aircoins';
+import {
+  AirCoinsSession, findSession, findSessionById, finishSession, livePulses,
+  openSession, previewSession, sessionIsLive, sessionRemainingMs, sessionTtlSeconds,
+} from '../services/aircoinsSession';
+import { settleAirCoinsSession } from '../services/aircoinsSale';
 
 const router = Router();
 
@@ -84,6 +94,59 @@ router.get('/vendo-config', (req: Request, res: Response) => {
       cfg.trialEnabled = trial.enabled;
       cfg.trialMinutes = trial.minutes;
     } catch { /* button stays hidden */ }
+
+    // AirCoins machines, listed separately from the JuanFi array. A JuanFi vendo
+    // runs its own web server and the phone posts coins straight to it; ours has
+    // no port at all, so the phone has to go through the panel and these
+    // entries carry a device id rather than an address to call.
+    let airCoinsDevices: NodeMcuDevice[] = [];
+    try {
+      airCoinsDevices = loadDevices().filter((device) => firmwareTypeOf(device) === 'aircoins');
+    } catch {
+      airCoinsDevices = [];
+    }
+    const airCoinsVendos = airCoinsDevices.map((device) => ({
+      deviceId: device.id,
+      vendoName: device.name || `AirCoins ${device.id}`,
+      vendoIp: device.ip || '',
+    }));
+
+    // The legacy config.js still lists the address of a box that has since been
+    // registered as AirCoins, and showing both would put the same vendo in the
+    // dropdown twice - one entry the phone can reach, one it cannot. The
+    // registry wins: it is what the panel actually sold through.
+    const ours = new Set(airCoinsVendos.map((vendo) => String(vendo.vendoIp || '').trim()));
+    cfg.multiVendoAddresses = (cfg.multiVendoAddresses || [])
+      .filter((vendo: any) => !ours.has(String(vendo.vendoIp || '').trim()));
+    cfg.aircoinsVendos = airCoinsVendos;
+
+    // Which machine serves the network this phone is on. The hotspot hands out
+    // leases per DHCP server, so the customer's own address already names the
+    // sub-vendo of their SSID - they should never have to pick one. The browser
+    // sends the address from the MikroTik redirect because nginx makes the real
+    // client look like 127.0.0.1 here (same reason as the trial claim).
+    const clientIp = String(req.query.ip || '').trim();
+    const clientRouterId = parseInt(String(req.query.routerId || ''), 10) || 0;
+    const candidates: VendoCandidate[] = [
+      ...airCoinsDevices.map((device) => ({
+        value: `aircoins:${device.id}`,
+        name: device.name || `AirCoins ${device.id}`,
+        ip: String(device.ip || '').trim(),
+        routerId: Number(device.routerId) || 0,
+        subnets: Array.isArray(device.hotspotSubnets) ? device.hotspotSubnets.map(String) : [],
+      })),
+      ...(cfg.multiVendoAddresses || []).map((vendo: any) => ({
+        value: String(vendo.vendoIp || ''),
+        name: vendo.vendoName || vendo.vendoIp,
+        ip: String(vendo.vendoIp || ''),
+        routerId: 0,
+        subnets: [],
+      })),
+    ];
+    const auto = autoSelectVendo(clientIp, clientRouterId, candidates);
+    cfg.autoVendo = auto ? auto.value : '';
+    cfg.autoVendoName = auto ? auto.name : '';
+    cfg.autoVendoReason = auto ? auto.reason : '';
 
     res.json(cfg);
   } catch (error: any) {
@@ -607,6 +670,224 @@ router.post('/trial', async (req: Request, res: Response) => {
     }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+/*
+ * AirCoins coin slot.
+ *
+ * A JuanFi machine serves these answers itself; an AirCoins board has no web
+ * server and no idea who is paying, so the panel holds the session and the
+ * phone talks to it here. The answers keep the JuanFi field names on purpose,
+ * so the portal keeps one way of reading a coin slot: `status`, `errorCode`,
+ * `totalCoin` (pesos), `timeAdded` (seconds).
+ */
+
+function airCoinsVendo(id: any): { id: number; name: string } | null {
+  const deviceId = parseInt(String(id || ''), 10);
+  if (!Number.isFinite(deviceId) || deviceId <= 0) return null;
+  const device = findDevice(deviceId);
+  if (!device || firmwareTypeOf(device) !== 'aircoins') return null;
+  return { id: device.id, name: device.name || `AirCoins ${device.id}` };
+}
+
+function sessionPesos(deviceId: number, session: AirCoinsSession): number {
+  // What is in the box right now, paid or not: a batch no rate could cover is
+  // still the customer's money and belongs on the total.
+  const counted = Math.max(session.settledPulses, livePulses(deviceId, session.id));
+  return previewSession(deviceId, counted).coins;
+}
+
+// PROMO RATES for a machine with no web server of its own. A JuanFi vendo
+// answers /getRates straight from its own rate table; this is the same ladder
+// the panel prices the coins with, so the quote and the credit cannot disagree.
+router.get('/coins/rates', (req: Request, res: Response) => {
+  try {
+    const vendo = airCoinsVendo(req.query.deviceId);
+    if (!vendo) {
+      res.status(404).json({ error: 'Unknown vendo' });
+      return;
+    }
+    const settings = getSettings(vendo.id);
+    res.json({
+      vendoName: vendo.name,
+      coinValue: settings.coinValue,
+      pulsesPerCoin: settings.pulsesPerCoin,
+      rates: settings.rates.map((rate) => ({ name: rate.name, price: rate.price, minutes: rate.minutes })),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// INSERT COIN: opens the slot for this phone, or says who already has it.
+router.post('/coins/topup', (req: Request, res: Response) => {
+  try {
+    const vendo = airCoinsVendo(req.body?.deviceId);
+    if (!vendo) {
+      res.json({ status: 'false', errorCode: 'coin.slot.notavailable' });
+      return;
+    }
+
+    const macNoColon = String(req.body?.mac || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    if (!/^[0-9A-F]{12}$/.test(macNoColon)) {
+      res.status(400).json({ status: 'false', errorCode: 'invalid.mac' });
+      return;
+    }
+
+    // A machine that has not reported for three polls is not taking coins.
+    // Saying so now is kinder than a customer dropping pesos into a dead box.
+    const settings = getSettings(vendo.id);
+    if (!statusIsOnline(getStatus(vendo.id), settings.pollSeconds)) {
+      res.json({ status: 'false', errorCode: 'coin.slot.offline' });
+      return;
+    }
+
+    // One slot is one physical place, so a second phone pressing INSERT COIN
+    // while another customer's coins are in the box is told it is busy - the
+    // same answer JuanFi gives when it is already holding a voucher.
+    const existing = findSession(vendo.id);
+    if (sessionIsLive(existing) && existing!.mac !== macNoColon) {
+      res.json({ status: 'false', errorCode: 'coinslot.busy' });
+      return;
+    }
+
+    const routerId = parseInt(String(req.body?.routerId || '1'), 10) || 1;
+    const session = sessionIsLive(existing)
+      ? existing!
+      : openSession(vendo.id, String(req.body?.voucher || ''), macNoColon, routerId);
+
+    res.json({
+      status: 'true',
+      voucher: session.voucher,
+      sessionId: session.id,
+      deviceId: vendo.id,
+      vendoName: vendo.name,
+      // JuanFi's wait is in milliseconds; the browser uses both to draw the
+      // countdown it shows while the customer feeds the slot.
+      waitTime: sessionTtlSeconds() * 1000,
+      remainTime: sessionRemainingMs(session),
+      pollSeconds: 1,
+    });
+  } catch (error: any) {
+    res.status(500).json({ status: 'false', errorCode: 'server.error' });
+  }
+});
+
+// Polling while the customer feeds the slot. Each batch of coins is credited
+// the moment it is seen - that is this session's version of /useVoucher for
+// every coin group, so walking away does not lose what was already dropped.
+router.post('/coins/check', async (req: Request, res: Response) => {
+  try {
+    const vendo = airCoinsVendo(req.body?.deviceId);
+    const session = vendo ? findSessionById(String(req.body?.sessionId || '')) : null;
+    if (!vendo || !session || session.deviceId !== vendo.id) {
+      res.json({ status: 'false', errorCode: 'coin.slot.notavailable' });
+      return;
+    }
+
+    const credited = await settleAirCoinsSession(vendo.id, session);
+    const fresh = findSessionById(session.id) || session;
+    const waitTime = sessionTtlSeconds() * 1000;
+
+    if (!sessionIsLive(fresh)) {
+      res.json({
+        status: 'false', errorCode: 'coins.wait.expired',
+        remainTime: 0, timeAdded: fresh.settledSeconds,
+        totalCoin: sessionPesos(vendo.id, fresh), waitTime,
+      });
+      return;
+    }
+
+    if (credited.result && credited.result.status === 'ok') {
+      res.json({
+        status: 'true',
+        newCoin: credited.coins,
+        // Cumulative, like the vendo's own timeAdded: the time all the coins in
+        // this slot have bought so far - which is what the customer watches.
+        timeAdded: fresh.settledSeconds,
+        totalCoin: sessionPesos(vendo.id, fresh),
+        remainTime: sessionRemainingMs(fresh),
+        waitTime,
+      });
+      return;
+    }
+
+    res.json({
+      status: 'false',
+      errorCode: credited.result && credited.result.status === 'no-rate' ? 'coins.no.rate' : 'coin.not.inserted',
+      remainTime: sessionRemainingMs(fresh),
+      timeAdded: fresh.settledSeconds,
+      totalCoin: sessionPesos(vendo.id, fresh),
+      waitTime,
+    });
+  } catch (error: any) {
+    res.status(500).json({ status: 'false', errorCode: 'server.error' });
+  }
+});
+
+// SAVE. The coins were already credited batch by batch, so this only closes the
+// session and reports what it was worth - asking the voucher route again would
+// pay the same pesos a second time.
+async function closeAirCoinsSession(
+  body: any,
+  status: 'saved' | 'cancelled',
+): Promise<any> {
+  const vendo = airCoinsVendo(body?.deviceId);
+  const session = vendo ? findSessionById(String(body?.sessionId || '')) : null;
+  if (!vendo || !session || session.deviceId !== vendo.id) {
+    return { code: 200, payload: { status: 'false', errorCode: 'coin.slot.notavailable' } };
+  }
+  if (session.status !== 'open') {
+    return {
+      code: 200,
+      payload: {
+        status: 'true', totalCoin: session.coins, timeAdded: session.settledSeconds,
+        minutes: session.minutes, alreadyClosed: session.status,
+      },
+    };
+  }
+
+  const credited = await settleAirCoinsSession(vendo.id, session);
+  const fresh = findSessionById(session.id) || session;
+  // The totals already live on the session - settle wrote them - so finishing
+  // only stamps the status, or a settle would be counted twice.
+  const done = finishSession(session.id, status, {
+    coins: fresh.coins,
+    minutes: fresh.minutes,
+    error: credited.result && credited.result.status !== 'ok' ? (credited.result.error || '') : '',
+  });
+
+  return {
+    code: 200,
+    payload: {
+      status: 'true',
+      totalCoin: done ? done.coins : fresh.coins,
+      timeAdded: done ? done.settledSeconds : fresh.settledSeconds,
+      minutes: done ? done.minutes : fresh.minutes,
+      remainingSeconds: credited.result ? credited.result.remainingSeconds : 0,
+      username: credited.result ? credited.result.username : '',
+    },
+  };
+}
+
+router.post('/coins/use', async (req: Request, res: Response) => {
+  try {
+    const reply = await closeAirCoinsSession(req.body || {}, 'saved');
+    res.status(reply.code).json(reply.payload);
+  } catch (error: any) {
+    res.status(500).json({ status: 'false', errorCode: 'server.error' });
+  }
+});
+
+// CANCEL still keeps what was dropped: JuanFi's cancel expires the slot and
+// commits it, and a customer who walks away deserves the same.
+router.post('/coins/cancel', async (req: Request, res: Response) => {
+  try {
+    const reply = await closeAirCoinsSession(req.body || {}, 'cancelled');
+    res.status(reply.code).json(reply.payload);
+  } catch (error: any) {
+    res.status(500).json({ status: 'false', errorCode: 'server.error' });
   }
 });
 

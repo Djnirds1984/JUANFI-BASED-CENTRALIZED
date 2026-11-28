@@ -69,7 +69,11 @@ export interface AirCoinsSettings {
   buzzer: boolean;
   /** Seconds between config pulls. */
   pollSeconds: number;
-  /** '' | 'restart' | 'sync' - picked up on the next poll, then acked. */
+  /**
+   * '' | 'restart' | 'sync' | 'update' - picked up on the next poll, then acked.
+   * `update` makes the panel offer this machine the newest AirCoins image; the
+   * board installs it between sales.
+   */
   pendingCommand: string;
   updatedAt: string;
 }
@@ -111,7 +115,7 @@ const DEFAULT_RATES: AirCoinsRate[] = [
   { name: '10 peso / 2hours', price: 10, minutes: 120 },
 ];
 
-const COMMANDS = ['', 'restart', 'sync'];
+const COMMANDS = ['', 'restart', 'sync', 'update'];
 
 // The board keeps a failure in memory until it re-reads its config, so one lost
 // report leaves "The panel did not answer the report" attached to every good

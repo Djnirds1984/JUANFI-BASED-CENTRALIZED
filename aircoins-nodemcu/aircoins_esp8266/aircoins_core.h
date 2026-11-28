@@ -9,8 +9,14 @@
  * listening port. It sells HOTSPOT time - the box a customer walks up to and
  * feeds so their own phone gets online. It is not a pisonet seat timer; that is
  * a different firmware. Rates, pricing and the device that gets the time live
- * in the panel. Its only HTTP server is the Aircoins_setup pairing portal, and
- * only while the machine has no device key.
+ * in the panel. Its only HTTP server is the Aircoins_setup portal, and only
+ * while the machine has no device key - or while a shop network that used to
+ * answer has stopped answering, which is how a slow router is waited out
+ * instead of being mistaken for an unprovisioned board.
+ *
+ * Firmware updates come from the panel, over the same outbound link: nothing
+ * here listens for an upload, so an OTA works from anywhere the machine can
+ * already reach the controller.
  *
  * Requires ArduinoJson (v6.21.5 or newer in the 6.x line).
  */
@@ -23,6 +29,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
 #include <Ticker.h>
@@ -160,20 +167,27 @@ inline String macNoColon() {
 // ======================= setup_portal.h =======================
 
 /*
- * First-boot setup.
+ * The Aircoins_setup portal, in two moods.
  *
- * A board that has no device key yet comes up as `Aircoins_setup`. The installer
- * joins it and gives the shop WiFi a name - picked from the scan list, or typed
- * by hand when the network is hidden or not listed. The name is saved the
- * moment it is submitted, and the board joins it straight away; a join that has
- * not succeeded in ten seconds puts the access point back on air, so the name
- * can be corrected without a power cycle. Once the network is up the board asks
- * the panel to accept it and keeps the access point up, showing "waiting for
- * admin", until someone presses Accept on the AirCoins subpage. Only then does
- * it receive its device key and reboot into normal mode.
+ * First boot: a board that has no device key yet comes up as `Aircoins_setup`.
+ * The installer joins it and gives the shop WiFi a name - picked from the scan
+ * list, or typed by hand when the network is hidden or not listed. The name is
+ * saved the moment it is submitted, and the board joins it straight away; a
+ * join that has not succeeded in ten seconds puts the access point back on air,
+ * so the name can be corrected without a power cycle. Once the network is up
+ * the board asks the panel to accept it and keeps the access point up, showing
+ * "waiting for admin", until someone presses Accept on the AirCoins subpage.
+ * Only then does it receive its device key and reboot into normal mode.
  *
- * This is the ONLY HTTP server in the firmware, and it only exists while the
- * machine is unpaired.
+ * Rescue: the same page, for a board that IS paired but cannot reach the shop
+ * router - typically minutes after a blackout, when the ONU is still booting.
+ * That is deliberately not a one-way door. The saved network is retried by the
+ * board itself while the page stays reachable, and the moment it answers the
+ * access point is torn down and the machine goes back to selling, without a
+ * restart and without anyone touching it.
+ *
+ * This is the ONLY HTTP server in the firmware, and it never runs while the
+ * machine is selling.
  */
 
 static const char *SETUP_AP_SSID = "Aircoins_setup";
@@ -181,6 +195,10 @@ static const char *SETUP_AP_SSID = "Aircoins_setup";
 // A shop router answers well inside this; a wrong name must not strand the
 // installer on a portal that no longer answers.
 static const uint32_t SETUP_JOIN_TIMEOUT_MS = 10000;
+// How often the rescue portal re-arms the station side while it waits for a
+// router that is still booting. Long enough that a join in progress is never
+// cut short, short enough that a router that just came up is found promptly.
+static const uint32_t WIFI_RETRY_MS = 30000;
 
 static String setupState = "idle";
 static String setupDetail = "Pick the shop WiFi below.";
@@ -188,6 +206,11 @@ static String setupDetail = "Pick the shop WiFi below.";
 static ESP8266WebServer setupServer(80);
 static DNSServer setupDns;
 static bool setupDnsStarted = false;
+// The portal is entered more than once now (first boot, then every rescue), so
+// handlers are registered once and the socket is only re-opened when it is not
+// already up. Registering twice would run the same handler twice per request.
+static bool setupServerReady = false;
+static bool setupServerUp = false;
 
 static String setupPendingSsid;
 static String setupPendingPass;
@@ -364,6 +387,33 @@ inline void setupRoutes() {
 }
 
 /*
+ * Brings the portal socket up, and takes it down again when the machine has
+ * something better to do. Handlers and the DNS object outlive the socket, so a
+ * rescue that ends and a later one can share the same objects.
+ */
+inline void ensureSetupServer() {
+  if (!setupServerReady) {
+    setupRoutes();
+    setupServerReady = true;
+  }
+  if (!setupServerUp) {
+    setupServer.begin();
+    setupServerUp = true;
+  }
+}
+
+inline void stopSetupServer() {
+  if (setupServerUp) {
+    setupServer.stop();
+    setupServerUp = false;
+  }
+  if (setupDnsStarted) {
+    setupDns.stop();
+    setupDnsStarted = false;
+  }
+}
+
+/*
  * Puts the Aircoins_setup access point on air, and is called again whenever a
  * join attempt fails: re-asserting the AP makes the SSID broadcast again even
  * when the radio had moved to the shop's channel to look for it. The station
@@ -390,8 +440,7 @@ inline void runSetupPortal(StoredConfig &cfg) {
   WiFi.persistent(false);
   startSetupAp();
 
-  setupRoutes();
-  setupServer.begin();
+  ensureSetupServer();
 
   setupState = "waiting";
   setupDetail = "Pick the shop WiFi below.";
@@ -536,6 +585,97 @@ inline void runSetupPortal(StoredConfig &cfg) {
   }
 }
 
+/*
+ * Waits for the shop router without ever locking the machine out of it.
+ *
+ * A blackout takes the vendo and the router down together. The board is back in
+ * under a second; an ONU in front of it can take minutes. "No WiFi" a few
+ * seconds after boot therefore says nothing about this machine's configuration,
+ * and treating it as a reason to sit on the setup page forever is exactly the
+ * failure this function exists to remove.
+ *
+ * The saved network is retried here every WIFI_RETRY_MS while the portal stays
+ * on air, and the first successful join tears the access point down and returns
+ * to normal operation - no restart, no button, nobody on site. A re-typed name
+ * or password is saved and tried at once, for the shop that changed one while
+ * the power was out.
+ */
+static void serviceCoins();
+
+inline void runRescuePortal(StoredConfig &cfg) {
+  Serial.printf("aircoins: waiting for %s on %s\n", cfg.ssid, SETUP_AP_SSID);
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(SETUP_AP_SSID);
+  // Unlike first-boot setup the station side keeps trying on its own: the AP is
+  // here so a person can help, not because the board has given up.
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(cfg.ssid, cfg.pass);
+  delay(200);
+  if (!setupDnsStarted) {
+    setupDns.start(53, "*", WiFi.softAPIP());
+    setupDnsStarted = true;
+  }
+  ensureSetupServer();
+
+  setupState = "looking";
+  setupDetail = String("Waiting for the shop router (") + cfg.ssid + ").";
+
+  uint32_t enteredAt = millis();
+  uint32_t lastTry = millis();
+
+  for (;;) {
+    setupDns.processNextRequest();
+    setupServer.handleClient();
+
+    if (setupJoinRequested) {
+      setupJoinRequested = false;
+      strncpy(cfg.ssid, setupPendingSsid.c_str(), sizeof(cfg.ssid) - 1);
+      strncpy(cfg.pass, setupPendingPass.c_str(), sizeof(cfg.pass) - 1);
+      strncpy(cfg.panelHost, setupPendingHost.c_str(), sizeof(cfg.panelHost) - 1);
+      cfg.panelPort = setupPendingPort;
+      if (setupPendingName.length() > 0) {
+        strncpy(cfg.deviceName, setupPendingName.c_str(), sizeof(cfg.deviceName) - 1);
+      }
+      configTerminate(cfg);
+      configSave(cfg);
+      WiFi.begin(cfg.ssid, cfg.pass);
+      lastTry = millis();
+      setupState = "connecting";
+      setupDetail = String("Joining ") + cfg.ssid + "...";
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("aircoins: %s is back after %lu s, leaving the rescue portal\n",
+                    cfg.ssid, (unsigned long)((millis() - enteredAt) / 1000UL));
+      stopSetupServer();
+      WiFi.softAPdisconnect(true);
+      WiFi.mode(WIFI_STA);
+      WiFi.setSleepMode(WIFI_NONE_SLEEP);
+      WiFi.setAutoReconnect(true);
+      setupState = "idle";
+      return;
+    }
+
+    if ((uint32_t)(millis() - lastTry) >= WIFI_RETRY_MS) {
+      lastTry = millis();
+      // Re-arming matters: an attempt made while the router was still booting
+      // is abandoned by the SDK, and nothing else would start another one.
+      WiFi.begin(cfg.ssid, cfg.pass);
+      uint32_t waited = (uint32_t)((millis() - enteredAt) / 1000UL);
+      setupState = "looking";
+      setupDetail = String("Still waiting for ") + cfg.ssid + " (" + String(waited) +
+        " s). The shop router may still be booting.";
+      Serial.printf("aircoins: no %s after %lu s, still trying\n", cfg.ssid, (unsigned long)waited);
+    }
+
+    // Coins dropped while the shop is dark are counted, not sold: the sale path
+    // refuses without WiFi, and the bank is offered once the link is back.
+    serviceCoins();
+    delay(10);
+  }
+}
+
 // ======================= main.cpp =======================
 
 /*
@@ -546,8 +686,13 @@ inline void runSetupPortal(StoredConfig &cfg) {
  * tablet, not a pisonet seat, which is a separate firmware. Rates, pricing and
  * the device that gets the time all live in the panel. The board counts pulses,
  * asks the panel what the bank is worth and reports back, so the only HTTP
- * server it ever runs is the pairing portal in setup_portal.h - and only while
- * the machine has no device key.
+ * server it ever runs is the portal in setup_portal.h - and only while the
+ * machine has no device key or is waiting for a router to come back.
+ *
+ * It also updates itself the same way it works: the panel offers an image on a
+ * status reply, the board downloads it from the panel when no customer is at
+ * the slot, and the ESP8266 core reboots into it. Nothing listens for an
+ * upload, so an OTA is exactly as reachable as the machine already is.
  *
  * A sale is only forgotten once the panel confirms it. Anything the panel did
  * not answer stays in the bank and is offered again on the next poll.
@@ -569,14 +714,23 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define AIRCOINS_BUZZER_PASSIVE 0     // 1 = piezo driven with tone(), 0 = active buzzer
 #endif
 
-#define AIRCOINS_VERSION "1.4.3"
+#define AIRCOINS_VERSION "1.5.0"
 // Acceptors send a burst per coin - five pulses for five pesos, often less than
 // 25 ms apart. The gap only has to swallow contact bounce, and the panel can
 // raise or lower it per machine.
 #define PULSE_DEBOUNCE_DEFAULT_MS 6
 #define PULSE_BANK_MAX 60000
-#define BOOT_WIFI_TIMEOUT_MS 25000
-#define WIFI_LOST_RESTART_MS 300000UL
+/*
+ * How long a paired board looks for its shop network before it does anything
+ * else. Ten minutes, not the 25 seconds this used to be: a blackout restarts
+ * the vendo and the ONU together, and an ONU that has to re-sync its line can
+ * be up and serving long after a 25-second window has closed. The wait costs
+ * nothing - with no router there is no internet to sell anyway.
+ */
+#define BOOT_WIFI_WAIT_MS 600000UL
+// Losing WiFi for this long opens the rescue portal. It used to restart, which
+// after a power cut meant rebooting into a router that was still booting.
+#define WIFI_LOST_RESCUE_MS 300000UL
 #define AUTH_FAILURES_BEFORE_RESET 3
 
 /*
@@ -652,6 +806,17 @@ static int lastReportCode = 0;        // HTTP status of the last report, 0 = no 
 static String lastError;
 static String commandDone;
 static String serverCommand;
+
+/*
+ * A firmware image the panel has offered, waiting for a moment when the machine
+ * is not selling. `otaPath` is the panel's own route, so the board downloads
+ * from the host it already polls - nothing new to configure, no inbound port.
+ */
+static bool otaReady = false;
+static String otaPath;
+static String otaVersion;
+static uint32_t otaSize = 0;
+static uint32_t otaOfferedAt = 0;
 
 /*
  * The coin session the panel is holding for this machine, if any.
@@ -1049,6 +1214,26 @@ static bool sendStatus() {
 
   String command = res["pendingCommand"] | "";
   if (command.length()) serverCommand = command;
+
+  // Firmware the panel is handing out. It only travels while an update is
+  // queued for this machine, so a vendo is never flashed behind the shop's back
+  // - and the version is compared here as well, so the same build never
+  // downloads twice.
+  JsonObject fw = res["firmware"].as<JsonObject>();
+  if (!fw.isNull()) {
+    String version = fw["version"] | "";
+    String path = fw["path"] | "";
+    if (path.length() && version.length() && version != AIRCOINS_VERSION) {
+      if (!otaReady) {
+        Serial.printf("aircoins: panel offers firmware %s\n", version.c_str());
+        otaOfferedAt = millis();
+      }
+      otaReady = true;
+      otaPath = path;
+      otaVersion = version;
+      otaSize = fw["size"] | 0;
+    }
+  }
   return true;
 }
 
@@ -1068,6 +1253,88 @@ static void handleServerCommand(const String &command) {
     fetchConfig();
     commandDone = "sync";
     sendStatus();
+  }
+  if (command == "update") {
+    // The download itself runs from loop(), where the machine can refuse while
+    // a customer is feeding the slot. Here it is only logged; the panel is
+    // acknowledged when the update actually starts.
+    Serial.println("aircoins: firmware update requested by the panel");
+  }
+}
+
+// ---------------------------------------------------------------------- ota
+
+/*
+ * A vendo only flashes itself while it is not selling. Every condition here is
+ * a reason a restart would cost somebody money: a phone is paying for the
+ * pulses in flight, coins sit banked and unsold, the slot is in its cooldown,
+ * or the acceptor was busy a moment ago.
+ */
+static bool vendoIdleForUpdate() {
+  if (liveSessionId.length()) return false;
+  if (pulseBank > 0) return false;
+  if (!slotOpen()) return false;
+  if ((uint32_t)(millis() - lastCoinMs) < (uint32_t)settings.coinWaitSeconds * 1000UL) return false;
+  return true;
+}
+
+/*
+ * Pulls the offered image from the panel and lets the ESP8266 core write it.
+ *
+ * The download goes to the panel's own address over plain HTTP - the same host
+ * and the same device key as the status call - because a vendo in a shop has no
+ * business opening a port or trusting a second address. `x-MD5` on the answer
+ * is what makes a truncated or swapped image fail instead of booting: the core
+ * verifies it before the bootloader is allowed to swap slots.
+ *
+ * The board reboots inside this call on success, so everything after it is the
+ * failure path. The old firmware keeps running either way.
+ */
+static void runOtaIfIdle() {
+  if (!otaReady) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+  // Let the last sale's thank-you window pass before the radio is taken away.
+  if ((uint32_t)(millis() - otaOfferedAt) < (uint32_t)settings.thankYouSeconds * 1000UL) return;
+  if (!vendoIdleForUpdate()) return;
+
+  uint32_t freeSpace = ESP.getFreeSketchSpace();
+  if (otaSize > 0 && otaSize > freeSpace) {
+    otaReady = false;
+    lastError = String("New firmware (") + otaSize + " bytes) does not fit the " +
+                freeSpace + " bytes free on this board";
+    Serial.printf("aircoins: %s\n", lastError.c_str());
+    return;
+  }
+
+  otaReady = false;
+  Serial.printf("aircoins: updating to %s\n", otaVersion.c_str());
+
+  // Acknowledged before the download starts: a flash cut short by a power dip
+  // must leave the panel showing a failure, not a command still waiting for a
+  // machine that has already rebooted.
+  commandDone = "update";
+  sendStatus();
+
+  // The relay stays off for the duration - the acceptor must not take coins the
+  // board cannot count - and the LED stays lit so nobody unplugs a working OTA.
+  slotRelayOn = false;
+  applySlotLock(false);
+  led(true);
+
+  String url = "http://" + panelHostOf(cfg) + ":" + String(cfg.panelPort) + otaPath +
+               "?key=" + cfg.deviceKey;
+  WiFiClient client;
+  ESPhttpUpdate.setClientTimeout(20000);
+  ESPhttpUpdate.rebootOnUpdate(true);
+  HTTPUpdateResult result = ESPhttpUpdate.update(client, url, AIRCOINS_VERSION);
+
+  led(false);
+  if (result != HTTP_UPDATE_OK) {
+    lastError = String("Firmware update failed: ") + ESPhttpUpdate.getLastErrorString();
+    Serial.printf("aircoins: %s\n", lastError.c_str());
+    beepError();
+    // Report the failure on the very next pass rather than a poll interval later.
+    lastPollMs = millis() - (uint32_t)settings.pollSeconds * 1000UL;
   }
 }
 
@@ -1237,8 +1504,26 @@ static bool connectWifi(uint32_t timeoutMs) {
   WiFi.begin(cfg.ssid, cfg.pass);
 
   uint32_t started = millis();
+  uint32_t lastNote = started;
+  uint32_t lastArm = started;
   while (WiFi.status() != WL_CONNECTED && (uint32_t)(millis() - started) < timeoutMs) {
     delay(200);
+    wl_status_t status = WiFi.status();
+    if (status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED) {
+      // The SDK gave up on its own for this attempt - the usual state right
+      // after a blackout, when the router is still booting and the network is
+      // not on air yet. Re-arming is what actually starts another look; without
+      // it the board waits out the whole window doing nothing.
+      if ((uint32_t)(millis() - lastArm) > 5000UL) {
+        lastArm = millis();
+        WiFi.begin(cfg.ssid, cfg.pass);
+      }
+    }
+    if ((uint32_t)(millis() - lastNote) > 30000UL) {
+      lastNote = millis();
+      Serial.printf("aircoins: still looking for %s (%lu s, status %d)\n", cfg.ssid,
+                    (unsigned long)((millis() - started) / 1000UL), (int)status);
+    }
   }
   return WiFi.status() == WL_CONNECTED;
 }
@@ -1300,10 +1585,15 @@ void setup() {
     ESP.restart();
   }
 
-  if (!connectWifi(BOOT_WIFI_TIMEOUT_MS)) {
-    Serial.println("aircoins: no WiFi, opening setup");
-    runSetupPortal(cfg);
-    ESP.restart();
+  if (!connectWifi(BOOT_WIFI_WAIT_MS)) {
+    // The board is up, the router is not. This used to be the end of the line:
+    // 25 seconds, then the setup portal, then nothing - which is why a blackout
+    // could leave a perfectly paired vendo advertising Aircoins_setup forever.
+    // Now the port is only a place to wait and to fix a changed password; the
+    // saved network is retried underneath it and the machine goes back to work
+    // by itself the moment the router answers.
+    Serial.println("aircoins: no router yet, waiting for it on Aircoins_setup");
+    runRescuePortal(cfg);
   }
 
   Serial.print("aircoins: joined ");
@@ -1326,11 +1616,21 @@ void loop() {
       wifiLost = true;
       wifiLostAt = millis();
       routerReachable = false;
-    } else if ((uint32_t)(millis() - wifiLostAt) > WIFI_LOST_RESTART_MS) {
-      // The shop password probably changed. A restart either reconnects or,
-      // if it still cannot, drops the board back onto Aircoins_setup.
-      Serial.println("aircoins: WiFi gone too long, restarting");
-      ESP.restart();
+    } else if ((uint32_t)(millis() - wifiLostAt) > WIFI_LOST_RESCUE_MS) {
+      // A restart used to be the cure here, and after a power cut it was the
+      // bug: the board came back in a second, before the router did, and the
+      // boot path parked it on Aircoins_setup for good. Waiting on the rescue
+      // AP keeps the machine reachable while it keeps trying on its own.
+      Serial.println("aircoins: WiFi gone too long, waiting for it on Aircoins_setup");
+      led(false);
+      ledOffMs = 0;
+      linkDownSince = 0;
+      linkReconnects = 0;
+      runRescuePortal(cfg);
+      // Back on the air: report at once instead of waiting out the interval.
+      wifiLost = false;
+      lastPollMs = millis() - (uint32_t)settings.pollSeconds * 1000UL;
+      return;
     }
     if (ledOffMs && (int32_t)(millis() - ledOffMs) >= 0) {
       led(false);
@@ -1353,6 +1653,10 @@ void loop() {
   }
 
   serviceCoins();
+
+  // Between sales the machine is free to flash itself with whatever image the
+  // last status reply offered.
+  runOtaIfIdle();
 
   if (serverCommand.length()) {
     String command = serverCommand;

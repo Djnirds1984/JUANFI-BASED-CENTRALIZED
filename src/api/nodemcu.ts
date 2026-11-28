@@ -22,6 +22,7 @@ import {
 import { creditAirCoinsSale, recordUnassignedSale, settleAirCoinsSession } from '../services/aircoinsSale';
 import { vendoLiveSummary } from '../services/vendoLive';
 import { bankTopupCoins } from '../services/wallet';
+import { latestAirCoinsFirmware } from '../services/firmwareStore';
 
 const router = Router();
 
@@ -200,6 +201,9 @@ router.post('/aircoins/status', async (req: Request, res: Response) => {
     // so the board has to notice a fresh INSERT COIN within a second or two -
     // that poll interval is the delay the customer feels before the slot clicks on.
     const gated = settings.slotLockPin >= 0;
+    // The image travels only while an update is queued for this machine, never
+    // on every heartbeat: a vendo must not be reflashed behind the shop's back.
+    const image = settings.pendingCommand === 'update' ? latestAirCoinsFirmware() : null;
     res.json({
       status: 'ok',
       version: settings.version,
@@ -209,6 +213,14 @@ router.post('/aircoins/status', async (req: Request, res: Response) => {
       pendingCommand: settings.pendingCommand,
       serverTime: new Date().toISOString(),
       session: handoff,
+      firmware: image
+        ? {
+          version: image.version,
+          size: image.size,
+          md5: image.md5,
+          path: '/api/nodemcu/aircoins/firmware',
+        }
+        : undefined,
     });
   } catch (error: any) {
     console.error('AirCoins status error:', error);
@@ -371,6 +383,34 @@ router.get('/aircoins/claim/status', (req: Request, res: Response) => {
     routerId: device ? device.routerId || 0 : 0,
     name: device ? device.name : '',
   });
+});
+
+/*
+ * The image an update installs. Same authentication as every other call a
+ * machine makes - its device key in the query string - because the board has no
+ * admin session and never should. The newest AirCoins release on the box wins,
+ * and x-MD5 goes with it: the ESP8266 core refuses to boot an image whose
+ * checksum does not match what it downloaded.
+ */
+router.get('/aircoins/firmware', (req: Request, res: Response) => {
+  try {
+    const deviceId = airCoinsDeviceId(req.query.key);
+    if (!deviceId) { res.status(401).json({ error: 'Unknown device key' }); return; }
+
+    const image = latestAirCoinsFirmware();
+    if (!image) { res.status(404).json({ error: 'No AirCoins firmware on this panel' }); return; }
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', image.size);
+    res.setHeader('x-MD5', image.md5);
+    res.setHeader('Content-Disposition', `attachment; filename="${image.name}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    console.log(`aircoins: device ${deviceId} downloading firmware ${image.name}`);
+    fs.createReadStream(image.file).pipe(res);
+  } catch (error: any) {
+    console.error('AirCoins firmware download error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 router.use(authMiddleware);
@@ -823,12 +863,17 @@ router.post('/devices/:id/aircoins/command', (req: Request, res: Response) => {
     return;
   }
   const command = String(req.body && req.body.command || '');
-  if (!['restart', 'sync'].includes(command)) {
-    res.status(400).json({ error: 'command must be restart or sync' });
+  if (!['restart', 'sync', 'update'].includes(command)) {
+    res.status(400).json({ error: 'command must be restart, sync or update' });
     return;
   }
+  const messages: Record<string, string> = {
+    restart: 'Restart queued for the next poll',
+    sync: 'Config refresh queued',
+    update: 'Firmware update queued - the vendo installs it between sales',
+  };
   res.json({
-    message: command === 'restart' ? 'Restart queued for the next poll' : 'Config refresh queued',
+    message: messages[command],
     settings: queueCommand(device.id, command),
   });
 });

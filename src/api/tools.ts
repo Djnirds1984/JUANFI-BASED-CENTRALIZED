@@ -3,8 +3,8 @@ import { authMiddleware } from '../middleware/auth';
 import * as zerotier from '../services/zerotier';
 import * as turso from '../services/turso';
 import fs from 'fs';
-import path from 'path';
 import { config } from '../config';
+import { findFirmware, listFirmware } from '../services/firmwareStore';
 
 const router = Router();
 
@@ -124,66 +124,14 @@ router.post('/database/restore', (req: Request, res: Response) => {
 // --- Firmware images (SubVendo Flasher) ---
 
 // The browser does the flashing over Web Serial; all this side does is hand out
-// the .bin. Two folders are searched so the same endpoint works in both places:
-// aircoins-nodemcu/ is where the releases are committed, firmware/ is where
-// deploy/update.sh drops them on the box.
-const appRoot = path.join(__dirname, '..', '..');
-const firmwareDirs = [
-  path.join(appRoot, 'firmware'),
-  path.join(appRoot, 'aircoins-nodemcu'),
-];
-// Anything else — subdirectories, other extensions, traversal — never resolves.
-const firmwareName = /^[A-Za-z0-9._-]+\.bin$/i;
-
-function findFirmware(name: string): string | null {
-  if (!firmwareName.test(name)) return null;
-  for (const dir of firmwareDirs) {
-    const full = path.resolve(dir, name);
-    if (path.dirname(full) !== path.resolve(dir)) continue;
-    try {
-      if (fs.statSync(full).isFile()) return full;
-    } catch {
-      // Not in this folder; keep looking.
-    }
-  }
-  return null;
-}
+// the .bin. Which folders are searched, and what counts as an image, is shared
+// with the over-the-air endpoint a vendo uses, so the panel has one answer to
+// "what firmware is on this box" - see services/firmwareStore.
 
 // List the images the panel can offer, newest first.
-router.get('/firmware', (req: Request, res: Response) => {
+router.get('/firmware', (_req: Request, res: Response) => {
   try {
-    const seen = new Set<string>();
-    const files: { name: string; size: number; modified: number; version: string }[] = [];
-
-    for (const dir of firmwareDirs) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(dir);
-      } catch {
-        continue;
-      }
-      for (const name of names) {
-        if (seen.has(name) || !firmwareName.test(name)) continue;
-        let stat: fs.Stats;
-        try {
-          stat = fs.statSync(path.join(dir, name));
-        } catch {
-          continue;
-        }
-        if (!stat.isFile()) continue;
-        seen.add(name);
-        const version = name.match(/v(\d+\.\d+\.\d+)/i);
-        files.push({
-          name,
-          size: stat.size,
-          modified: stat.mtimeMs,
-          version: version ? version[1] : '',
-        });
-      }
-    }
-
-    files.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
-    res.json({ files });
+    res.json({ files: listFirmware() });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

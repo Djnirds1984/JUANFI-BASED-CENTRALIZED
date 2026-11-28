@@ -7336,22 +7336,50 @@ const App = {
     this._fwName = '';
     this._fwFile = null;
 
-    const hasSerial = !!navigator.serial;
+    // isSecureContext first, and only then the API. Chrome does not define
+    // navigator.serial at all on a plain http page, so testing for the API first
+    // blames the browser for what is really an address problem — which is exactly
+    // the wrong advice to give while Chrome is sitting there working fine.
     const secure = !!window.isSecureContext;
+    const hasSerial = !!navigator.serial;
+    // The https twin of this page: the same host without the :3000 an old link
+    // may still carry, because nginx terminates TLS on 443.
+    const httpsAdmin = `https://${window.location.hostname}/admin`;
     let notice = '';
-    if (!hasSerial || !secure) {
-      // Two different walls. A browser without the API needs another browser; a
-      // Chromium browser on a plain-http page only needs the same host over https.
+    if (!secure) {
+      // Two ways to be insecure: never left http, or arrived on https and the
+      // certificate was refused. They need different instructions.
+      const onHttps = window.location.protocol === 'https:';
       notice = `
         <div class="flasher-notice">
-          <strong>This browser cannot open a serial port.</strong>
+          <strong>This page is not a secure context, so the serial port is hidden.</strong>
           <p>
-            ${hasSerial
-              ? `Web Serial is only available on a secure page, and this one is
-                 <code>${this.escapeHtml(window.location.origin)}</code>. Reload the panel over
-                 <code>https</code> — the same address on port 443, or the tunnel hostname.`
-              : `Web Serial exists only in Chrome and Edge. This browser does not have it, so the
-                 board cannot be reached from here whatever the cable does.`}
+            ${onHttps
+              ? `The address is https, but Chrome did not accept the certificate, so it still treats
+                 this page as insecure. Accept the certificate for
+                 <code>${this.escapeHtml(window.location.hostname)}</code> and reload.`
+              : `Web Serial only exists on an <code>https://</code> page. This one is
+                 <code>${this.escapeHtml(window.location.origin)}</code> — plain http — so
+                 <code>navigator.serial</code> is not even defined. Nothing is wrong with the
+                 browser or the cable.`}
+          </p>
+          <p style="margin:.6rem 0 0">
+            <a class="btn btn-sm btn-primary" href="${this.escapeHtml(httpsAdmin)}">Open over HTTPS</a>
+          </p>
+          <p class="flasher-hint" style="margin:.5rem 0 0">
+            The panel's certificate is self-signed, so expect one warning:
+            <em>Advanced</em> → <em>Proceed to ${this.escapeHtml(window.location.hostname)} (unsafe)</em>.
+            After that, Connect board works.
+          </p>
+        </div>`;
+    } else if (!hasSerial) {
+      notice = `
+        <div class="flasher-notice">
+          <strong>This browser has no Web Serial API.</strong>
+          <p>
+            Only Chrome and Edge provide it, and they do so on the secure page this already is
+            (<code>${this.escapeHtml(window.location.origin)}</code>). Open the same address in one of
+            them and the port will appear.
           </p>
         </div>`;
     }
@@ -9389,7 +9417,13 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
           <div style="display:flex;gap:.5rem;flex-wrap:wrap">
             <button class="btn btn-sm btn-outline" onclick="App.sendAirCoinsCommand('sync')">Refresh Config</button>
             <button class="btn btn-sm btn-outline" onclick="App.sendAirCoinsCommand('restart')">Restart Vendo</button>
+            <button class="btn btn-sm btn-outline" onclick="App.sendAirCoinsCommand('update')">Update Firmware</button>
           </div>
+          <p style="font-size:.78rem;opacity:.7;margin:.6rem 0 0">
+            Update Firmware installs the newest AirCoins image this panel holds. The vendo downloads it
+            from the panel on its next report, waits until nobody is at the slot, flashes and reboots -
+            the firmware version under Machine Status is what proves it landed.
+          </p>
           ${s.pendingCommand ? `<p style="color:#ff9800;font-size:.8rem;margin:.75rem 0 0">Waiting for the vendo: ${this.escapeHtml(s.pendingCommand)}</p>` : ''}
         </div>
 
@@ -9725,6 +9759,7 @@ var sessionCookieName = "${config.sessionCookieName || 'juanfi_sid'}";
     const id = this._nodemcuSelectedId;
     if (!id) return;
     if (command === 'restart' && !confirm('Queue a restart for this vendo? It reboots on its next report.')) return;
+        if (command === 'update' && !confirm('Queue a firmware update for this vendo?\n\nIt downloads the newest AirCoins image from this panel and flashes itself on its next report, once nobody is at the slot.')) return;
     try {
       const res = await api.nodemcuAirCoinsCommand(id, command);
       this.toast(res.message || 'Command queued', 'success');

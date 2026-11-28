@@ -7340,13 +7340,18 @@ const App = {
     const secure = !!window.isSecureContext;
     let notice = '';
     if (!hasSerial || !secure) {
+      // Two different walls. A browser without the API needs another browser; a
+      // Chromium browser on a plain-http page only needs the same host over https.
       notice = `
         <div class="flasher-notice">
           <strong>This browser cannot open a serial port.</strong>
           <p>
-            Web Serial exists only in Chrome and Edge, and only on an <code>https://</code> page or
-            <code>localhost</code>. This page is <code>${this.escapeHtml(window.location.origin)}</code>${secure ? '' : ', which is plain http'}.
-            Open it through the tunnel address (https) in Chrome or Edge to flash from here.
+            ${hasSerial
+              ? `Web Serial is only available on a secure page, and this one is
+                 <code>${this.escapeHtml(window.location.origin)}</code>. Reload the panel over
+                 <code>https</code> — the same address on port 443, or the tunnel hostname.`
+              : `Web Serial exists only in Chrome and Edge. This browser does not have it, so the
+                 board cannot be reached from here whatever the cable does.`}
           </p>
         </div>`;
     }

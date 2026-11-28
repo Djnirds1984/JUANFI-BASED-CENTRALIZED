@@ -2,6 +2,10 @@ import { RouterOSAPI } from 'node-routeros';
 import net from 'net';
 import crypto from 'crypto';
 import { Client as SSHClient } from 'ssh2';
+import {
+  TetherTargets, coveredNetworks, isTetherRule, missingTargets,
+  targetFamily, tetherRule, tetherTargets,
+} from './antiTether';
 
 export interface RouterConnection {
   id: number;
@@ -1422,6 +1426,139 @@ class MikroTikService {
       console.error(`deleteHotspotServer failed for router ${routerId}:`, (err as Error).message);
       throw err;
     }
+  }
+
+  /**
+   * Anti-tethering readout. The rules are tagged mangle entries on the router,
+   * so what is reported is what is really enforcing - a toggle saved in the
+   * panel could otherwise claim protection the device does not have.
+   */
+  async getAntiTethering(routerId: number): Promise<{
+    enabled: boolean; subnets: TetherTargets; applied: TetherTargets; missing: TetherTargets;
+  }> {
+    const [ipRules, ipv6Rules, subnets] = await Promise.all([
+      this.mangleRows(routerId, 'ip'),
+      this.mangleRows(routerId, 'ipv6'),
+      this.hotspotTetherSubnets(routerId),
+    ]);
+    const applied = coveredNetworks([...ipRules, ...ipv6Rules]);
+    return {
+      enabled: applied.ipv4.length > 0 || applied.ipv6.length > 0,
+      subnets,
+      applied,
+      missing: missingTargets(subnets, applied),
+    };
+  }
+
+  /**
+   * Install or remove the guard. Every tagged rule is dropped first so a subnet
+   * that no longer exists cannot keep being protected, and so a changed hotspot
+   * address is picked up instead of accumulating stale rules.
+   */
+  async setAntiTethering(routerId: number, enabled: boolean): Promise<{
+    enabled: boolean; subnets: TetherTargets; applied: TetherTargets; missing: TetherTargets;
+  }> {
+    for (const family of ['ip', 'ipv6'] as const) {
+      const rows = await this.mangleRows(routerId, family);
+      for (const row of rows) {
+        if (!isTetherRule(row)) continue;
+        await this.dropMangleRule(routerId, family, String(row['.id'] || ''));
+      }
+    }
+
+    if (enabled) {
+      const subnets = await this.hotspotTetherSubnets(routerId);
+      const rules = [...subnets.ipv4, ...subnets.ipv6].map((target) => tetherRule(target));
+      if (!rules.length) {
+        throw new Error('No hotspot subnet found - set up a hotspot server before enabling anti-tethering');
+      }
+      for (const rule of rules) {
+        const target = String(rule['dst-address'] || '');
+        await this.addMangleRule(routerId, targetFamily(target), rule);
+      }
+    }
+
+    return this.getAntiTethering(routerId);
+  }
+
+  /** Client subnets of every enabled hotspot server on this router. */
+  private async hotspotTetherSubnets(routerId: number): Promise<TetherTargets> {
+    const servers = await this.getHotspotServers(routerId);
+    const interfaces = (Array.isArray(servers) ? servers : [])
+      .filter((server: any) => String(server?.disabled) !== 'true')
+      .map((server: any) => String(server?.interface || ''));
+    if (!interfaces.length) return { ipv4: [], ipv6: [] };
+
+    const [ipRows, ipv6Rows] = await Promise.all([
+      this.addressRows(routerId, 'ip'),
+      this.addressRows(routerId, 'ipv6'),
+    ]);
+    return tetherTargets([...ipRows, ...ipv6Rows], interfaces);
+  }
+
+  /** Firewall mangle rows; a disabled IPv6 package simply has none. */
+  private async mangleRows(routerId: number, family: 'ip' | 'ipv6'): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+    const menu = family === 'ipv6' ? '/ipv6/firewall/mangle' : '/ip/firewall/mangle';
+    try {
+      if (config?.useRestApi) {
+        const rows = await this.restApiCall(config, 'GET', menu);
+        return Array.isArray(rows) ? rows : [];
+      }
+      const rows = await this.getClient(routerId).write(`${menu}/print`);
+      return Array.isArray(rows) ? rows : [];
+    } catch (err) {
+      if (family === 'ipv6') return [];
+      throw err;
+    }
+  }
+
+  /** Interface addresses, used to learn which subnet each hotspot server owns. */
+  private async addressRows(routerId: number, family: 'ip' | 'ipv6'): Promise<any[]> {
+    const config = this.routerConfigs.get(routerId);
+    const menu = family === 'ipv6' ? '/ipv6/address' : '/ip/address';
+    try {
+      if (config?.useRestApi) {
+        const rows = await this.restApiCall(config, 'GET', menu);
+        return Array.isArray(rows) ? rows : [];
+      }
+      const rows = await this.getClient(routerId).write(`${menu}/print`);
+      return Array.isArray(rows) ? rows : [];
+    } catch (err) {
+      if (family === 'ipv6') return [];
+      throw err;
+    }
+  }
+
+  private async addMangleRule(
+    routerId: number,
+    family: 'ip' | 'ipv6',
+    rule: Record<string, string>,
+  ): Promise<any> {
+    const config = this.routerConfigs.get(routerId);
+    const menu = family === 'ipv6' ? '/ipv6/firewall/mangle' : '/ip/firewall/mangle';
+
+    if (config?.useRestApi) {
+      return this.restApiCall(config, 'POST', `${menu}/add`, rule);
+    }
+
+    const command = [`${menu}/add`];
+    for (const [key, value] of Object.entries(rule)) {
+      command.push(`=${key}=${value}`);
+    }
+    return this.getClient(routerId).write(command);
+  }
+
+  private async dropMangleRule(routerId: number, family: 'ip' | 'ipv6', id: string): Promise<void> {
+    if (!id) return;
+    const config = this.routerConfigs.get(routerId);
+    const menu = family === 'ipv6' ? '/ipv6/firewall/mangle' : '/ip/firewall/mangle';
+
+    if (config?.useRestApi) {
+      await this.restApiCall(config, 'DELETE', `${menu}/${id}`);
+      return;
+    }
+    await this.getClient(routerId).write([`${menu}/remove`, `.id=${id}`]);
   }
 
   /**

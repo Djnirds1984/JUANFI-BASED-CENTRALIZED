@@ -146,6 +146,13 @@ if [ "$SAME_DIR" = false ]; then
     fi
 fi
 
+# Firmware images offered by Tools > SubVendo Flasher. They are committed next to
+# the source releases, so mirror them into firmware/ where the tools API looks.
+if [ "$SAME_DIR" = false ] && [ -d "$SCRIPT_DIR/aircoins-nodemcu" ]; then
+    mkdir -p "$APP_DIR/firmware"
+    cp "$SCRIPT_DIR"/aircoins-nodemcu/AirCoins-v*.bin "$APP_DIR/firmware/" 2>/dev/null || true
+fi
+
 # dist/ is gitignored, so a fresh clone into APP_DIR has no build output and the
 # SAME_DIR path above copies nothing. Build here or the unit starts without a server.
 if [ ! -f "$APP_DIR/dist/server.js" ]; then

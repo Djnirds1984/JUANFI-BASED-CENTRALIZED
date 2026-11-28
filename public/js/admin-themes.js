@@ -236,6 +236,9 @@ const AdminThemes = {
     });
     document.body.setAttribute('data-admin-theme', theme.id);
     document.body.setAttribute('data-admin-mode', theme.mode);
+    // Native controls - the open <select> list, scrollbars, date pickers - take
+    // their surface from color-scheme, not from the CSS variables.
+    root.style.colorScheme = theme.mode === 'light' ? 'light' : 'dark';
     this.store(theme.id);
     return theme;
   },

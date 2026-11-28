@@ -1588,6 +1588,18 @@ td {
   box-shadow: 0 0 0 3px var(--ring);
 }
 
+/*
+ * A native dropdown list paints its own surface, not the select's. Without this
+ * the theme's light text lands on the platform's white list and the unselected
+ * entries vanish - that is what hid the other SubVendo machines in the device
+ * picker. Colours come from the active theme so light themes stay readable too.
+ */
+select option,
+select optgroup {
+  background-color: var(--bg-card);
+  color: var(--text);
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;
@@ -1697,6 +1709,117 @@ td {
   color: var(--primary);
   border-bottom-color: var(--primary);
   font-weight: 600;
+}
+
+/* SubVendo Flasher */
+.flasher-wrap {
+  padding: 1.25rem;
+}
+
+.flasher-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 400px) 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .flasher-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.flasher-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+.flasher-panel h4 {
+  margin: 0 0 .75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.flasher-hint {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0 0 .75rem;
+}
+
+.flasher-notice {
+  border-left: 3px solid #ff9800;
+  background: var(--bg);
+  padding: .75rem 1rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.flasher-notice p {
+  margin: .375rem 0 0;
+  color: var(--text-muted);
+}
+
+.flasher-check {
+  display: flex;
+  gap: .5rem;
+  align-items: flex-start;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-bottom: .75rem;
+}
+
+.flasher-check input {
+  margin-top: .2rem;
+  flex: none;
+}
+
+.flasher-progress {
+  height: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.flasher-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width .15s linear;
+}
+
+/* A console, not a themed surface: it stays dark in both themes so the
+   esptool output keeps the contrast it was written for. */
+.flasher-log {
+  margin: 0;
+  padding: .75rem;
+  min-height: 280px;
+  max-height: 460px;
+  overflow: auto;
+  background: #0b1020;
+  color: #cbd5e1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flasher-log .ok {
+  color: #86efac;
+}
+
+.flasher-log .err {
+  color: #fca5a5;
 }
 
 @media (max-width: 768px) {

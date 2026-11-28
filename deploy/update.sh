@@ -61,6 +61,13 @@ if [ "$SAME_DIR" = false ] && [ -d "$SCRIPT_DIR/hotspot" ]; then
     fi
     cp -r "$SCRIPT_DIR/hotspot/." "$APP_DIR/hotspot/" 2>/dev/null || cp -r "$SCRIPT_DIR/hotspot" "$APP_DIR/hotspot"
 fi
+# Firmware images offered by Tools > SubVendo Flasher. They are committed next to
+# the source releases, so mirror them into firmware/ where the tools API looks.
+if [ "$SAME_DIR" = false ] && [ -d "$SCRIPT_DIR/aircoins-nodemcu" ]; then
+    mkdir -p "$APP_DIR/firmware"
+    cp "$SCRIPT_DIR"/aircoins-nodemcu/AirCoins-v*.bin "$APP_DIR/firmware/" 2>/dev/null || true
+    echo "  Firmware images in $APP_DIR/firmware: $(ls -1 "$APP_DIR/firmware" 2>/dev/null | wc -l)"
+fi
 cd "$APP_DIR"
 npm install --production
 

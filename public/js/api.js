@@ -183,6 +183,14 @@ class ApiClient {
     return this.post(`/hotspot/router/${routerId}/setup`, data);
   }
 
+  async getAntiTethering(routerId) {
+    return this.get(`/hotspot/router/${routerId}/anti-tethering`);
+  }
+
+  async setAntiTethering(routerId, enabled) {
+    return this.put(`/hotspot/router/${routerId}/anti-tethering`, { enabled: !!enabled });
+  }
+
   async getWalledGarden(routerId) {
     return this.get(`/hotspot/router/${routerId}/walled-garden`);
   }
@@ -916,6 +924,34 @@ class ApiClient {
 
   async restoreFromTurso() {
     return this.post('/tools/turso/restore');
+  }
+
+  // --- SubVendo Flasher ---
+  async listFirmware() {
+    return this.get('/tools/firmware');
+  }
+
+  // request() always parses JSON, so the image needs its own reader.
+  async getFirmwareBinary(name) {
+    const headers = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/tools/firmware/${encodeURIComponent(name)}`, { headers });
+
+    if (response.status === 401) {
+      this.setToken(null);
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(data.error || 'Download failed');
+    }
+
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   // --- PPP / PPPoE ---

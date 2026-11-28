@@ -676,6 +676,46 @@ router.delete('/router/:routerId/walled-garden/:entryId', async (req: Request, r
   }
 });
 
+// Anti-tethering: forwarded traffic reaches the hotspot clients with TTL 1
+// (IPv6: hop limit 1), so a shared/tethered link dies one hop past the paying
+// device while that device itself keeps working. The state is read back from
+// the router's tagged mangle rules, never from a panel-side flag.
+router.get('/router/:routerId/anti-tethering', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    res.json(await mikroTikService.getAntiTethering(routerId));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/router/:routerId/anti-tethering', async (req: Request, res: Response) => {
+  try {
+    const routerId = parseInt(req.params.routerId);
+
+    if (typeof req.body?.enabled !== 'boolean') {
+      res.status(400).json({ error: 'Send { "enabled": true } or { "enabled": false }' });
+      return;
+    }
+
+    if (!mikroTikService.isConnected(routerId)) {
+      res.status(400).json({ error: 'Router is not connected' });
+      return;
+    }
+
+    const state = await mikroTikService.setAntiTethering(routerId, req.body.enabled);
+    res.json(state);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/router/:routerId/cookie', async (req: Request, res: Response) => {
   try {
     const routerId = parseInt(req.params.routerId);

@@ -121,6 +121,96 @@ router.post('/database/restore', (req: Request, res: Response) => {
   }
 });
 
+// --- Firmware images (SubVendo Flasher) ---
+
+// The browser does the flashing over Web Serial; all this side does is hand out
+// the .bin. Two folders are searched so the same endpoint works in both places:
+// aircoins-nodemcu/ is where the releases are committed, firmware/ is where
+// deploy/update.sh drops them on the box.
+const appRoot = path.join(__dirname, '..', '..');
+const firmwareDirs = [
+  path.join(appRoot, 'firmware'),
+  path.join(appRoot, 'aircoins-nodemcu'),
+];
+// Anything else — subdirectories, other extensions, traversal — never resolves.
+const firmwareName = /^[A-Za-z0-9._-]+\.bin$/i;
+
+function findFirmware(name: string): string | null {
+  if (!firmwareName.test(name)) return null;
+  for (const dir of firmwareDirs) {
+    const full = path.resolve(dir, name);
+    if (path.dirname(full) !== path.resolve(dir)) continue;
+    try {
+      if (fs.statSync(full).isFile()) return full;
+    } catch {
+      // Not in this folder; keep looking.
+    }
+  }
+  return null;
+}
+
+// List the images the panel can offer, newest first.
+router.get('/firmware', (req: Request, res: Response) => {
+  try {
+    const seen = new Set<string>();
+    const files: { name: string; size: number; modified: number; version: string }[] = [];
+
+    for (const dir of firmwareDirs) {
+      let names: string[];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (seen.has(name) || !firmwareName.test(name)) continue;
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(path.join(dir, name));
+        } catch {
+          continue;
+        }
+        if (!stat.isFile()) continue;
+        seen.add(name);
+        const version = name.match(/v(\d+\.\d+\.\d+)/i);
+        files.push({
+          name,
+          size: stat.size,
+          modified: stat.mtimeMs,
+          version: version ? version[1] : '',
+        });
+      }
+    }
+
+    files.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
+    res.json({ files });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download one image as raw bytes.
+router.get('/firmware/:name', (req: Request, res: Response) => {
+  try {
+    const name = String(req.params.name || '');
+    const full = findFirmware(name);
+    if (!full) {
+      res.status(404).json({ error: 'Firmware not found' });
+      return;
+    }
+
+    const stat = fs.statSync(full);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Cache-Control', 'no-cache');
+
+    fs.createReadStream(full).pipe(res);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Turso Cloud Database ---
 
 // Get Turso config

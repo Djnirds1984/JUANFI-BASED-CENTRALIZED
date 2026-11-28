@@ -169,6 +169,7 @@ const App = {
     this.clearCafePollers();
     this.clearRadiusPollers();
     this.clearChatPollers();
+    this.closeFlasherPort();
     this.currentPage = page;
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.page === page);
@@ -2002,6 +2003,7 @@ const App = {
           <button class="tab ${this.hotspotSettingsTab === 'user-profiles' ? 'active' : ''}" data-tab="user-profiles">User Profiles</button>
           <button class="tab ${this.hotspotSettingsTab === 'ip-bindings' ? 'active' : ''}" data-tab="ip-bindings">IP Bindings</button>
           <button class="tab ${this.hotspotSettingsTab === 'walled-garden' ? 'active' : ''}" data-tab="walled-garden">Walled Garden</button>
+          <button class="tab ${this.hotspotSettingsTab === 'anti-tethering' ? 'active' : ''}" data-tab="anti-tethering">Anti-Tethering</button>
           <button class="tab ${this.hotspotSettingsTab === 'cookies' ? 'active' : ''}" data-tab="cookies">Cookies</button>
         </div>
         <div id="hotspot-settings-content">Loading...</div>
@@ -2036,6 +2038,7 @@ const App = {
         case 'user-profiles': await this.loadUserProfiles(container); break;
         case 'ip-bindings': await this.loadIpBindings(container); break;
         case 'walled-garden': await this.loadWalledGarden(container); break;
+        case 'anti-tethering': await this.loadAntiTethering(container); break;
         case 'cookies': await this.loadCookies(container); break;
       }
     } catch (err) {
@@ -2254,6 +2257,77 @@ const App = {
         </div>
       </div>
     `;
+  },
+
+  async loadAntiTethering(container) {
+    const state = await api.getAntiTethering(this.selectedRouterId);
+    const subnets = [...state.subnets.ipv4, ...state.subnets.ipv6];
+    const applied = [...state.applied.ipv4, ...state.applied.ipv6];
+    const missing = [...state.missing.ipv4, ...state.missing.ipv6];
+    const networks = (list) => (list.length
+      ? list.map((network) => `<code>${this.escapeHtml(network)}</code>`).join(' ')
+      : '<span style="color:var(--text-muted)">none</span>');
+
+    container.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <h4>Anti-Tethering</h4>
+          <span class="status-badge ${state.enabled ? 'connected' : 'disconnected'}">${state.enabled ? 'On' : 'Off'}</span>
+        </div>
+        <p style="max-width:70ch;color:var(--text-muted)">
+          Packets handed to a hotspot client leave with TTL 1 (IPv6: hop limit 1), so the client keeps
+          working but a device sharing its link through a phone hotspot, USB tether or travel router
+          expires one hop later. Stops default Windows/Android/iOS tethering; a client running a
+          TTL-rewrite app or a VPN can still share.
+        </p>
+        <div class="table-wrapper" style="margin-top:0.75rem">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:180px">Setting</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Hotspot subnets</td>
+                <td>${networks(subnets)}</td>
+              </tr>
+              <tr>
+                <td>Rules on the router</td>
+                <td>${networks(applied)}</td>
+              </tr>
+              ${missing.length === 0 ? '' : `
+              <tr>
+                <td style="color:var(--warning)">Not covered</td>
+                <td style="color:var(--warning)">${networks(missing)}</td>
+              </tr>`}
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:0.75rem">
+          <button class="btn btn-sm ${state.enabled ? 'btn-danger' : 'btn-primary'}" onclick="App.toggleAntiTethering(${state.enabled ? 'false' : 'true'})">
+            ${state.enabled ? 'Disable anti-tethering' : 'Enable anti-tethering'}
+          </button>
+        </div>
+      </div>
+    `;
+  },
+
+  async toggleAntiTethering(enabled) {
+    try {
+      const state = await api.setAntiTethering(this.selectedRouterId, enabled);
+      const covered = state.applied.ipv4.length + state.applied.ipv6.length;
+      this.toast(
+        enabled
+          ? `Anti-tethering on for ${covered} subnet${covered === 1 ? '' : 's'}`
+          : 'Anti-tethering off - clients may share their connection again',
+        enabled ? 'success' : 'warning',
+      );
+      await this.loadAntiTethering(document.getElementById('hotspot-settings-content'));
+    } catch (err) {
+      this.toast('Anti-tethering: ' + err.message, 'error');
+    }
   },
 
   async loadCookies(container) {
@@ -7218,6 +7292,7 @@ const App = {
           <button class="tab-btn active" data-toolstab="zerotier" onclick="App.switchToolsTab('zerotier')">ZeroTier</button>
           <button class="tab-btn" data-toolstab="database" onclick="App.switchToolsTab('database')">Database</button>
           <button class="tab-btn" data-toolstab="cloud" onclick="App.switchToolsTab('cloud')">Cloud</button>
+          <button class="tab-btn" data-toolstab="flasher" onclick="App.switchToolsTab('flasher')">SubVendo Flasher</button>
         </div>
         <div id="tools-tab-content"></div>
       </div>
@@ -7237,12 +7312,429 @@ const App = {
   async loadToolsTab() {
     const container = document.getElementById('tools-tab-content');
     if (!container) return;
+    if (this._toolsTab !== 'flasher') {
+      this.closeFlasherPort();
+    }
     if (this._toolsTab === 'zerotier') {
       await this.loadZeroTierContent(container);
     } else if (this._toolsTab === 'database') {
       this.renderDatabaseContent(container);
+    } else if (this._toolsTab === 'flasher') {
+      await this.renderFlasherContent(container);
     } else {
       await this.renderCloudContent(container);
+    }
+  },
+
+  // --- SubVendo Flasher (Web Serial + esptool-js) ---
+
+  // The flashing happens entirely in this tab: esptool-js is pulled from
+  // /js/esptool-js.js the first time a board is connected and talks to the
+  // ESP8266 over Web Serial. The panel's only job is to hand out the .bin.
+  async renderFlasherContent(container) {
+    this._fwImages = [];
+    this._fwName = '';
+    this._fwFile = null;
+
+    const hasSerial = !!navigator.serial;
+    const secure = !!window.isSecureContext;
+    let notice = '';
+    if (!hasSerial || !secure) {
+      notice = `
+        <div class="flasher-notice">
+          <strong>This browser cannot open a serial port.</strong>
+          <p>
+            Web Serial exists only in Chrome and Edge, and only on an <code>https://</code> page or
+            <code>localhost</code>. This page is <code>${this.escapeHtml(window.location.origin)}</code>${secure ? '' : ', which is plain http'}.
+            Open it through the tunnel address (https) in Chrome or Edge to flash from here.
+          </p>
+        </div>`;
+    }
+
+    container.innerHTML = `
+      <div class="flasher-wrap">
+        ${notice}
+        <p class="flasher-hint">
+          Writes an ESP8266 (NodeMCU) image straight from this tab over USB. Keep the vendo plugged into
+          this computer until it finishes; the panel only serves the file.
+        </p>
+
+        <div class="flasher-grid">
+          <div class="flasher-panel">
+            <h4>1. Connect the board</h4>
+            <p class="flasher-hint">
+              Use a data USB cable, and close anything else holding the port (Arduino IDE, PuTTY,
+              NodeMCU-PyFlasher).
+            </p>
+            <div class="form-row">
+              <label>Flash speed</label>
+              <select class="form-control" id="fw-baud">
+                <option value="460800" selected>460800 (recommended)</option>
+                <option value="115200">115200 (slowest, most reliable)</option>
+                <option value="921600">921600 (fastest, some boards refuse it)</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+              <button class="btn btn-primary" id="fw-connect-btn" onclick="App.fwConnect()" ${hasSerial && secure ? '' : 'disabled'}>Connect board</button>
+              <button class="btn btn-outline" id="fw-disconnect-btn" onclick="App.fwDisconnect()" disabled>Disconnect</button>
+            </div>
+            <div id="fw-chip" style="margin-top:.75rem;font-size:.85rem;color:var(--text-muted)">No board connected</div>
+
+            <h4 style="margin-top:1.5rem">2. Choose the image</h4>
+            <select class="form-control" id="fw-image" onchange="App.fwSelectImage(this.value)">
+              <option value="">Loading firmware list…</option>
+            </select>
+            <input type="file" id="fw-file" accept=".bin" style="display:none" onchange="App.fwSelectLocalFile(this.files && this.files[0])">
+            <div id="fw-image-meta" class="flasher-hint" style="margin:.5rem 0 0"></div>
+
+            <h4 style="margin-top:1.5rem">3. Flash</h4>
+            <label class="flasher-check">
+              <input type="checkbox" id="fw-erase">
+              <span>
+                Erase the whole flash first. This also erases the board's saved shop Wi-Fi and its
+                device key, so the vendo has to be set up again afterwards. Leave it off unless the
+                board is bricked.
+              </span>
+            </label>
+            <button class="btn btn-primary" id="fw-flash-btn" onclick="App.fwFlash()" disabled>Flash firmware</button>
+          </div>
+
+          <div class="flasher-panel">
+            <h4>Progress</h4>
+            <div class="flasher-progress"><div class="flasher-progress-bar" id="fw-progress-bar"></div></div>
+            <div id="fw-progress-text" class="flasher-hint" style="margin:.5rem 0 .75rem">Idle</div>
+            <pre class="flasher-log" id="fw-log"></pre>
+          </div>
+        </div>
+      </div>
+    `;
+
+    await this.fwLoadImages();
+  },
+
+  async fwLoadImages() {
+    let files = [];
+    try {
+      const payload = await api.listFirmware();
+      files = (payload && payload.files) || [];
+    } catch (err) {
+      this.fwLog(`Could not load the firmware list: ${err.message}`, 'err');
+    }
+    this._fwImages = files;
+
+    const select = document.getElementById('fw-image');
+    if (!select) return;
+
+    const options = files.map((f) => {
+      const meta = [f.version ? 'v' + f.version : '', f.size ? Math.round(f.size / 1024) + ' KB' : '']
+        .filter(Boolean)
+        .join(' · ');
+      return `<option value="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}${meta ? ' — ' + meta : ''}</option>`;
+    }).join('');
+
+    select.innerHTML = `
+      <option value="">Select a firmware image…</option>
+      ${options}
+      <option value="__local">Choose a .bin from this computer…</option>
+    `;
+
+    if (!files.length) {
+      this.fwLog('No firmware images on the panel. Pick a .bin from this computer instead.', 'err');
+    }
+  },
+
+  fwSelectImage(value) {
+    const fileInput = document.getElementById('fw-file');
+    const meta = document.getElementById('fw-image-meta');
+
+    if (value === '__local') {
+      this._fwName = '';
+      if (fileInput) {
+        fileInput.style.display = '';
+        fileInput.click();
+      }
+      if (meta) {
+        meta.textContent = this._fwFile
+          ? `${this._fwFile.name} · ${Math.round(this._fwFile.size / 1024)} KB from this computer`
+          : 'Pick a .bin file.';
+      }
+      return;
+    }
+
+    if (fileInput) {
+      fileInput.style.display = 'none';
+      fileInput.value = '';
+    }
+    this._fwFile = null;
+
+    if (!value) {
+      this._fwName = '';
+      if (meta) meta.textContent = '';
+      return;
+    }
+
+    const image = (this._fwImages || []).find((f) => f.name === value);
+    this._fwName = value;
+    if (meta) {
+      meta.textContent = image
+        ? `${Math.round(image.size / 1024)} KB · ${new Date(image.modified).toLocaleString()}`
+        : '';
+    }
+  },
+
+  fwSelectLocalFile(file) {
+    const select = document.getElementById('fw-image');
+    const meta = document.getElementById('fw-image-meta');
+
+    if (!file) {
+      if (select) select.value = '';
+      this.fwSelectImage('');
+      return;
+    }
+
+    this._fwFile = file;
+    this._fwName = '';
+    if (meta) meta.textContent = `${file.name} · ${Math.round(file.size / 1024)} KB from this computer`;
+  },
+
+  fwLog(text, kind) {
+    const el = document.getElementById('fw-log');
+    if (!el) return;
+    const line = String(text == null ? '' : text).replace(/\s+$/, '');
+    if (!line) return;
+
+    const span = document.createElement('span');
+    if (kind) span.className = kind;
+    span.textContent = line + '\n';
+    el.appendChild(span);
+
+    // A bad flash can print thousands of lines; the tail is what matters.
+    while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  fwSetProgress(percent, label) {
+    const bar = document.getElementById('fw-progress-bar');
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    const text = document.getElementById('fw-progress-text');
+    if (text) text.textContent = label;
+  },
+
+  fwSetConnected(connected) {
+    const connect = document.getElementById('fw-connect-btn');
+    const disconnect = document.getElementById('fw-disconnect-btn');
+    const flash = document.getElementById('fw-flash-btn');
+    if (connect) {
+      connect.disabled = connected;
+      connect.textContent = connected ? 'Connected' : 'Connect board';
+    }
+    if (disconnect) disconnect.disabled = !connected;
+    if (flash) flash.disabled = !connected;
+  },
+
+  // A serial port stays locked to the tab that opened it, so every way out of
+  // this page funnels through here.
+  closeFlasherPort() {
+    const st = this._fw;
+    this._fw = null;
+    if (!st || !st.transport) return;
+
+    const finish = () => {
+      try {
+        const result = st.transport.disconnect();
+        if (result && typeof result.catch === 'function') result.catch(() => {});
+      } catch {
+        // Already closed.
+      }
+    };
+
+    // Leave the bootloader on the way out, or the board sits in the stub until
+    // it is power-cycled. Never do that mid-flash: the write owns the link.
+    if (!st.loader || this._fwBusy) {
+      finish();
+      return;
+    }
+    try {
+      Promise.resolve(st.loader.after('hard_reset')).then(finish, finish);
+    } catch {
+      finish();
+    }
+  },
+
+  async fwConnect() {
+    if (!navigator.serial) {
+      this.fwLog('This browser has no Web Serial support. Use Chrome or Edge on https:// or localhost.', 'err');
+      return;
+    }
+    if (this._fw && this._fw.loader) return;
+
+    const connect = document.getElementById('fw-connect-btn');
+    if (connect) {
+      connect.disabled = true;
+      connect.textContent = 'Connecting…';
+    }
+    this.fwSetProgress(0, 'Connecting');
+
+    try {
+      // Loaded on demand: a 300 KB module has no business on the first paint.
+      const mod = this._fwModule || (this._fwModule = await import('/js/esptool-js.js'));
+      this.fwLog('Choose the board in the browser dialog…');
+
+      const port = await navigator.serial.requestPort();
+      const transport = new mod.Transport(port, true);
+      const baudSelect = document.getElementById('fw-baud');
+      const baud = parseInt((baudSelect && baudSelect.value) || '460800', 10) || 460800;
+
+      const loader = new mod.ESPLoader({
+        transport,
+        baudrate: baud,
+        romBaudrate: 115200,
+        terminal: {
+          clean: () => {
+            const el = document.getElementById('fw-log');
+            if (el) el.textContent = '';
+          },
+          writeLine: (line) => this.fwLog(line),
+          write: (text) => this.fwLog(text),
+        },
+      });
+
+      transport.setDeviceLostCallback(() => {
+        this.fwLog('The board was disconnected.', 'err');
+        this._fw = null;
+        this.fwSetConnected(false);
+        this.fwSetProgress(0, 'Board disconnected');
+      });
+
+      this._fw = { port, transport, loader };
+
+      this.fwLog('Port open, syncing with the bootloader…');
+      const chip = await loader.main();
+      const description = (await loader.chip.getChipDescription(loader)) || chip;
+      let mac = '';
+      try {
+        mac = await loader.chip.readMac(loader);
+      } catch {
+        // The MAC is a nicety; a board that refuses it still flashes.
+      }
+
+      const info = document.getElementById('fw-chip');
+      if (info) {
+        info.innerHTML = `<span class="status-badge connected">Connected</span> ${this.escapeHtml(description)}${mac ? ' · ' + this.escapeHtml(mac) : ''}`;
+      }
+      this.fwSetConnected(true);
+      this.fwSetProgress(0, 'Ready to flash');
+      this.fwLog(`Connected: ${description}${mac ? ' (' + mac + ')' : ''}`, 'ok');
+    } catch (err) {
+      // Backing out of the browser's port picker lands here too, so stay calm.
+      this.fwLog(`Could not connect: ${err && err.message ? err.message : err}`, 'err');
+      this.closeFlasherPort();
+      this.fwSetConnected(false);
+      this.fwSetProgress(0, 'Not connected');
+    }
+  },
+
+  async fwDisconnect() {
+    const st = this._fw;
+    this._fw = null;
+    if (st) {
+      try {
+        await st.loader.after('hard_reset');
+      } catch {
+        // The stub may already be gone; closing the port is what matters.
+      }
+      try {
+        await st.transport.disconnect();
+      } catch {
+        // Port already closed.
+      }
+    }
+    this.fwSetConnected(false);
+    this.fwSetProgress(0, 'Idle');
+    this.fwLog('Disconnected.');
+  },
+
+  async fwFlash() {
+    const st = this._fw;
+    if (!st || !st.loader) {
+      this.fwLog('Connect a board first.', 'err');
+      return;
+    }
+
+    let data = null;
+    let label = '';
+    try {
+      if (this._fwFile) {
+        data = new Uint8Array(await this._fwFile.arrayBuffer());
+        label = this._fwFile.name;
+      } else if (this._fwName) {
+        this.fwLog(`Downloading ${this._fwName} from the panel…`);
+        data = await api.getFirmwareBinary(this._fwName);
+        label = this._fwName;
+      }
+    } catch (err) {
+      this.fwLog(`Could not read the image: ${err && err.message ? err.message : err}`, 'err');
+      return;
+    }
+
+    if (!data || !data.length) {
+      this.fwLog('Choose a firmware image first.', 'err');
+      return;
+    }
+
+    // 0xE9 opens every ESP8266/ESP32 full image. Anything else is the wrong file
+    // (an OTA delta, a bin from another project) and would leave a dead board.
+    if (data[0] !== 0xe9) {
+      this.fwLog(`${label} does not start with 0xE9, so it is not a full ESP8266 image. Not flashing.`, 'err');
+      return;
+    }
+
+    const eraseBox = document.getElementById('fw-erase');
+    const eraseAll = !!(eraseBox && eraseBox.checked);
+    const button = document.getElementById('fw-flash-btn');
+    const disconnect = document.getElementById('fw-disconnect-btn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Flashing…';
+    }
+    if (disconnect) disconnect.disabled = true;
+
+    this.fwLog(`Writing ${label} (${Math.round(data.length / 1024)} KB) at 0x000000${eraseAll ? ', after erasing the whole flash' : ''}…`);
+    this.fwSetProgress(0, 'Flashing');
+
+    this._fwBusy = true;
+    try {
+      await st.loader.writeFlash({
+        fileArray: [{ data, address: 0 }],
+        flashSize: 'keep',
+        flashMode: 'keep',
+        flashFreq: 'keep',
+        eraseAll,
+        compress: true,
+        reportProgress: (fileIndex, written, total) => {
+          const percent = total ? (written / total) * 100 : 0;
+          this.fwSetProgress(
+            percent,
+            `${percent.toFixed(0)}% · ${Math.round(written / 1024)} / ${Math.round(total / 1024)} KB`
+          );
+        },
+      });
+
+      this.fwSetProgress(100, 'Write complete');
+      this.fwLog(`Flashed ${label}.`, 'ok');
+      await st.loader.after('hard_reset');
+      this.fwLog('Board reset into the new firmware. It should show as Online on the SubVendo page within a minute.', 'ok');
+    } catch (err) {
+      this.fwLog(`Flash failed: ${err && err.message ? err.message : err}`, 'err');
+      this.fwLog('The board is probably still in its bootloader. Press RST or replug the USB cable, then connect again.', 'err');
+      this.fwSetProgress(0, 'Failed');
+    } finally {
+      this._fwBusy = false;
+      if (disconnect) disconnect.disabled = false;
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Flash firmware';
+      }
     }
   },
 

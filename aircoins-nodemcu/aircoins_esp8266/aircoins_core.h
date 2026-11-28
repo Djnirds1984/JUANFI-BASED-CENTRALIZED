@@ -569,7 +569,7 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define AIRCOINS_BUZZER_PASSIVE 0     // 1 = piezo driven with tone(), 0 = active buzzer
 #endif
 
-#define AIRCOINS_VERSION "1.4.2"
+#define AIRCOINS_VERSION "1.4.3"
 // Acceptors send a burst per coin - five pulses for five pesos, often less than
 // 25 ms apart. The gap only has to swallow contact bounce, and the panel can
 // raise or lower it per machine.
@@ -578,6 +578,25 @@ inline void runSetupPortal(StoredConfig &cfg) {
 #define BOOT_WIFI_TIMEOUT_MS 25000
 #define WIFI_LOST_RESTART_MS 300000UL
 #define AUTH_FAILURES_BEFORE_RESET 3
+
+/*
+ * Silence from the panel - not the WiFi status - is what an idle vendo actually
+ * dies of. An ESP8266 can sit for hours "connected" on a lease or arp entry the
+ * access point has already forgotten: WiFi.status() keeps answering
+ * WL_CONNECTED while every HTTP call fails, and nothing here recovered from
+ * that. Only a real status drop was handled, so a machine that stopped being
+ * able to reach the panel stayed dark until someone unplugged it.
+ *
+ * After a minute of failed reports the board re-associates, because a fresh
+ * DHCP lease and arp entry are what clear that state. If the panel is still
+ * silent after eight minutes it restarts - the same cure the installer used to
+ * apply by hand, now automatic. The thresholds are wall-clock on purpose: a
+ * machine selling (polling every couple of seconds) and an idle one (once a
+ * minute) wait the same real time before acting.
+ */
+#define LINK_RECONNECT_AFTER_MS 60000UL
+#define LINK_RESTART_AFTER_MS 480000UL
+#define LINK_RECONNECT_TRIES 3
 
 /* What the panel tells this machine to do. Everything else is local. */
 struct Settings {
@@ -627,6 +646,9 @@ static uint8_t authFailures = 0;
 static bool routerReachable = true;
 static bool wifiLost = false;
 static uint32_t wifiLostAt = 0;
+static uint32_t linkDownSince = 0;    // first unanswerable report of the current run
+static uint8_t linkReconnects = 0;
+static int lastReportCode = 0;        // HTTP status of the last report, 0 = no answer
 static String lastError;
 static String commandDone;
 static String serverCommand;
@@ -937,7 +959,15 @@ static bool fetchConfig() {
 }
 
 static bool sendStatus() {
-  DynamicJsonDocument doc(1024);
+  // 1536, not the 1024 this once was: the longest error the panel accepts is
+  // 200 characters and it is carried on every report while it stands, which put
+  // the payload within a handful of bytes of the old capacity. A document that
+  // runs out serialises to a truncated body, and a body the panel cannot parse
+  // looks exactly like an offline machine.
+  DynamicJsonDocument doc(1536);
+  // Cleared first: a call that never gets an answer must not leave the code of
+  // the previous one behind, or a lost link would look like a delivered report.
+  lastReportCode = 0;
   doc["key"] = cfg.deviceKey;
   doc["ip"] = WiFi.localIP().toString();
   doc["mac"] = macNoColon();
@@ -963,6 +993,7 @@ static bool sendStatus() {
   serializeJson(doc, payload);
 
   PanelReply reply = panelCall(cfg, "POST", "/aircoins/status", payload, 10000);
+  lastReportCode = reply.code;
   if (reply.code == 401) {
     handleAuthFailure();
     return false;
@@ -1197,6 +1228,11 @@ static bool connectWifi(uint32_t timeoutMs) {
   if (WiFi.status() == WL_CONNECTED) return true;
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  // Modem sleep parks the radio between beacons. On a shop AP that also ages
+  // out quiet clients that is the usual reason an idle vendo stops answering:
+  // it can miss the very beacon that would tell it it was dropped. The board is
+  // mains powered, so the extra draw costs nothing.
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
   WiFi.begin(cfg.ssid, cfg.pass);
 
@@ -1205,6 +1241,47 @@ static bool connectWifi(uint32_t timeoutMs) {
     delay(200);
   }
   return WiFi.status() == WL_CONNECTED;
+}
+
+/*
+ * Turns a report nobody answered into a recovery instead of a wait. `heard`
+ * means the panel replied at all, whatever the status code: a 4xx/5xx is the
+ * panel talking, and restarting the vendo would not fix it - that is left on
+ * the error line for the operator to read.
+ */
+static void notePanelResult(bool heard) {
+  uint32_t now = millis();
+  if (heard) {
+    if (linkDownSince) {
+      Serial.printf("aircoins: panel link back after %lu s\n",
+                    (unsigned long)((now - linkDownSince) / 1000UL));
+    }
+    linkDownSince = 0;
+    linkReconnects = 0;
+    // The error text itself is left alone: a failed sale or a missing rate is
+    // the operator's business and must stay on the panel's error line until
+    // the board fetches a config or sells again.
+    return;
+  }
+
+  if (!linkDownSince) linkDownSince = now;
+  uint32_t downMs = now - linkDownSince;
+  if (downMs >= LINK_RESTART_AFTER_MS) {
+    Serial.println("aircoins: panel silent for 8 min, restarting");
+    ESP.restart();
+  }
+  if (downMs >= LINK_RECONNECT_AFTER_MS && linkReconnects < LINK_RECONNECT_TRIES) {
+    linkReconnects++;
+    Serial.printf("aircoins: panel silent for %lu s, re-associating (%u/%u)\n",
+                  (unsigned long)(downMs / 1000UL), (unsigned)linkReconnects,
+                  (unsigned)LINK_RECONNECT_TRIES);
+    // begin() alone would keep the address the AP no longer knows; a real
+    // disconnect throws the lease and arp entry away with it.
+    WiFi.disconnect(false, false);
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(cfg.ssid, cfg.pass);
+  }
 }
 
 void setup() {
@@ -1263,7 +1340,12 @@ void loop() {
     delay(50);
     return;
   }
-  wifiLost = false;
+  if (wifiLost) {
+    // Back on the air: report at once instead of waiting out the interval, so
+    // the panel sees this machine again the moment it can answer.
+    wifiLost = false;
+    lastPollMs = millis() - (uint32_t)settings.pollSeconds * 1000UL;
+  }
 
   if (ledOffMs && (int32_t)(millis() - ledOffMs) >= 0) {
     led(false);
@@ -1281,6 +1363,9 @@ void loop() {
   if ((uint32_t)(millis() - lastPollMs) >= (uint32_t)settings.pollSeconds * 1000UL) {
     lastPollMs = millis();
     sendStatus();
+    // A report with no HTTP code at all is the only one that means the link is
+    // gone; anything the panel answered, even an error, is somebody home.
+    notePanelResult(lastReportCode > 0);
   }
 
   delay(10);
